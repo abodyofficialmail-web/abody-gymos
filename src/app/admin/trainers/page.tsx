@@ -1,20 +1,8 @@
-import { redirect } from "next/navigation";
 import { GymShell } from "@/components/gym/GymShell";
-import { getProfileRole } from "@/lib/gym/context";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { AdminTrainersClient } from "./trainersClient";
 export default async function AdminTrainersPage() {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    redirect("/login");
-  }
-  const profile = await getProfileRole(supabase, user.id);
-  if (profile?.role !== "admin") {
-    redirect("/login/role");
-  }
   const { data: rows } = await supabase
     .from("trainers")
     .select(
