@@ -40,6 +40,8 @@ export interface Database {
         Row: {
           id: string;
           member_code: string;
+          name: string | null;
+          line_user_id: string | null;
           is_active: boolean;
           created_at: string;
           updated_at: string;
@@ -47,6 +49,8 @@ export interface Database {
         Insert: {
           id?: string;
           member_code: string;
+          name?: string | null;
+          line_user_id?: string | null;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -54,7 +58,30 @@ export interface Database {
         Update: {
           id?: string;
           member_code?: string;
+          name?: string | null;
+          line_user_id?: string | null;
           is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      line_channel_default_stores: {
+        Row: {
+          line_destination_id: string;
+          default_store_id: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          line_destination_id: string;
+          default_store_id: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          line_destination_id?: string;
+          default_store_id?: string;
           created_at?: string;
           updated_at?: string;
         };
@@ -68,7 +95,9 @@ export interface Database {
           shift_date: string;
           start_local: string;
           end_local: string;
+          break_minutes: number;
           status: string;
+          is_break: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -79,7 +108,9 @@ export interface Database {
           shift_date: string;
           start_local: string;
           end_local: string;
+          break_minutes?: number;
           status: string;
+          is_break?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -90,10 +121,30 @@ export interface Database {
           shift_date?: string;
           start_local?: string;
           end_local?: string;
+          break_minutes?: number;
           status?: string;
+          is_break?: boolean;
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
+      };
+      trainer_transport_costs: {
+        Row: { id: string; trainer_id: string | null; store_id: string | null; cost: number; };
+        Insert: { id?: string; trainer_id?: string | null; store_id?: string | null; cost?: number; };
+        Update: { id?: string; trainer_id?: string | null; store_id?: string | null; cost?: number; };
+        Relationships: [];
+      };
+      trainer_expenses: {
+        Row: { id: string; trainer_id: string | null; title: string; amount: number; type: "monthly" | "daily"; };
+        Insert: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; };
+        Update: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; };
+        Relationships: [];
+      };
+      trainer_shift_breaks: {
+        Row: { id: string; shift_id: string; start_time: string; end_time: string; created_at: string };
+        Insert: { id?: string; shift_id: string; start_time: string; end_time: string; created_at?: string };
+        Update: { id?: string; shift_id?: string; start_time?: string; end_time?: string; created_at?: string };
         Relationships: [];
       };
       reservations: {
@@ -143,6 +194,8 @@ export interface Database {
           display_name: string;
           email: string | null;
           hourly_rate_yen: number | null;
+          hourly_rate: number;
+          monthly_pass_cost: number;
           is_active: boolean;
           created_at: string;
           updated_at: string;
@@ -154,6 +207,8 @@ export interface Database {
           display_name: string;
           email?: string | null;
           hourly_rate_yen?: number | null;
+          hourly_rate?: number;
+          monthly_pass_cost?: number;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -165,6 +220,8 @@ export interface Database {
           display_name?: string;
           email?: string | null;
           hourly_rate_yen?: number | null;
+          hourly_rate?: number;
+          monthly_pass_cost?: number;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;

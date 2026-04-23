@@ -10,6 +10,7 @@ export async function OPTIONS() {
 const querySchema = z.object({
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります"),
   month: z.string().regex(/^\d{4}-\d{2}$/u, "month は YYYY-MM 形式である必要があります"),
+  trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
 });
 const SLOT_MINUTES = 30;
 type ShiftRow = {
@@ -20,6 +21,7 @@ type ShiftRow = {
   start_local: string; // HH:MM:SS
   end_local: string; // HH:MM:SS
   status: string;
+  is_break?: boolean | null;
 };
 function parseLocalTimeToMinutes(t: string): number {
   const [hh, mm] = t.split(":");
@@ -69,11 +71,12 @@ export async function GET(request: Request) {
     const parsed = querySchema.safeParse({
       store_id: url.searchParams.get("store_id"),
       month: url.searchParams.get("month"),
+      trainer_id: url.searchParams.get("trainer_id") ?? undefined,
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
-    const { store_id, month } = parsed.data;
+    const { store_id, month, trainer_id } = parsed.data;
     const client = createServiceClient();
     if (client.errorResponse) return client.errorResponse;
     const supabase = client.supabase;
@@ -96,26 +99,49 @@ export async function GET(request: Request) {
     const monthEndLocal = monthStartLocal.endOf("month").startOf("day");
     const startDate = monthStartLocal.toISODate()!;
     const endDate = monthEndLocal.toISODate()!;
-    const { data: shiftsRaw, error: shiftsErr } = await supabase
-      .from("trainer_shifts")
-      .select("id, trainer_id, store_id, shift_date, start_local, end_local, status")
-      .eq("store_id", store_id)
-      .gte("shift_date", startDate)
-      .lte("shift_date", endDate)
-      .neq("status", "draft");
-    if (shiftsErr) {
-      return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr.message }, 500);
+    let shifts: ShiftRow[] = [];
+    {
+      const makeQuery = (select: string) => {
+        let q = supabase
+          .from("trainer_shifts")
+          .select(select)
+          .eq("store_id", store_id)
+          .gte("shift_date", startDate)
+          .lte("shift_date", endDate)
+          .neq("status", "draft");
+        if (trainer_id) q = q.eq("trainer_id", trainer_id);
+        return q;
+      };
+
+      const { data: shiftsRaw, error: shiftsErr } = await makeQuery(
+        "id, trainer_id, store_id, shift_date, start_local, end_local, break_minutes, status, is_break"
+      );
+      if (shiftsErr) {
+        const msg = String((shiftsErr as any)?.message ?? "");
+        if (msg.includes("break_minutes") && (msg.includes("does not exist") || msg.includes("column"))) {
+          const { data: shiftsRaw2, error: shiftsErr2 } = await makeQuery(
+            "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break"
+          );
+          if (shiftsErr2) return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr2.message }, 500);
+          shifts = ((shiftsRaw2 ?? []) as any[]).map((s) => ({ ...s, break_minutes: 0 })) as unknown as ShiftRow[];
+        } else {
+          return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr.message }, 500);
+        }
+      } else {
+        shifts = (shiftsRaw ?? []) as unknown as ShiftRow[];
+      }
     }
-    const shifts = (shiftsRaw ?? []) as unknown as ShiftRow[];
     const monthStartUtc = monthStartLocal.startOf("day").toUTC();
     const nextMonthStartUtc = monthStartLocal.plus({ months: 1 }).startOf("month").toUTC();
-    const { data: resRaw, error: resErr } = await supabase
+    let resQuery = supabase
       .from("reservations")
       .select("trainer_id, start_at, end_at, status")
       .eq("store_id", store_id)
       .neq("status", "cancelled")
       .gte("start_at", monthStartUtc.toISO()!)
       .lt("start_at", nextMonthStartUtc.toISO()!);
+    if (trainer_id) resQuery = resQuery.eq("trainer_id", trainer_id);
+    const { data: resRaw, error: resErr } = await resQuery;
     if (resErr) {
       return jsonResponse({ error: "予約の取得に失敗しました", detail: resErr.message }, 500);
     }
@@ -137,6 +163,7 @@ export async function GET(request: Request) {
     }
     const countByDate = new Map<string, number>();
     for (const shift of shifts) {
+      if (shift.is_break) continue;
       const shiftStartMin = parseLocalTimeToMinutes(shift.start_local);
       const shiftEndMin = parseLocalTimeToMinutes(shift.end_local);
       if (

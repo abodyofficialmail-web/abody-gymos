@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 type Store = { id: string; name: string };
-type Slot = { startAt: string; endAt: string; trainerId: string };
-type BookingV2Slot = { start_at: string; end_at: string; trainer_id: string };
+type Slot = { startAt: string; endAt: string };
+type BookingV2Slot = { start_at: string; end_at: string };
 
 const TZ = "Asia/Tokyo";
 
@@ -127,6 +127,7 @@ export default function BookingPage() {
   const [selectedSlotKey, setSelectedSlotKey] = useState<string>("");
 
   const [memberCodeInput, setMemberCodeInput] = useState("");
+  const [memberName, setMemberName] = useState<string>("");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -157,11 +158,12 @@ export default function BookingPage() {
 
   useEffect(() => {
     if (!selectedStoreId) return;
+    setMemberName("");
+    setError(null);
     setDays(null);
     setSelectedDate("");
     setSlots(null);
     setSelectedSlotKey("");
-    setError(null);
     const monthParam = month.toFormat("yyyy-MM");
     apiGet<{ dates: { date: string; count: number }[] }>(
       `/api/booking-v2/available-dates?store_id=${encodeURIComponent(selectedStoreId)}&month=${encodeURIComponent(
@@ -182,6 +184,7 @@ export default function BookingPage() {
 
   useEffect(() => {
     if (!selectedStoreId || !selectedDate) return;
+    setMemberName("");
     setSlots(null);
     setSelectedSlotKey("");
     setError(null);
@@ -195,7 +198,6 @@ export default function BookingPage() {
           (rows ?? []).map((r) => ({
             startAt: r.start_at,
             endAt: r.end_at,
-            trainerId: r.trainer_id,
           }))
         )
       )
@@ -248,7 +250,7 @@ export default function BookingPage() {
         date: selectedDate,
         startAt: d.reservation.start_at,
         endAt: d.reservation.end_at,
-        memberName: "",
+        memberName: memberName || "",
         memberId: d.member_code ?? code,
         reservationId: d.reservation.id,
       });
@@ -329,6 +331,7 @@ export default function BookingPage() {
                   onClick={() => {
                     setSelectedStoreId(s.id);
                     setMonth(DateTime.now().setZone(TZ).startOf("month"));
+                    setStep(2);
                   }}
                   className={[
                     "w-full rounded-xl border px-4 py-4 text-left transition-colors",
@@ -355,9 +358,7 @@ export default function BookingPage() {
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
             <div className="text-base font-semibold">日付を選択</div>
-            <div className="text-sm text-ink-500">
-              {selectedStoreName} のカレンダーです（○/△/× は空き枠数で判定）。
-            </div>
+            <div className="text-sm text-ink-500">{selectedStoreName} のカレンダーです。</div>
           </div>
 
           <div className="flex items-center justify-between">
@@ -474,10 +475,8 @@ export default function BookingPage() {
       {step === 3 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
-            <div className="text-base font-semibold">時間を選択（30分）</div>
-            <div className="text-sm text-ink-500">
-              {selectedStoreName} / {selectedDate ? formatJstDateLabel(selectedDate) : "-"}
-            </div>
+            <div className="text-base font-semibold">空いている時間を選択</div>
+            <div className="text-sm text-ink-500">{selectedStoreName} / {selectedDate ? formatJstDateLabel(selectedDate) : "-"}</div>
           </div>
 
           <div className="grid grid-cols-3 gap-2">
@@ -536,14 +535,27 @@ export default function BookingPage() {
             />
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 const v = validateMemberCode(memberCodeInput);
                 if (!v.ok) {
                   setError(v.message);
                   return;
                 }
-                setMemberCodeInput(v.code);
-                setStep(5);
+                setBusy(true);
+                setError(null);
+                try {
+                  const info = await apiGet<{ member: { id: string; member_code: string; name: string } }>(
+                    `/api/booking-v2/member?member_code=${encodeURIComponent(v.code)}`
+                  );
+                  setMemberCodeInput(info.member.member_code);
+                  setMemberName(info.member.name ?? "");
+                  setStep(5);
+                } catch (e: any) {
+                  setMemberName("");
+                  setError(e?.message ?? "会員情報の取得に失敗しました");
+                } finally {
+                  setBusy(false);
+                }
               }}
               disabled={busy}
               className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-white font-semibold disabled:opacity-60"
@@ -580,7 +592,10 @@ export default function BookingPage() {
             </div>
             <div className="space-y-1">
               <div className="text-xs text-ink-500">会員</div>
-              <div className="text-base font-medium">-（{memberCodeInput.trim().toUpperCase() || "-"}）</div>
+              <div className="text-base font-medium">
+                <div>-（{memberCodeInput.trim().toUpperCase() || "-"}）</div>
+                {memberName ? <div className="pt-1">{memberName}</div> : null}
+              </div>
             </div>
           </div>
 
@@ -618,7 +633,7 @@ export default function BookingPage() {
           onClick={() => {
             setError(null);
             if (step === 1 && selectedStoreId) return setStep(2);
-            if (step === 2 && selectedStoreId) return;
+            if (step === 2) return;
             if (step === 3 && selectedSlot) return setStep(4);
             if (step === 4) {
               const v = validateMemberCode(memberCodeInput);
@@ -626,7 +641,12 @@ export default function BookingPage() {
                 setError(v.message);
                 return;
               }
+              // ここで API を叩くと UX が重くなるため、会員名は Step4 の「次へ」で取得済みを前提にする
               setMemberCodeInput(v.code);
+              if (!memberName) {
+                setError("会員情報の取得に失敗しました。もう一度お試しください。");
+                return;
+              }
               return setStep(5);
             }
           }}
