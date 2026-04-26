@@ -13,6 +13,10 @@ const querySchema = z.object({
   trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
 });
 const SLOT_MINUTES = 30;
+function isApril2026Closed(ymd: string) {
+  // 要望: 2026年4月の予約を一旦閉じる
+  return String(ymd).startsWith("2026-04-");
+}
 type ShiftRow = {
   id: string;
   trainer_id: string;
@@ -228,6 +232,7 @@ export async function GET(request: Request) {
         { zone }
       ).minus({ days: 1 });
       const allowed = now.toMillis() <= cutoff.toMillis();
+      if (isApril2026Closed(d.date)) return { ...d, count: 0 };
       return allowed ? d : { ...d, count: 0 };
     });
     return jsonResponse({ dates: dates2 }, 200);

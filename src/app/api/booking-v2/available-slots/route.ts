@@ -17,6 +17,10 @@ const querySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date は YYYY-MM-DD 形式である必要があります"),
 });
 const SLOT_MINUTES = 30;
+function isApril2026Closed(ymd: string) {
+  // 要望: 2026年4月の予約を一旦閉じる
+  return String(ymd).startsWith("2026-04-");
+}
 type ShiftRow = {
   id: string;
   trainer_id: string;
@@ -84,6 +88,9 @@ export async function GET(request: Request) {
     }
     const { store_id, date } = parsed.data;
     console.log("slots debug", { store_id, date });
+    if (isApril2026Closed(date)) {
+      return jsonResponse([], 200);
+    }
     const client = createServiceClient();
     if (client.errorResponse) return client.errorResponse;
     const supabase = client.supabase;

@@ -286,6 +286,11 @@ const getQuerySchema = z.object({
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります").optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/u, "month は YYYY-MM 形式である必要があります").optional(),
 });
+
+function isApril2026Closed(ymd: string) {
+  // 要望: 2026年4月の予約を一旦閉じる
+  return String(ymd).startsWith("2026-04-");
+}
 function createServiceSupabase(): SupabaseClient<Database> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -443,6 +448,15 @@ export async function POST(request: Request) {
     }
     if (!member || !member.is_active) {
       return jsonResponse({ error: "会員が見つかりません", detail: { member_code: code } }, 404);
+    }
+
+    // 2026年4月の予約は一旦閉じる（UI回避・直叩き回避）
+    {
+      const bookingYmd = dayjs(start_at).tz("Asia/Tokyo").format("YYYY-MM-DD");
+      if (!bookingYmd) return jsonResponse({ error: "start_at の日付解釈に失敗しました" }, 400);
+      if (isApril2026Closed(bookingYmd)) {
+        return jsonResponse({ error: "この日付の予約は現在受け付けていません" }, 400);
+      }
     }
     // trainer_id は未指定でも予約を成立させる（将来的に管理画面で後から割当）
     // - trainer_id 指定がある場合のみ、そのトレーナーに対してバリデーション/重複チェックを行う
