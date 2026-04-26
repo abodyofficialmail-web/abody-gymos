@@ -190,3 +190,32 @@ ${EMAIL_FOOTER}
     return false;
   }
 }
+
+/**
+ * 店舗ごとの日次予約レポート（管理者向け）を送信。
+ * SMTP未設定の場合は送信せず false を返す。
+ */
+export async function sendDailyStoreReservationReport(params: {
+  to: string;
+  subject: string;
+  text: string;
+}): Promise<boolean> {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn("SMTP not configured, skipping daily report email");
+    return false;
+  }
+  const from = process.env.MAIL_FROM || process.env.SMTP_USER || "noreply@localhost";
+  try {
+    await transporter.sendMail({
+      from,
+      to: params.to,
+      subject: params.subject,
+      text: params.text,
+    });
+    return true;
+  } catch (err: any) {
+    console.error("Send daily report email failed:", err?.message);
+    return false;
+  }
+}

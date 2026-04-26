@@ -82,7 +82,7 @@ export async function GET(request: Request) {
     const supabase = client.supabase;
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
-      .select("id, timezone")
+      .select("id, timezone, booking_cutoff_prev_day_time")
       .eq("id", store_id)
       .maybeSingle();
     if (storeErr) {
@@ -92,6 +92,11 @@ export async function GET(request: Request) {
       return jsonResponse({ error: "店舗が見つかりません" }, 404);
     }
     const zone = storeRow.timezone?.trim() || "Asia/Tokyo";
+    const cutoffHHMM = String((storeRow as any)?.booking_cutoff_prev_day_time ?? "22:00");
+    const cutoffParts = /^\d{2}:\d{2}$/u.test(cutoffHHMM)
+      ? { h: Number(cutoffHHMM.slice(0, 2)), m: Number(cutoffHHMM.slice(3, 5)) }
+      : { h: 22, m: 0 };
+    const now = DateTime.now().setZone(zone);
     const monthStartLocal = DateTime.fromISO(`${month}-01`, { zone }).startOf("month");
     if (!monthStartLocal.isValid) {
       return jsonResponse({ error: "month の解釈に失敗しました" }, 400);
@@ -216,7 +221,16 @@ export async function GET(request: Request) {
       const count = countByDate.get(d) ?? 0;
       return { date: d, count };
     });
-    return jsonResponse({ dates }, 200);
+    // 締切（前日HH:MM）を過ぎた日は count=0 扱い
+    const dates2 = dates.map((d) => {
+      const cutoff = DateTime.fromISO(
+        `${d.date}T${String(cutoffParts.h).padStart(2, "0")}:${String(cutoffParts.m).padStart(2, "0")}:00`,
+        { zone }
+      ).minus({ days: 1 });
+      const allowed = now.toMillis() <= cutoff.toMillis();
+      return allowed ? d : { ...d, count: 0 };
+    });
+    return jsonResponse({ dates: dates2 }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse(

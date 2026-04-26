@@ -26,6 +26,7 @@ export default function BookingCompletePage({
     memberName?: string;
     memberId?: string;
     reservationId?: string;
+    sessionType?: string;
   };
 }) {
   const storeName = searchParams.storeName ?? "-";
@@ -34,6 +35,8 @@ export default function BookingCompletePage({
   const endAt = searchParams.endAt ?? "";
   const memberName = searchParams.memberName ?? "-";
   const memberId = searchParams.memberId ?? "-";
+  const sessionType = searchParams.sessionType ?? "store";
+  const sessionTypeLabel = sessionType === "online" ? "オンライン" : "店舗";
   const qs = new URLSearchParams();
   if (searchParams.memberId) qs.set("memberId", searchParams.memberId);
 
@@ -49,6 +52,10 @@ export default function BookingCompletePage({
         <div className="space-y-1">
           <div className="text-xs text-ink-500">店舗</div>
           <div className="text-base font-medium">{storeName}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-xs text-ink-500">セッション種別</div>
+          <div className="text-base font-medium">{sessionTypeLabel}</div>
         </div>
         <div className="space-y-1">
           <div className="text-xs text-ink-500">日付</div>

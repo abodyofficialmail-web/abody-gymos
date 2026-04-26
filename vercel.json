@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/admin/daily-store-reservation-report?target=tomorrow",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/admin/daily-store-reservation-report?target=today",
+      "schedule": "0 23 * * *"
+    }
+  ]
+}
+

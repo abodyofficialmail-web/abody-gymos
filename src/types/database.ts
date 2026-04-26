@@ -14,6 +14,7 @@ export interface Database {
           id: string;
           name: string;
           timezone: string | null;
+          booking_cutoff_prev_day_time?: string;
           is_active: boolean;
           created_at: string;
           updated_at: string;
@@ -22,6 +23,7 @@ export interface Database {
           id?: string;
           name: string;
           timezone?: string | null;
+          booking_cutoff_prev_day_time?: string;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -30,6 +32,7 @@ export interface Database {
           id?: string;
           name?: string;
           timezone?: string | null;
+          booking_cutoff_prev_day_time?: string;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -39,8 +42,14 @@ export interface Database {
       members: {
         Row: {
           id: string;
+          user_id?: string | null;
+          store_id?: string | null;
+          display_name?: string | null;
           member_code: string;
           name: string | null;
+          email?: string | null;
+          phone?: string | null;
+          needs_review?: boolean;
           line_user_id: string | null;
           is_active: boolean;
           created_at: string;
@@ -48,8 +57,14 @@ export interface Database {
         };
         Insert: {
           id?: string;
+          user_id?: string | null;
+          store_id?: string | null;
+          display_name?: string | null;
           member_code: string;
           name?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          needs_review?: boolean;
           line_user_id?: string | null;
           is_active?: boolean;
           created_at?: string;
@@ -57,8 +72,14 @@ export interface Database {
         };
         Update: {
           id?: string;
+          user_id?: string | null;
+          store_id?: string | null;
+          display_name?: string | null;
           member_code?: string;
           name?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          needs_review?: boolean;
           line_user_id?: string | null;
           is_active?: boolean;
           created_at?: string;
@@ -84,6 +105,63 @@ export interface Database {
           default_store_id?: string;
           created_at?: string;
           updated_at?: string;
+        };
+        Relationships: [];
+      };
+      line_sessions: {
+        Row: {
+          user_id: string;
+          status: "idle" | "confirm";
+          temp_member_id: string | null;
+          temp_member_code: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          status: "idle" | "confirm";
+          temp_member_id?: string | null;
+          temp_member_code?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          status?: "idle" | "confirm";
+          temp_member_id?: string | null;
+          temp_member_code?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      client_notes: {
+        Row: {
+          id: string;
+          member_id: string;
+          store_id: string;
+          trainer_id: string;
+          date: string;
+          content: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          store_id: string;
+          trainer_id: string;
+          date: string;
+          content: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          store_id?: string;
+          trainer_id?: string;
+          date?: string;
+          content?: string;
+          created_at?: string;
         };
         Relationships: [];
       };
@@ -155,6 +233,7 @@ export interface Database {
           trainer_id: string | null;
           start_at: string;
           end_at: string;
+          session_type: string | null;
           status: string;
           notes: string | null;
           created_at: string;
@@ -167,6 +246,7 @@ export interface Database {
           trainer_id?: string | null;
           start_at: string;
           end_at: string;
+          session_type?: string | null;
           status: string;
           notes?: string | null;
           created_at?: string;
@@ -179,6 +259,7 @@ export interface Database {
           trainer_id?: string | null;
           start_at?: string;
           end_at?: string;
+          session_type?: string | null;
           status?: string;
           notes?: string | null;
           created_at?: string;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 type Store = { id: string; name: string };
 type TrainerRow = {
@@ -14,6 +15,8 @@ type TrainerRow = {
   email: string | null;
 };
 
+type ApiTrainer = { id: string; name: string; store_id: string; store_name: string };
+
 type ShiftRow = {
   id: string;
   trainer_id: string;
@@ -22,6 +25,7 @@ type ShiftRow = {
   start_local: string; // HH:MM:SS
   end_local: string; // HH:MM:SS
   status: string;
+  is_break?: boolean | null;
 };
 
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
@@ -48,7 +52,17 @@ async function apiGet<T>(path: string): Promise<T> {
   return json as T;
 }
 
-export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; trainers: TrainerRow[] }) {
+export function AdminTrainersClient({
+  stores,
+  trainers,
+  hideTrainerSelect = false,
+  allowAllStores = false,
+}: {
+  stores: Store[];
+  trainers: TrainerRow[];
+  hideTrainerSelect?: boolean;
+  allowAllStores?: boolean;
+}) {
   function jstTodayYmd() {
     return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo" }).format(new Date());
   }
@@ -84,34 +98,64 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
     return map[jstDay] ?? 0;
   }
 
-  function hhmmFromSlotMinutes(totalMin: number) {
-    const hh = Math.floor(totalMin / 60);
-    const mm = totalMin % 60;
-    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-  }
-
-  const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
-  const [trainerId, setTrainerId] = useState("");
+  const [storeId, setStoreId] = useState<string>(() => (allowAllStores ? "all" : stores[0]?.id ?? ""));
+  const [trainerId, setTrainerId] = useState<string>("");
   const [month, setMonth] = useState(() => monthKeyFromDate(new Date()));
   const [selectedDate, setSelectedDate] = useState<string>(() => jstTodayYmd());
-  const [selectedTime, setSelectedTime] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [shifts, setShifts] = useState<ShiftRow[] | null>(null);
 
-  const trainersForStore = useMemo(() => {
-    return trainers.filter((t) => t.is_active && t.store_id === storeId);
-  }, [trainers, storeId]);
+  const [trainersLive, setTrainersLive] = useState<TrainerRow[] | null>(null);
 
   useEffect(() => {
+    fetch("/api/trainers", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data: { trainers?: ApiTrainer[] }) => {
+        const list = (data.trainers ?? []).map(
+          (t): TrainerRow => ({
+            id: t.id,
+            display_name: t.name,
+            store_id: t.store_id,
+            store_name: t.store_name,
+            hourly_rate_yen: null,
+            is_active: true,
+            user_id: null,
+            email: null,
+          })
+        );
+        setTrainersLive(list);
+      })
+      .catch(() => {
+        setTrainersLive(null);
+      });
+  }, []);
+
+  const effectiveTrainers = trainersLive ?? trainers;
+
+  const trainersForStore = useMemo(() => {
+    const list =
+      storeId === "all"
+        ? effectiveTrainers.filter((t) => t.is_active)
+        : effectiveTrainers.filter((t) => t.is_active && t.store_id === storeId);
+    return list
+      .slice()
+      .sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
+  }, [effectiveTrainers, storeId]);
+
+  useEffect(() => {
+    if (hideTrainerSelect) {
+      if (trainerId) setTrainerId("");
+      return;
+    }
     if (!trainerId) {
       const first = trainersForStore[0]?.id ?? "";
       if (first) setTrainerId(first);
     } else if (!trainersForStore.some((t) => t.id === trainerId)) {
       setTrainerId(trainersForStore[0]?.id ?? "");
     }
-  }, [trainerId, trainersForStore]);
+  }, [trainerId, trainersForStore, hideTrainerSelect]);
 
   const shiftsByDate = useMemo(() => {
     const m = new Map<string, ShiftRow[]>();
@@ -128,10 +172,12 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
     setErr(null);
     setShifts(null);
     try {
-      const qs = new URLSearchParams({ store_id: storeId, month });
+      const qs = new URLSearchParams({ month });
+      if (storeId !== "all") qs.set("store_id", storeId);
       if (trainerId) qs.set("trainer_id", trainerId);
       const j = await apiGet<{ shifts: ShiftRow[] }>(`/api/shifts?${qs.toString()}`);
       setShifts(j.shifts ?? []);
+      console.log("[admin/trainers] shifts", j.shifts ?? []);
     } catch (e: any) {
       setErr(String(e?.message ?? "シフトの取得に失敗しました"));
       setShifts([]);
@@ -148,43 +194,6 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
   const startDow = useMemo(() => dowIndex(firstYmd), [firstYmd]);
   const cells = 42;
 
-  const slots = useMemo(() => {
-    const start = 9 * 60;
-    const end = 21 * 60;
-    const list: { start: string; end: string }[] = [];
-    for (let m = start; m + 30 <= end; m += 30) {
-      const s = hhmmFromSlotMinutes(m);
-      const e = hhmmFromSlotMinutes(m + 30);
-      list.push({ start: s, end: e });
-    }
-    return list;
-  }, []);
-
-  async function onRegisterShift() {
-    if (!storeId || !trainerId || !selectedDate || !selectedTime) return;
-    const slot = slots.find((s) => s.start === selectedTime);
-    if (!slot) return;
-    setBusy(true);
-    setErr(null);
-    setOk(null);
-    try {
-      await apiPost<{ shift: ShiftRow }>("/api/shifts", {
-        trainer_id: trainerId,
-        store_id: storeId,
-        date: selectedDate,
-        start_at: slot.start,
-        end_at: slot.end,
-      });
-      setOk("登録しました。");
-      setSelectedTime("");
-      await loadShifts();
-    } catch (e: any) {
-      setErr(String(e?.message ?? "登録に失敗しました"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
@@ -198,6 +207,7 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
                 disabled={busy}
                 className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm"
               >
+                {allowAllStores ? <option value="all">全店舗</option> : null}
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -205,21 +215,25 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
                 ))}
               </select>
             </label>
-            <label className="block text-sm font-medium text-slate-700">
-              トレーナー
-              <select
-                value={trainerId}
-                onChange={(e) => setTrainerId(e.target.value)}
-                disabled={busy || trainersForStore.length === 0}
-                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm"
-              >
-                {trainersForStore.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {hideTrainerSelect ? (
+              <div />
+            ) : (
+              <label className="block text-sm font-medium text-slate-700">
+                トレーナー
+                <select
+                  value={trainerId}
+                  onChange={(e) => setTrainerId(e.target.value)}
+                  disabled={busy || trainersForStore.length === 0}
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                >
+                  {trainersForStore.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -268,79 +282,29 @@ export function AdminTrainersClient({ stores, trainers }: { stores: Store[]; tra
             const ymd = inMonth ? ymdFromParts(year, month1, dayNum) : "";
             const isSelected = ymd && ymd === selectedDate;
             const dayShifts = ymd ? shiftsByDate.get(ymd) ?? [] : [];
+            if (!inMonth || !ymd) {
+              return <div key={idx} className="aspect-square" />;
+            }
             return (
-              <button
-                key={idx}
-                type="button"
-                disabled={!inMonth}
+              <Link
+                key={ymd}
+                href={`/admin/trainers/${ymd}`}
                 onClick={() => {
-                  if (!ymd) return;
                   setSelectedDate(ymd);
-                  setSelectedTime("");
                 }}
                 className={[
-                  "aspect-square rounded-xl border p-2 text-left",
-                  inMonth ? "border-slate-200 bg-white hover:bg-slate-50" : "border-transparent bg-transparent",
+                  "aspect-square rounded-xl border p-2 text-left block",
+                  "border-slate-200 bg-white hover:bg-slate-50",
                   isSelected ? "ring-2 ring-slate-900/20" : "",
                 ].join(" ")}
               >
-                {inMonth ? (
-                  <div className="flex h-full flex-col justify-between">
-                    <div className="text-sm font-semibold text-slate-900">{dayNum}</div>
-                    <div className="text-[11px] text-slate-600">{dayShifts.length > 0 ? `${dayShifts.length}件` : ""}</div>
-                  </div>
-                ) : (
-                  <div />
-                )}
-              </button>
+                <div className="flex h-full flex-col justify-between">
+                  <div className="text-sm font-semibold text-slate-900">{dayNum}</div>
+                  <div className="text-[11px] text-slate-600">{dayShifts.length > 0 ? `${dayShifts.length}件` : ""}</div>
+                </div>
+              </Link>
             );
           })}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-bold text-slate-900">時間スロット</div>
-          <div className="text-xs text-slate-500">{selectedDate}</div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {slots.map((s) => {
-            const selected = selectedTime === s.start;
-            return (
-              <button
-                key={s.start}
-                type="button"
-                onClick={() => setSelectedTime(s.start)}
-                className={[
-                  "min-h-[44px] rounded-xl border px-2 text-sm font-semibold",
-                  selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white hover:bg-slate-50",
-                ].join(" ")}
-              >
-                {s.start}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-slate-700">
-            選択:{" "}
-            {selectedTime
-              ? (() => {
-                  const slot = slots.find((s) => s.start === selectedTime);
-                  return slot ? `${slot.start}〜${slot.end}` : "-";
-                })()
-              : "-"}
-          </div>
-          <button
-            type="button"
-            onClick={() => void onRegisterShift()}
-            disabled={busy || !storeId || !trainerId || !selectedDate || !selectedTime}
-            className="min-h-[44px] rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-60"
-          >
-            シフト登録
-          </button>
         </div>
       </section>
 

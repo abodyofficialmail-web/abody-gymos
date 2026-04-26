@@ -33,6 +33,11 @@ export default async function AdminTrainersPage() {
         { href: "/admin/members", label: "会員" },
       ]}
     >
+      <div className="mb-3">
+        <a href="/admin/trainers/dashboard" className="text-sm font-medium text-teal-700 underline">
+          トレーナーダッシュボード
+        </a>
+      </div>
       <AdminTrainersClient
         stores={(stores ?? []).map((s) => ({ id: s.id, name: s.name }))}
         trainers={(rows ?? []).map((t) => ({

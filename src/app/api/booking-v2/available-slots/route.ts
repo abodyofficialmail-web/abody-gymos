@@ -1,9 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
 import { z } from "zod";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
+dayjs.extend(utc);
+dayjs.extend(timezone);
 export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
@@ -78,12 +83,13 @@ export async function GET(request: Request) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
     const { store_id, date } = parsed.data;
+    console.log("slots debug", { store_id, date });
     const client = createServiceClient();
     if (client.errorResponse) return client.errorResponse;
     const supabase = client.supabase;
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
-      .select("id, timezone")
+      .select("id, timezone, booking_cutoff_prev_day_time")
       .eq("id", store_id)
       .maybeSingle();
     if (storeErr) {
@@ -92,10 +98,24 @@ export async function GET(request: Request) {
     if (!storeRow) {
       return jsonResponse({ error: "店舗が見つかりません" }, 404);
     }
+    // stores.timezone に合わせて締切判定・表示を揃える
     const zone = storeRow.timezone?.trim() || "Asia/Tokyo";
+    const cutoffHHMM = String((storeRow as any)?.booking_cutoff_prev_day_time ?? "22:00");
+    {
+      const now = DateTime.now().setZone(zone);
+      const hh = Number(cutoffHHMM.slice(0, 2));
+      const mm = Number(cutoffHHMM.slice(3, 5));
+      const cutoff = DateTime.fromISO(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`, { zone }).minus({
+        days: 1,
+      });
+      if (now.toMillis() > cutoff.toMillis()) {
+        // 締切を過ぎている日はそもそも枠を表示しない
+        return jsonResponse([], 200);
+      }
+    }
     let shifts: ShiftRow[] = [];
     {
-      const makeQuery = (select: string) =>
+      const makeQueryA = (select: string) =>
         supabase
           .from("trainer_shifts")
           .select(select)
@@ -103,24 +123,88 @@ export async function GET(request: Request) {
           .eq("shift_date", date)
           .neq("status", "draft");
 
-      const { data: shiftsRaw, error: shiftsErr } = await makeQuery(
+      const { data: shiftsRaw, error: shiftsErr } = await makeQueryA(
         "id, trainer_id, store_id, shift_date, start_local, end_local, break_minutes, status, is_break"
       );
       if (shiftsErr) {
         const msg = String((shiftsErr as any)?.message ?? "");
         if (msg.includes("break_minutes") && (msg.includes("does not exist") || msg.includes("column"))) {
-          const { data: shiftsRaw2, error: shiftsErr2 } = await makeQuery(
+          const { data: shiftsRaw2, error: shiftsErr2 } = await makeQueryA(
             "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break"
           );
-          if (shiftsErr2) return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr2.message }, 500);
-          shifts = ((shiftsRaw2 ?? []) as any[]).map((s) => ({ ...s, break_minutes: 0 })) as unknown as ShiftRow[];
+          if (shiftsErr2) {
+            // schema B: date / start_time / end_time
+            const { data: shiftsRawB, error: shiftsErrB } = await (supabase as any)
+              .from("trainer_shifts")
+              .select("id, trainer_id, store_id, date, start_time, end_time, status, is_break")
+              .eq("store_id", store_id)
+              .eq("date", date)
+              .neq("status", "draft");
+            if (shiftsErrB) {
+              return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErrB.message }, 500);
+            }
+            shifts = ((shiftsRawB ?? []) as any[]).map((s) => ({
+              id: String(s.id),
+              trainer_id: String(s.trainer_id),
+              store_id: String(s.store_id),
+              shift_date: String(s.date),
+              start_local: String(s.start_time),
+              end_local: String(s.end_time),
+              status: String(s.status ?? ""),
+              is_break: s.is_break ?? null,
+            })) as unknown as ShiftRow[];
+          } else {
+            shifts = ((shiftsRaw2 ?? []) as any[]).map((s) => ({ ...s, break_minutes: 0 })) as unknown as ShiftRow[];
+          }
         } else {
-          return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr.message }, 500);
+          // schema B: date / start_time / end_time
+          const { data: shiftsRawB, error: shiftsErrB } = await (supabase as any)
+            .from("trainer_shifts")
+            .select("id, trainer_id, store_id, date, start_time, end_time, status, is_break")
+            .eq("store_id", store_id)
+            .eq("date", date)
+            .neq("status", "draft");
+          if (shiftsErrB) {
+            return jsonResponse({ error: "シフトの取得に失敗しました", detail: shiftsErr.message }, 500);
+          }
+          shifts = ((shiftsRawB ?? []) as any[]).map((s) => ({
+            id: String(s.id),
+            trainer_id: String(s.trainer_id),
+            store_id: String(s.store_id),
+            shift_date: String(s.date),
+            start_local: String(s.start_time),
+            end_local: String(s.end_time),
+            status: String(s.status ?? ""),
+            is_break: s.is_break ?? null,
+          })) as unknown as ShiftRow[];
         }
       } else {
         shifts = (shiftsRaw ?? []) as unknown as ShiftRow[];
+        // A が空/時刻が無い場合は B も試す（reservations と同様にフォールバック）
+        const hasAnyTimeA = shifts.some((s) => (s as any)?.start_local && (s as any)?.end_local);
+        if (!hasAnyTimeA) {
+          const { data: shiftsRawB, error: shiftsErrB } = await (supabase as any)
+            .from("trainer_shifts")
+            .select("id, trainer_id, store_id, date, start_time, end_time, status, is_break")
+            .eq("store_id", store_id)
+            .eq("date", date)
+            .neq("status", "draft");
+          if (!shiftsErrB) {
+            shifts = ((shiftsRawB ?? []) as any[]).map((s) => ({
+              id: String(s.id),
+              trainer_id: String(s.trainer_id),
+              store_id: String(s.store_id),
+              shift_date: String(s.date),
+              start_local: String(s.start_time),
+              end_local: String(s.end_time),
+              status: String(s.status ?? ""),
+              is_break: s.is_break ?? null,
+            })) as unknown as ShiftRow[];
+          }
+        }
       }
     }
+    console.log("shifts found", shifts);
     if (shifts.length === 0) {
       return jsonResponse([] satisfies AvailableSlotDto[], 200);
     }
@@ -184,6 +268,9 @@ export async function GET(request: Request) {
       if (!(shiftEndMin > shiftStartMin) || Number.isNaN(shiftStartMin) || Number.isNaN(shiftEndMin)) {
         continue;
       }
+      const shiftStart = shift.start_local;
+      const shiftEnd = shift.end_local;
+      const generatedSlots: Array<{ start_at: string; end_at: string }> = [];
       const busy = busyByTrainer.get(shift.trainer_id) ?? [];
       const shiftBreaks = breaksByShiftId.get(shift.id) ?? [];
       for (let m = shiftStartMin; m + SLOT_MINUTES <= shiftEndMin; m += SLOT_MINUTES) {
@@ -219,7 +306,9 @@ export async function GET(request: Request) {
         set.add(shift.trainer_id);
         freeTrainerSetBySlotKey.set(key, set);
         if (!startEndBySlotKey.has(key)) startEndBySlotKey.set(key, { start_at: startAt, end_at: endAt });
+        generatedSlots.push({ start_at: startAt, end_at: endAt });
       }
+      console.log("生成スロット", { shiftStart, shiftEnd, generatedSlots });
     }
 
     const unassignedCountBySlotKey = new Map<string, number>();

@@ -2,11 +2,17 @@
 
 import { DateTime } from "luxon";
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 type Store = { id: string; name: string };
 type Slot = { startAt: string; endAt: string };
 type BookingV2Slot = { start_at: string; end_at: string };
+type SessionType = "store" | "online";
 
 const TZ = "Asia/Tokyo";
 
@@ -123,6 +129,8 @@ export default function BookingPage() {
 
   const [selectedDate, setSelectedDate] = useState<string>("");
 
+  const [sessionType, setSessionType] = useState<SessionType>("store");
+
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [selectedSlotKey, setSelectedSlotKey] = useState<string>("");
 
@@ -134,7 +142,7 @@ export default function BookingPage() {
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
 
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
   const selectedSlot = useMemo(() => {
     if (!slots || !selectedSlotKey) return null;
@@ -160,6 +168,7 @@ export default function BookingPage() {
     if (!selectedStoreId) return;
     setMemberName("");
     setError(null);
+    setSessionType("store");
     setDays(null);
     setSelectedDate("");
     setSlots(null);
@@ -242,8 +251,10 @@ export default function BookingPage() {
       }>("/api/booking-v2/reservations", {
         store_id: selectedStoreId,
         member_code: code,
-        start_at: selectedSlot.startAt,
-        end_at: selectedSlot.endAt,
+        session_type: sessionType,
+        // UTC(Z)ではなくJST(+09:00)で送る（サーバー側のシフト判定と揃える）
+        start_at: dayjs(selectedSlot.startAt).tz(TZ).format(),
+        end_at: dayjs(selectedSlot.endAt).tz(TZ).format(),
       });
       const qs = new URLSearchParams({
         storeName: selectedStoreName,
@@ -253,6 +264,7 @@ export default function BookingPage() {
         memberName: memberName || "",
         memberId: d.member_code ?? code,
         reservationId: d.reservation.id,
+        sessionType,
       });
       window.location.href = "/booking/complete?" + qs.toString();
     } catch (e: any) {
@@ -271,9 +283,25 @@ export default function BookingPage() {
   }
 
   const progressPct = useMemo(() => {
-    const steps = 5;
+    const steps = 6;
     return Math.round(((step - 1) / (steps - 1)) * 100);
   }, [step]);
+
+  const sessionTypeLabel = useMemo(() => (sessionType === "online" ? "オンライン" : "店舗"), [sessionType]);
+
+  function resetToStart() {
+    setError(null);
+    setBusy(false);
+    setStep(1);
+    setMonth(DateTime.now().setZone(TZ).startOf("month"));
+    setDays(null);
+    setSelectedDate("");
+    setSessionType("store");
+    setSlots(null);
+    setSelectedSlotKey("");
+    setMemberCodeInput("");
+    setMemberName("");
+  }
 
   return (
     <main
@@ -290,16 +318,20 @@ export default function BookingPage() {
       }
     >
       <div className="flex items-center justify-between">
-        <Link href="/" className="text-sm text-ink-500 hover:text-ink-900">
-          ← トップ
-        </Link>
+        <button
+          type="button"
+          onClick={resetToStart}
+          className="text-sm text-ink-500 hover:text-ink-900"
+        >
+          ↺ 最初から予約する
+        </button>
         <div className="text-sm font-medium">予約</div>
         <div className="w-10" />
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-ink-500">
-          <div>Step {step} / 5</div>
+          <div>Step {step} / 6</div>
           <div>{progressPct}%</div>
         </div>
         <div className="h-2 rounded-full bg-[#F3F4F6] overflow-hidden">
@@ -331,6 +363,7 @@ export default function BookingPage() {
                   onClick={() => {
                     setSelectedStoreId(s.id);
                     setMonth(DateTime.now().setZone(TZ).startOf("month"));
+                    setSessionType("store");
                     setStep(2);
                   }}
                   className={[
@@ -420,6 +453,7 @@ export default function BookingPage() {
                       setSelectedDate(ymd);
                       setSelectedSlotKey("");
                       setMemberCodeInput("");
+                      setSessionType("store");
                       setStep(3);
                     }}
                     className={[
@@ -471,8 +505,62 @@ export default function BookingPage() {
         </section>
       ) : null}
 
-      {/* Step 3: time */}
+      {/* Step 3: session type */}
       {step === 3 ? (
+        <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
+          <div className="space-y-1">
+            <div className="text-base font-semibold">セッション種別を選択</div>
+            <div className="text-sm text-ink-500">
+              {selectedStoreName} / {selectedDate ? formatJstDateLabel(selectedDate) : "-"}
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSessionType("store");
+                setStep(4);
+              }}
+              className={[
+                "w-full rounded-xl border px-4 py-4 text-left transition-colors",
+                sessionType === "store" ? "" : "bg-white hover:bg-[#F9FAFB]",
+              ].join(" ")}
+              style={
+                sessionType === "store"
+                  ? { borderColor: "var(--accentBorder)", background: "var(--accentSoft)" }
+                  : { borderColor: "#E5E7EB" }
+              }
+            >
+              <div className="text-base font-semibold">店舗</div>
+              <div className="text-xs text-ink-500 pt-1">店舗でのセッション</div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSessionType("online");
+                setStep(4);
+              }}
+              className={[
+                "w-full rounded-xl border px-4 py-4 text-left transition-colors",
+                sessionType === "online" ? "" : "bg-white hover:bg-[#F9FAFB]",
+              ].join(" ")}
+              style={
+                sessionType === "online"
+                  ? { borderColor: "var(--accentBorder)", background: "var(--accentSoft)" }
+                  : { borderColor: "#E5E7EB" }
+              }
+            >
+              <div className="text-base font-semibold">オンライン</div>
+              <div className="text-xs text-ink-500 pt-1">オンラインでのセッション</div>
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {/* Step 4: time */}
+      {step === 4 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
             <div className="text-base font-semibold">空いている時間を選択</div>
@@ -489,7 +577,7 @@ export default function BookingPage() {
                   type="button"
                   onClick={() => {
                     setSelectedSlotKey(k);
-                    setStep(4);
+                    setStep(5);
                   }}
                   className="rounded-xl border px-3 py-3 text-center transition-colors"
                   style={
@@ -510,8 +598,8 @@ export default function BookingPage() {
         </section>
       ) : null}
 
-      {/* Step 4: member */}
-      {step === 4 ? (
+      {/* Step 5: member */}
+      {step === 5 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
             <div className="text-base font-semibold">会員情報</div>
@@ -549,7 +637,7 @@ export default function BookingPage() {
                   );
                   setMemberCodeInput(info.member.member_code);
                   setMemberName(info.member.name ?? "");
-                  setStep(5);
+                  setStep(6);
                 } catch (e: any) {
                   setMemberName("");
                   setError(e?.message ?? "会員情報の取得に失敗しました");
@@ -567,8 +655,8 @@ export default function BookingPage() {
         </section>
       ) : null}
 
-      {/* Step 5: confirm */}
-      {step === 5 ? (
+      {/* Step 6: confirm */}
+      {step === 6 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
             <div className="text-base font-semibold">最終確認</div>
@@ -579,6 +667,10 @@ export default function BookingPage() {
             <div className="space-y-1">
               <div className="text-xs text-ink-500">店舗</div>
               <div className="text-base font-medium">{selectedStoreName}</div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-ink-500">セッション種別</div>
+              <div className="text-base font-medium">{sessionTypeLabel}</div>
             </div>
             <div className="space-y-1">
               <div className="text-xs text-ink-500">日付</div>
@@ -621,6 +713,7 @@ export default function BookingPage() {
             if (step === 3) return setStep(2);
             if (step === 4) return setStep(3);
             if (step === 5) return setStep(4);
+            if (step === 6) return setStep(5);
           }}
           disabled={busy || step === 1}
           className="flex-1 rounded-xl border border-line px-4 py-3 text-sm font-medium disabled:opacity-60"
@@ -634,29 +727,31 @@ export default function BookingPage() {
             setError(null);
             if (step === 1 && selectedStoreId) return setStep(2);
             if (step === 2) return;
-            if (step === 3 && selectedSlot) return setStep(4);
-            if (step === 4) {
+            if (step === 3) return;
+            if (step === 4 && selectedSlot) return setStep(5);
+            if (step === 5) {
               const v = validateMemberCode(memberCodeInput);
               if (!v.ok) {
                 setError(v.message);
                 return;
               }
-              // ここで API を叩くと UX が重くなるため、会員名は Step4 の「次へ」で取得済みを前提にする
+              // ここで API を叩くと UX が重くなるため、会員名は Step5 の「次へ」で取得済みを前提にする
               setMemberCodeInput(v.code);
               if (!memberName) {
                 setError("会員情報の取得に失敗しました。もう一度お試しください。");
                 return;
               }
-              return setStep(5);
+              return setStep(6);
             }
           }}
           disabled={
             busy ||
             (step === 1 && !selectedStoreId) ||
             step === 2 ||
-            (step === 3 && !selectedSlot) ||
-            (step === 4 && memberCodeInput.trim().length === 0) ||
-            step === 5
+            step === 3 ||
+            (step === 4 && !selectedSlot) ||
+            (step === 5 && memberCodeInput.trim().length === 0) ||
+            step === 6
           }
           className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
           style={{ background: "var(--accent)" }}
