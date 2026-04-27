@@ -5,6 +5,11 @@ import { jsonResponse } from "@/app/api/booking-v2/_cors";
 
 const ymdSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 
+function isMissingTrainerEventsTable(error: unknown): boolean {
+  const msg = typeof error === "object" && error && "message" in error ? String((error as any).message) : String(error ?? "");
+  return msg.includes("trainer_events") && (msg.includes("does not exist") || msg.includes("relation") || msg.includes("schema cache"));
+}
+
 const getQuerySchema = z.object({
   date: ymdSchema.optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/u).optional(),
@@ -88,7 +93,11 @@ export async function GET(req: Request) {
     }
 
     const { data, error } = await q;
-    if (error) return jsonResponse({ error: "fetch_failed", detail: error.message }, 500);
+    if (error) {
+      // DB未反映でも画面は動かす（予定=なし扱い）
+      if (isMissingTrainerEventsTable(error)) return jsonResponse({ events: [] }, 200);
+      return jsonResponse({ error: "fetch_failed", detail: error.message }, 500);
+    }
     return jsonResponse({ events: data ?? [] }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -116,7 +125,12 @@ export async function POST(req: Request) {
     } as any;
 
     const { data, error } = await supabase.from("trainer_events").insert(insertRow).select("*").single();
-    if (error) return jsonResponse({ error: "insert_failed", detail: error.message }, 500);
+    if (error) {
+      if (isMissingTrainerEventsTable(error)) {
+        return jsonResponse({ error: "予定機能がまだ有効化されていません（DB反映待ち）" }, 400);
+      }
+      return jsonResponse({ error: "insert_failed", detail: error.message }, 500);
+    }
     return jsonResponse({ event: data }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -142,7 +156,12 @@ export async function PATCH(req: Request) {
 
     const supabase = createSupabaseServiceClient();
     const { data, error } = await supabase.from("trainer_events").update(update as any).eq("id", id).select("*").single();
-    if (error) return jsonResponse({ error: "update_failed", detail: error.message }, 500);
+    if (error) {
+      if (isMissingTrainerEventsTable(error)) {
+        return jsonResponse({ error: "予定機能がまだ有効化されていません（DB反映待ち）" }, 400);
+      }
+      return jsonResponse({ error: "update_failed", detail: error.message }, 500);
+    }
     return jsonResponse({ event: data }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -159,7 +178,12 @@ export async function DELETE(req: Request) {
 
     const supabase = createSupabaseServiceClient();
     const { error } = await supabase.from("trainer_events").delete().eq("id", id);
-    if (error) return jsonResponse({ error: "delete_failed", detail: error.message }, 500);
+    if (error) {
+      if (isMissingTrainerEventsTable(error)) {
+        return jsonResponse({ error: "予定機能がまだ有効化されていません（DB反映待ち）" }, 400);
+      }
+      return jsonResponse({ error: "delete_failed", detail: error.message }, 500);
+    }
     return jsonResponse({ ok: true }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

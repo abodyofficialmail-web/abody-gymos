@@ -307,7 +307,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
     setEventNotes("");
     setEventBlock(true);
     setEventTrainerId(effectiveTrainers[0]?.id ?? "");
-    setEventStoreId(stores[0]?.id ?? "");
+    setEventStoreId("all");
     setEventStart("12:00");
     setEventEnd("13:00");
     setEventOpen(true);
@@ -357,16 +357,33 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
           block_booking: eventBlock,
         });
       } else {
-        await apiAny<{ event: TrainerEventRow }>("/api/trainer-events", "POST", {
-          store_id: eventStoreId,
-          trainer_id: eventTrainerId,
-          date,
-          start_at: eventStart,
-          end_at: eventEnd,
-          title: eventTitle,
-          notes: eventNotes || null,
-          block_booking: eventBlock,
-        });
+        if (eventStoreId === "all") {
+          await Promise.all(
+            stores.map((s) =>
+              apiAny<{ event: TrainerEventRow }>("/api/trainer-events", "POST", {
+                store_id: s.id,
+                trainer_id: eventTrainerId,
+                date,
+                start_at: eventStart,
+                end_at: eventEnd,
+                title: eventTitle,
+                notes: eventNotes || null,
+                block_booking: eventBlock,
+              })
+            )
+          );
+        } else {
+          await apiAny<{ event: TrainerEventRow }>("/api/trainer-events", "POST", {
+            store_id: eventStoreId,
+            trainer_id: eventTrainerId,
+            date,
+            start_at: eventStart,
+            end_at: eventEnd,
+            title: eventTitle,
+            notes: eventNotes || null,
+            block_booking: eventBlock,
+          });
+        }
       }
       setEventOpen(false);
       setOk(eventEditId ? "予定を更新しました。" : "予定を追加しました。");
@@ -785,6 +802,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
                   className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm"
                   disabled={busy}
                 >
+                  {!eventEditId ? <option value="all">全店舗</option> : null}
                   {stores.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
