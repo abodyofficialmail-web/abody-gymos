@@ -1,6 +1,8 @@
 -- 管理用の「予定」テーブル（MTG/撮影/作業/掃除など）
 -- block_booking=true の予定は会員予約カレンダーの空き枠から除外する
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS public.trainer_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   store_id uuid NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
