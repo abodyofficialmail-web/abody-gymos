@@ -51,6 +51,10 @@ const patchBodySchema = z.object({
   break_minutes: z.number().int().min(0).optional(),
 });
 
+const deleteBodySchema = z.object({
+  id: z.string().uuid(),
+});
+
 function normalizeLocalTime(t: string): string {
   const s = t.trim();
   if (/^\d{2}:\d{2}:\d{2}$/u.test(s)) return s;
@@ -405,6 +409,32 @@ export async function PATCH(req: Request) {
       .single();
     if (error) return json({ error: "update_failed", detail: error.message }, 500);
     return json({ shift: data }, 200);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return json({ error: "unexpected_error", detail: message }, 500);
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const raw = await req.json().catch(() => null);
+    const parsed = deleteBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return json({ error: "invalid_body", detail: parsed.error.flatten() }, 400);
+    }
+    const { id } = parsed.data;
+    const supabase = createSupabaseServiceClient();
+
+    // breaks が存在する環境では先に消す（FK制約回避）。無い環境は無視。
+    try {
+      await supabase.from("trainer_shift_breaks").delete().eq("shift_id", id);
+    } catch {
+      // ignore
+    }
+
+    const { error } = await supabase.from("trainer_shifts").delete().eq("id", id);
+    if (error) return json({ error: "delete_failed", detail: error.message }, 500);
+    return json({ ok: true }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json({ error: "unexpected_error", detail: message }, 500);

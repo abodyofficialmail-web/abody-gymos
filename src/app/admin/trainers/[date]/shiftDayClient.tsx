@@ -47,6 +47,22 @@ async function apiJson<T>(path: string, method: "POST" | "PATCH", body: unknown)
   return json as T;
 }
 
+async function apiDelete<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (json as any)?.error?.fieldErrors
+      ? JSON.stringify((json as any).error.fieldErrors)
+      : (json as any)?.error ?? "削除に失敗しました";
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
 function formatJstDateLabel(ymd: string) {
   const [y, m, d] = ymd.split("-").map((x) => Number(x));
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -210,6 +226,27 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
       await refresh();
     } catch (e: any) {
       setErr(String(e?.message ?? "更新に失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteEdit() {
+    if (!editShiftId) return;
+    const okConfirm = window.confirm("このシフトを削除しますか？");
+    if (!okConfirm) return;
+    setBusy(true);
+    setErr(null);
+    setOk(null);
+    setEditErr(null);
+    try {
+      await apiDelete<{ ok: true }>("/api/shifts", { id: editShiftId });
+      setEditOpen(false);
+      setEditShiftId(null);
+      setOk("削除しました。");
+      await refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? "削除に失敗しました"));
     } finally {
       setBusy(false);
     }
@@ -506,6 +543,15 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
               disabled={busy || !editShiftId}
             >
               保存
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void onDeleteEdit()}
+              className="min-h-[44px] w-full rounded-xl border border-red-200 bg-white px-4 text-sm font-bold text-red-700 hover:bg-red-50 disabled:opacity-60"
+              disabled={busy || !editShiftId}
+            >
+              削除
             </button>
           </div>
         </div>
