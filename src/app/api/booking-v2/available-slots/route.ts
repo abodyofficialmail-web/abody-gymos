@@ -31,6 +31,16 @@ type ShiftRow = {
   status: string;
   is_break?: boolean | null;
 };
+type EventRow = {
+  id: string;
+  trainer_id: string;
+  store_id: string;
+  event_date: string;
+  start_local: string;
+  end_local: string;
+  title: string;
+  block_booking: boolean;
+};
 function parseLocalTimeToMinutes(t: string): number {
   const [hh, mm] = t.split(":");
   const h = Number(hh);
@@ -215,6 +225,29 @@ export async function GET(request: Request) {
     if (shifts.length === 0) {
       return jsonResponse([] satisfies AvailableSlotDto[], 200);
     }
+
+    // blocking events（trainer_events.block_booking=true）
+    let blockingEvents: EventRow[] = [];
+    try {
+      const { data: eraw, error: eerr } = await (supabase as any)
+        .from("trainer_events")
+        .select("id, trainer_id, store_id, event_date, start_local, end_local, title, block_booking")
+        .eq("store_id", store_id)
+        .eq("event_date", date)
+        .eq("block_booking", true);
+      if (!eerr) blockingEvents = (eraw ?? []) as EventRow[];
+    } catch {
+      blockingEvents = [];
+    }
+    const eventRangesByTrainer = new Map<string, Array<{ start_min: number; end_min: number }>>();
+    for (const ev of blockingEvents) {
+      const a = parseLocalTimeToMinutes(String(ev.start_local));
+      const b = parseLocalTimeToMinutes(String(ev.end_local));
+      if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue;
+      const arr = eventRangesByTrainer.get(ev.trainer_id) ?? [];
+      arr.push({ start_min: a, end_min: b });
+      eventRangesByTrainer.set(ev.trainer_id, arr);
+    }
     const dayStartUtc = DateTime.fromISO(date, { zone }).startOf("day").toUTC();
     const dayEndUtc = dayStartUtc.plus({ days: 1 });
     const { data: resRaw, error: resErr } = await supabase
@@ -280,6 +313,7 @@ export async function GET(request: Request) {
       const generatedSlots: Array<{ start_at: string; end_at: string }> = [];
       const busy = busyByTrainer.get(shift.trainer_id) ?? [];
       const shiftBreaks = breaksByShiftId.get(shift.id) ?? [];
+      const evRanges = eventRangesByTrainer.get(shift.trainer_id) ?? [];
       for (let m = shiftStartMin; m + SLOT_MINUTES <= shiftEndMin; m += SLOT_MINUTES) {
         const slotStartLocal = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}:00`;
         const slotEndMin = m + SLOT_MINUTES;
@@ -298,6 +332,8 @@ export async function GET(request: Request) {
         if (slotStartMs <= nowMs) continue;
         const isBusy = busy.some((p) => overlapsMs(p.start, p.end, slotStartMs, slotEndMs));
         if (isBusy) continue;
+        const isBlockedByEvent = evRanges.some((r) => m < r.end_min && m + SLOT_MINUTES > r.start_min);
+        if (isBlockedByEvent) continue;
         const isBreak = shiftBreaks.some((b) => {
           const bsMin = parseLocalTimeToMinutes(String(b.start_time));
           const beMin = parseLocalTimeToMinutes(String(b.end_time));

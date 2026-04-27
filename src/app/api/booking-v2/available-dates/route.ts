@@ -27,6 +27,16 @@ type ShiftRow = {
   status: string;
   is_break?: boolean | null;
 };
+type EventRow = {
+  id: string;
+  trainer_id: string;
+  store_id: string;
+  event_date: string;
+  start_local: string;
+  end_local: string;
+  title: string;
+  block_booking: boolean;
+};
 function parseLocalTimeToMinutes(t: string): number {
   const [hh, mm] = t.split(":");
   const h = Number(hh);
@@ -171,6 +181,35 @@ export async function GET(request: Request) {
       busyByTrainerDate.set(key, arr);
     }
     const countByDate = new Map<string, number>();
+
+    // blocking events（trainer_events.block_booking=true）を日別・trainer別に保持
+    const blockingByTrainerDate = new Map<string, Array<{ start: number; end: number }>>();
+    try {
+      const { data: eraw, error: eerr } = await (supabase as any)
+        .from("trainer_events")
+        .select("id, trainer_id, store_id, event_date, start_local, end_local, title, block_booking")
+        .eq("store_id", store_id)
+        .gte("event_date", startDate)
+        .lte("event_date", endDate)
+        .eq("block_booking", true);
+      if (!eerr) {
+        for (const ev of eraw ?? []) {
+          const ymd = String((ev as any).event_date ?? "");
+          const tid = String((ev as any).trainer_id ?? "");
+          const a = parseLocalTimeToMinutes(String((ev as any).start_local ?? ""));
+          const b = parseLocalTimeToMinutes(String((ev as any).end_local ?? ""));
+          if (!ymd || !tid) continue;
+          if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue;
+          const key = `${ymd}|${tid}`;
+          const arr = blockingByTrainerDate.get(key) ?? [];
+          arr.push({ start: a, end: b });
+          blockingByTrainerDate.set(key, arr);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     for (const shift of shifts) {
       if (shift.is_break) continue;
       const shiftStartMin = parseLocalTimeToMinutes(shift.start_local);
@@ -184,6 +223,7 @@ export async function GET(request: Request) {
       }
       const busyKey = `${shift.shift_date}|${shift.trainer_id}`;
       const busy = busyByTrainerDate.get(busyKey) ?? [];
+      const blocked = blockingByTrainerDate.get(busyKey) ?? [];
       let freeCountForThisShift = 0;
       for (let m = shiftStartMin; m + SLOT_MINUTES <= shiftEndMin; m += SLOT_MINUTES) {
         const slotStartLocal = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(
@@ -206,6 +246,8 @@ export async function GET(request: Request) {
         const slotEndMs = DateTime.fromISO(endAt).toMillis();
         const isBusy = busy.some((p) => overlapsMs(p.start, p.end, slotStartMs, slotEndMs));
         if (isBusy) continue;
+        const isBlockedByEvent = blocked.some((r) => m < r.end && m + SLOT_MINUTES > r.start);
+        if (isBlockedByEvent) continue;
         freeCountForThisShift += 1;
       }
       if (freeCountForThisShift > 0) {

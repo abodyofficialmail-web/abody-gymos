@@ -225,6 +225,48 @@ export interface Database {
         Update: { id?: string; shift_id?: string; start_time?: string; end_time?: string; created_at?: string };
         Relationships: [];
       };
+      trainer_events: {
+        Row: {
+          id: string;
+          store_id: string;
+          trainer_id: string;
+          event_date: string;
+          start_local: string;
+          end_local: string;
+          title: string;
+          notes: string | null;
+          block_booking: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          trainer_id: string;
+          event_date: string;
+          start_local: string;
+          end_local: string;
+          title?: string;
+          notes?: string | null;
+          block_booking?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          trainer_id?: string;
+          event_date?: string;
+          start_local?: string;
+          end_local?: string;
+          title?: string;
+          notes?: string | null;
+          block_booking?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       reservations: {
         Row: {
           id: string;
