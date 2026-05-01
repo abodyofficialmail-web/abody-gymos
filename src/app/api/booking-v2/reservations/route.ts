@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
+import { sendBookingConfirmation } from "@/lib/email";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -274,7 +275,7 @@ async function fetchShiftsForCapacityCheck(params: {
 const bodySchema = z.object({
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります"),
   trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
-  member_code: z.string().min(1, "member_code は必須です"),
+  email: z.string().min(1, "email は必須です").email("メールアドレスの形式が不正です"),
   start_at: z.string().min(1, "start_at は必須です"),
   end_at: z.string().min(1, "end_at は必須です"),
   session_type: z.enum(["store", "online"]).optional().default("store"),
@@ -425,8 +426,8 @@ export async function POST(request: Request) {
         400
       );
     }
-    const { store_id, trainer_id: trainerIdInput, member_code, start_at, end_at, session_type } = parsed.data;
-    const code = member_code.trim();
+    const { store_id, trainer_id: trainerIdInput, email, start_at, end_at, session_type } = parsed.data;
+    const normalizedEmail = email.trim();
     console.log({ store_id, new_start_at: start_at, new_end_at: end_at });
     let supabase: SupabaseClient<Database>;
     try {
@@ -437,8 +438,9 @@ export async function POST(request: Request) {
     }
     const { data: member, error: memberErr } = await supabase
       .from("members")
-      .select("id, member_code, is_active, line_user_id")
-      .eq("member_code", code)
+      .select("id, member_code, name, email, is_active, line_user_id")
+      // email は大小区別しない一致に寄せる（DB側でユニーク制約がある想定）
+      .ilike("email", normalizedEmail)
       .maybeSingle();
     if (memberErr) {
       return jsonResponse(
@@ -447,7 +449,7 @@ export async function POST(request: Request) {
       );
     }
     if (!member || !member.is_active) {
-      return jsonResponse({ error: "会員が見つかりません", detail: { member_code: code } }, 404);
+      return jsonResponse({ error: "会員が見つかりません", detail: { email: normalizedEmail } }, 404);
     }
 
     // 2026年4月の予約は一旦閉じる（UI回避・直叩き回避）
@@ -683,11 +685,33 @@ export async function POST(request: Request) {
       console.error("LINE push unexpected error", e);
     }
 
+    // 特定会員（SAK023）のみ予約確定メール送信
+    try {
+      const memberCode = String((member as any)?.member_code ?? "");
+      const memberName = String((member as any)?.name ?? "");
+      const memberEmail = String((member as any)?.email ?? "");
+      const isTargetMember = memberCode === "SAK023";
+      if (isTargetMember && memberEmail) {
+        const start = DateTime.fromISO(inserted.start_at).setZone("Asia/Tokyo");
+        const end = DateTime.fromISO(inserted.end_at).setZone("Asia/Tokyo");
+        const dateStr = start.setLocale("ja").toFormat("yyyy年M月d日（ccc）");
+        const timeStr = `${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}`;
+        await sendBookingConfirmation({
+          to: memberEmail,
+          memberName: memberName || "会員様",
+          dateStr,
+          timeStr,
+        });
+      }
+    } catch (e) {
+      console.error("confirmation email unexpected error", e);
+    }
+
     return jsonResponse(
       {
         reservation: inserted,
-        /** リクエストで渡した会員コード（DB行には member_code カラムがないため別フィールド） */
-        member_code: code,
+        /** リクエストで渡したメール（DB行には email カラムがないため別フィールド） */
+        member_email: normalizedEmail,
       },
       200
     );

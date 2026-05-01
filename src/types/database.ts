@@ -276,6 +276,8 @@ export interface Database {
           start_at: string;
           end_at: string;
           session_type: string | null;
+          reschedule_count?: number;
+          last_rescheduled_at?: string | null;
           status: string;
           notes: string | null;
           created_at: string;
@@ -289,6 +291,8 @@ export interface Database {
           start_at: string;
           end_at: string;
           session_type?: string | null;
+          reschedule_count?: number;
+          last_rescheduled_at?: string | null;
           status: string;
           notes?: string | null;
           created_at?: string;
@@ -302,6 +306,8 @@ export interface Database {
           start_at?: string;
           end_at?: string;
           session_type?: string | null;
+          reschedule_count?: number;
+          last_rescheduled_at?: string | null;
           status?: string;
           notes?: string | null;
           created_at?: string;

@@ -164,22 +164,33 @@ export async function GET(request: Request) {
     if (resErr) {
       return jsonResponse({ error: "予約の取得に失敗しました", detail: resErr.message }, 500);
     }
-    // busyByTrainerDate: key = `${YYYY-MM-DD}|${trainer_id}`
+    // busyByTrainerDate: key = `${YYYY-MM-DD}|${trainer_id}`（trainer_idがある予約のみ）
     const busyByTrainerDate = new Map<string, { start: number; end: number }[]>();
+    // unassignedByDate: key = `${YYYY-MM-DD}`（trainer_id=null の予約は「その時間帯の容量」を消費する）
+    const unassignedByDate = new Map<string, { start: number; end: number }[]>();
     for (const r of resRaw ?? []) {
       const tId = (r as any).trainer_id as string | null;
-      if (!tId) continue;
       const sIso = (r as any).start_at as string;
       const eIso = (r as any).end_at as string;
       const sMs = DateTime.fromISO(sIso).toMillis();
       const eMs = DateTime.fromISO(eIso).toMillis();
       const dateYmd = DateTime.fromISO(sIso).setZone(zone).toISODate();
       if (!dateYmd) continue;
-      const key = `${dateYmd}|${tId}`;
-      const arr = busyByTrainerDate.get(key) ?? [];
-      arr.push({ start: sMs, end: eMs });
-      busyByTrainerDate.set(key, arr);
+      if (tId) {
+        const key = `${dateYmd}|${tId}`;
+        const arr = busyByTrainerDate.get(key) ?? [];
+        arr.push({ start: sMs, end: eMs });
+        busyByTrainerDate.set(key, arr);
+      } else {
+        const key = `${dateYmd}`;
+        const arr = unassignedByDate.get(key) ?? [];
+        arr.push({ start: sMs, end: eMs });
+        unassignedByDate.set(key, arr);
+      }
     }
+    // NOTE:
+    // countByDate は「営業枠の総数」ではなく「実際に予約可能な時間枠数（残り枠>0の枠数）」にする。
+    // Step 4（available-slots）と整合させるため、trainer_id=null の予約も容量消費として差し引く。
     const countByDate = new Map<string, number>();
 
     // blocking events（trainer_events.block_booking=true）を日別・trainer別に保持
@@ -210,6 +221,38 @@ export async function GET(request: Request) {
       // ignore
     }
 
+    // breaks（trainer_shift_breaks）を shift_id ごとに保持（存在しない環境では無視）
+    const breaksByShiftId = new Map<string, { start_time: string; end_time: string }[]>();
+    try {
+      const shiftIds = Array.from(new Set(shifts.map((s) => s.id).filter(Boolean)));
+      if (shiftIds.length > 0) {
+        const { data: braw, error: berr } = await supabase
+          .from("trainer_shift_breaks")
+          .select("shift_id, start_time, end_time")
+          .in("shift_id", shiftIds);
+        if (!berr) {
+          for (const b of braw ?? []) {
+            const sid = String((b as any).shift_id ?? "");
+            if (!sid) continue;
+            const arr = breaksByShiftId.get(sid) ?? [];
+            arr.push({
+              start_time: String((b as any).start_time ?? ""),
+              end_time: String((b as any).end_time ?? ""),
+            });
+            breaksByShiftId.set(sid, arr);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const nowUtcMs = DateTime.now().toUTC().toMillis();
+    // day -> slotKey -> set(trainer_id)
+    const freeTrainerSetByDateSlotKey = new Map<string, Map<string, Set<string>>>();
+    // day -> slotKey -> {start_at,end_at}
+    const startEndByDateSlotKey = new Map<string, Map<string, { start_at: string; end_at: string }>>();
+
     for (const shift of shifts) {
       if (shift.is_break) continue;
       const shiftStartMin = parseLocalTimeToMinutes(shift.start_local);
@@ -224,7 +267,7 @@ export async function GET(request: Request) {
       const busyKey = `${shift.shift_date}|${shift.trainer_id}`;
       const busy = busyByTrainerDate.get(busyKey) ?? [];
       const blocked = blockingByTrainerDate.get(busyKey) ?? [];
-      let freeCountForThisShift = 0;
+      const shiftBreaks = breaksByShiftId.get(shift.id) ?? [];
       for (let m = shiftStartMin; m + SLOT_MINUTES <= shiftEndMin; m += SLOT_MINUTES) {
         const slotStartLocal = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(
           m % 60
@@ -244,22 +287,59 @@ export async function GET(request: Request) {
         }
         const slotStartMs = DateTime.fromISO(startAt).toMillis();
         const slotEndMs = DateTime.fromISO(endAt).toMillis();
+        // 過去時刻は枠として扱わない（Step4と揃える）
+        if (slotStartMs <= nowUtcMs) continue;
         const isBusy = busy.some((p) => overlapsMs(p.start, p.end, slotStartMs, slotEndMs));
         if (isBusy) continue;
         const isBlockedByEvent = blocked.some((r) => m < r.end && m + SLOT_MINUTES > r.start);
         if (isBlockedByEvent) continue;
-        freeCountForThisShift += 1;
+
+        const isBreak = shiftBreaks.some((b) => {
+          const bsMin = parseLocalTimeToMinutes(String((b as any).start_time ?? ""));
+          const beMin = parseLocalTimeToMinutes(String((b as any).end_time ?? ""));
+          if (!Number.isFinite(bsMin) || !Number.isFinite(beMin) || beMin <= bsMin) return false;
+          const slotStartMin = m;
+          const slotEndMin = m + SLOT_MINUTES;
+          return slotStartMin < beMin && slotEndMin > bsMin;
+        });
+        if (isBreak) continue;
+
+        const slotKey = `${startAt}|${endAt}`;
+        const day = shift.shift_date;
+        const bySlot = freeTrainerSetByDateSlotKey.get(day) ?? new Map<string, Set<string>>();
+        const set = bySlot.get(slotKey) ?? new Set<string>();
+        set.add(shift.trainer_id);
+        bySlot.set(slotKey, set);
+        freeTrainerSetByDateSlotKey.set(day, bySlot);
+
+        const seBySlot = startEndByDateSlotKey.get(day) ?? new Map<string, { start_at: string; end_at: string }>();
+        if (!seBySlot.has(slotKey)) seBySlot.set(slotKey, { start_at: startAt, end_at: endAt });
+        startEndByDateSlotKey.set(day, seBySlot);
       }
-      if (freeCountForThisShift > 0) {
-        countByDate.set(
-          shift.shift_date,
-          (countByDate.get(shift.shift_date) ?? 0) + freeCountForThisShift
-        );
-      } else {
-        // shift があるが空きゼロの場合も 0 として日別配列に入れるために date を保持
-        if (!countByDate.has(shift.shift_date)) countByDate.set(shift.shift_date, 0);
-      }
+      // shift がある日を 0 として保持（後段で上書き）
+      if (!countByDate.has(shift.shift_date)) countByDate.set(shift.shift_date, 0);
     }
+
+    // dayごとに「予約可能な時間枠数」を算出（capacity > used の枠だけ数える）
+    for (const [day, slotMap] of freeTrainerSetByDateSlotKey.entries()) {
+      const seBySlot = startEndByDateSlotKey.get(day) ?? new Map();
+      const unassigned = unassignedByDate.get(day) ?? [];
+      let availableSlotCount = 0;
+      for (const [slotKey, trainerSet] of slotMap.entries()) {
+        const se = seBySlot.get(slotKey);
+        if (!se) continue;
+        const slotStartMs = DateTime.fromISO(se.start_at).toMillis();
+        const slotEndMs = DateTime.fromISO(se.end_at).toMillis();
+        const used = unassigned.reduce(
+          (acc, r) => acc + (overlapsMs(r.start, r.end, slotStartMs, slotEndMs) ? 1 : 0),
+          0
+        );
+        const capacity = trainerSet.size;
+        if (capacity > used) availableSlotCount += 1;
+      }
+      countByDate.set(day, availableSlotCount);
+    }
+
     // 要件例に合わせ、月内すべての日付を返す（shiftなしの日は 0）
     const daysInMonth = monthStartLocal.daysInMonth;
     const dates: DateCount[] = Array.from({ length: daysInMonth }, (_, i) => {

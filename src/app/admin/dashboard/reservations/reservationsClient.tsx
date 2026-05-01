@@ -7,6 +7,24 @@ const TZ = "Asia/Tokyo";
 
 type Store = { id: string; name: string };
 
+type ShiftDto = {
+  id: string;
+  trainer_id: string;
+  trainer_name: string;
+  store_id: string;
+  date: string; // YYYY-MM-DD
+  start_local: string;
+  end_local: string;
+};
+
+type MemberRow = {
+  id: string;
+  member_code: string;
+  name: string | null;
+  email?: string | null;
+  line_user_id?: string | null;
+};
+
 type ReservationRow = {
   id: string;
   store_id: string;
@@ -57,17 +75,39 @@ function sessionTypeBadge(sessionType: string | null | undefined) {
 function reservationAccent(stores: Store[] | null, r: ReservationRow): { border: string; soft: string } {
   const sessionType = String(r.session_type ?? "store");
   if (sessionType === "online") return { border: "#A855F7", soft: "#FAF5FF" }; // purple
-  // 店舗セッションは店舗色（要望: 恵比寿=青、桜木町=青、上野=緑）
+  // 店舗セッションは店舗色（上野=緑、恵比寿=青、桜木町=黄）
   const storeName = (stores ?? []).find((s) => s.id === r.store_id)?.name ?? r.store_name ?? "";
   if (storeName === "上野") return { border: "#16A34A", soft: "#ECFDF5" };
-  // 恵比寿/桜木町は青
-  return { border: "#2563EB", soft: "#EFF6FF" };
+  if (storeName === "桜木町") return { border: "#CA8A04", soft: "#FFFBEB" };
+  return { border: "#2563EB", soft: "#EFF6FF" }; // 恵比寿など
 }
 
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { cache: "no-store" });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((json as any)?.error ?? "取得に失敗しました");
+  return json as T;
+}
+
+async function apiPost<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((json as any)?.error ?? "保存に失敗しました");
+  return json as T;
+}
+
+async function apiPatch<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((json as any)?.error ?? "更新に失敗しました");
   return json as T;
 }
 
@@ -84,6 +124,43 @@ export function ReservationsClient() {
 
   const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
 
+  const [busy, setBusy] = useState(false);
+
+  // 予約追加モーダル
+  const [addOpen, setAddOpen] = useState(false);
+  const [addStep, setAddStep] = useState<"member" | "slot" | "confirm">("member");
+  const [memberQuery, setMemberQuery] = useState("");
+  const [memberResults, setMemberResults] = useState<MemberRow[] | null>(null);
+  const [selectedMember, setSelectedMember] = useState<MemberRow | null>(null);
+  const [addStoreId, setAddStoreId] = useState<string>("");
+  const [addDateYmd, setAddDateYmd] = useState<string>("");
+  const [addSlots, setAddSlots] = useState<Array<{ start_at: string; end_at: string }> | null>(null);
+  const [addSelectedSlot, setAddSelectedSlot] = useState<{ start_at: string; end_at: string } | null>(null);
+  const [addSessionType, setAddSessionType] = useState<"store" | "online">("store");
+  const [addErr, setAddErr] = useState<string | null>(null);
+
+  // 予約変更モーダル
+  const [editTarget, setEditTarget] = useState<ReservationRow | null>(null);
+  const [editStoreId, setEditStoreId] = useState<string>("");
+  const [editDateYmd, setEditDateYmd] = useState<string>("");
+  const [editSlots, setEditSlots] = useState<Array<{ start_at: string; end_at: string }> | null>(null);
+  const [editSelectedSlot, setEditSelectedSlot] = useState<{ start_at: string; end_at: string } | null>(null);
+  const [editErr, setEditErr] = useState<string | null>(null);
+
+  // キャンセルモーダル
+  const [cancelTarget, setCancelTarget] = useState<ReservationRow | null>(null);
+  const [cancelErr, setCancelErr] = useState<string | null>(null);
+
+  // 休憩追加モーダル
+  const [breakOpen, setBreakOpen] = useState(false);
+  const [breakErr, setBreakErr] = useState<string | null>(null);
+  const [breakStoreId, setBreakStoreId] = useState<string>("");
+  const [breakDateYmd, setBreakDateYmd] = useState<string>("");
+  const [breakShifts, setBreakShifts] = useState<ShiftDto[] | null>(null);
+  const [breakShiftId, setBreakShiftId] = useState<string>("");
+  const [breakSlots, setBreakSlots] = useState<Array<{ start_time: string; end_time: string }> | null>(null);
+  const [breakSelected, setBreakSelected] = useState<{ start_time: string; end_time: string } | null>(null);
+
   const selectedStoreName = useMemo(() => {
     if (selectedStoreId === "all") return "全店舗";
     return (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "";
@@ -95,6 +172,14 @@ export function ReservationsClient() {
   }, [selectedStoreId, selectedStoreName]);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
+
+  const refreshRows = async () => {
+    const qs = new URLSearchParams();
+    qs.set("month", monthKey);
+    if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
+    const d = await apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${qs.toString()}`);
+    setRows(d.reservations ?? []);
+  };
 
   useEffect(() => {
     setErr(null);
@@ -116,6 +201,269 @@ export function ReservationsClient() {
         setRows([]);
       });
   }, [monthKey, selectedStoreId]);
+
+  // 休憩追加: 初期値（店舗/日付）
+  useEffect(() => {
+    if (!stores || stores.length === 0) return;
+    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    if (!breakStoreId) setBreakStoreId(defaultStoreId);
+  }, [stores, selectedStoreId, breakStoreId]);
+
+  useEffect(() => {
+    const d = selectedYmd ?? todayYmd;
+    if (!breakDateYmd) setBreakDateYmd(d);
+  }, [selectedYmd, todayYmd, breakDateYmd]);
+
+  const openBreak = async () => {
+    setBreakErr(null);
+    setBreakOpen(true);
+    setBreakSelected(null);
+    setBreakSlots(null);
+    setBreakShifts(null);
+    setBreakShiftId("");
+    setBusy(true);
+    try {
+      const d = await apiGet<{ shifts: ShiftDto[] }>(
+        `/api/admin/shifts/by-store-date?store_id=${encodeURIComponent(breakStoreId)}&date=${encodeURIComponent(breakDateYmd)}`
+      );
+      const list = d.shifts ?? [];
+      setBreakShifts(list);
+      const first = list[0]?.id ?? "";
+      setBreakShiftId(first);
+    } catch (e: any) {
+      setBreakErr(String(e?.message ?? "シフトの取得に失敗しました"));
+      setBreakShifts([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  function hhmmToMin(t: string): number {
+    const s = String(t ?? "");
+    const hh = Number(s.slice(0, 2));
+    const mm = Number(s.slice(3, 5));
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return NaN;
+    return hh * 60 + mm;
+  }
+
+  function minToHHMM(m: number): string {
+    const hh = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  }
+
+  const buildBreakSlots = (shift: ShiftDto | null): Array<{ start_time: string; end_time: string }> => {
+    if (!shift) return [];
+    const sm = hhmmToMin(shift.start_local);
+    const em = hhmmToMin(shift.end_local);
+    if (!Number.isFinite(sm) || !Number.isFinite(em) || em <= sm) return [];
+    const SLOT = 30;
+    const out: Array<{ start_time: string; end_time: string }> = [];
+    for (let m = sm; m + SLOT <= em; m += SLOT) {
+      out.push({ start_time: minToHHMM(m), end_time: minToHHMM(m + SLOT) });
+    }
+    return out;
+  };
+
+  useEffect(() => {
+    if (!breakOpen) return;
+    const shift = (breakShifts ?? []).find((s) => s.id === breakShiftId) ?? null;
+    setBreakSelected(null);
+    setBreakSlots(buildBreakSlots(shift));
+  }, [breakOpen, breakShiftId, breakShifts]);
+
+  const saveBreak = async () => {
+    if (!breakShiftId || !breakSelected) {
+      setBreakErr("休憩時間を選択してください");
+      return;
+    }
+    setBreakErr(null);
+    setBusy(true);
+    try {
+      await apiPost(`/api/shifts/${encodeURIComponent(breakShiftId)}/breaks`, breakSelected);
+      setBreakOpen(false);
+      // 枠の提案に影響するので、予約一覧も更新（任意）
+      await refreshRows();
+    } catch (e: any) {
+      setBreakErr(String(e?.message ?? "休憩の追加に失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 追加: 初期値のセット
+  useEffect(() => {
+    if (!stores || stores.length === 0) return;
+    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    if (!addStoreId) setAddStoreId(defaultStoreId);
+    if (!editStoreId && editTarget) setEditStoreId(editTarget.store_id);
+  }, [stores, selectedStoreId, addStoreId, editStoreId, editTarget]);
+
+  useEffect(() => {
+    const d = selectedYmd ?? todayYmd;
+    if (!addDateYmd) setAddDateYmd(d);
+  }, [selectedYmd, todayYmd, addDateYmd]);
+
+  // 会員検索（追加用）
+  useEffect(() => {
+    if (!addOpen || addStep !== "member") return;
+    setAddErr(null);
+    const q = memberQuery.trim();
+    const timer = setTimeout(() => {
+      apiGet<{ members: MemberRow[] }>(`/api/admin/members/search?q=${encodeURIComponent(q)}&limit=20`)
+        .then((d) => setMemberResults(d.members ?? []))
+        .catch((e: any) => {
+          setAddErr(String(e?.message ?? "会員検索に失敗しました"));
+          setMemberResults([]);
+        });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [memberQuery, addOpen, addStep]);
+
+  const openAdd = () => {
+    setAddErr(null);
+    setAddOpen(true);
+    setAddStep("member");
+    setMemberQuery("");
+    setMemberResults(null);
+    setSelectedMember(null);
+    setAddSelectedSlot(null);
+    setAddSlots(null);
+    setAddSessionType("store");
+    // store/date は既存stateを使う
+  };
+
+  const fetchSlots = async (storeId: string, dateYmd: string) => {
+    const list = await apiGet<Array<{ start_at: string; end_at: string }>>(
+      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(storeId)}&date=${encodeURIComponent(dateYmd)}`
+    );
+    return list ?? [];
+  };
+
+  const startAddSlotStep = async () => {
+    if (!selectedMember) {
+      setAddErr("会員を選択してください");
+      return;
+    }
+    if (!addStoreId || !addDateYmd) {
+      setAddErr("店舗と日付を選択してください");
+      return;
+    }
+    setAddErr(null);
+    setBusy(true);
+    setAddSlots(null);
+    setAddSelectedSlot(null);
+    try {
+      const slots = await fetchSlots(addStoreId, addDateYmd);
+      setAddSlots(slots);
+      setAddStep("slot");
+    } catch (e: any) {
+      setAddErr(String(e?.message ?? "空き枠の取得に失敗しました"));
+      setAddSlots([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmAdd = async () => {
+    if (!selectedMember || !addSelectedSlot) {
+      setAddErr("会員と時間を選択してください");
+      return;
+    }
+    setAddErr(null);
+    setBusy(true);
+    try {
+      await apiPost("/api/admin/reservations", {
+        store_id: addStoreId,
+        member_id: selectedMember.id,
+        start_at: addSelectedSlot.start_at,
+        end_at: addSelectedSlot.end_at,
+        session_type: addSessionType,
+      });
+      await refreshRows();
+      setAddOpen(false);
+    } catch (e: any) {
+      setAddErr(String(e?.message ?? "予約追加に失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openEdit = async (r: ReservationRow) => {
+    setEditErr(null);
+    setEditTarget(r);
+    const ymd = DateTime.fromISO(r.start_at).setZone(TZ).toISODate()!;
+    setEditDateYmd(ymd);
+    setEditStoreId(r.store_id);
+    setEditSlots(null);
+    setEditSelectedSlot(null);
+    setBusy(true);
+    try {
+      const slots = await fetchSlots(r.store_id, ymd);
+      setEditSlots(slots);
+    } catch (e: any) {
+      setEditErr(String(e?.message ?? "空き枠の取得に失敗しました"));
+      setEditSlots([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refetchEditSlots = async () => {
+    if (!editTarget) return;
+    if (!editStoreId || !editDateYmd) return;
+    setEditErr(null);
+    setBusy(true);
+    setEditSlots(null);
+    setEditSelectedSlot(null);
+    try {
+      const slots = await fetchSlots(editStoreId, editDateYmd);
+      setEditSlots(slots);
+    } catch (e: any) {
+      setEditErr(String(e?.message ?? "空き枠の取得に失敗しました"));
+      setEditSlots([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmEdit = async () => {
+    if (!editTarget || !editSelectedSlot) {
+      setEditErr("変更先の時間を選択してください");
+      return;
+    }
+    setEditErr(null);
+    setBusy(true);
+    try {
+      await apiPatch(`/api/admin/reservations/${editTarget.id}`, {
+        action: "reschedule",
+        store_id: editStoreId,
+        start_at: editSelectedSlot.start_at,
+        end_at: editSelectedSlot.end_at,
+      });
+      await refreshRows();
+      setEditTarget(null);
+    } catch (e: any) {
+      setEditErr(String(e?.message ?? "予約変更に失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelTarget) return;
+    setCancelErr(null);
+    setBusy(true);
+    try {
+      await apiPatch(`/api/admin/reservations/${cancelTarget.id}`, { action: "cancel" });
+      await refreshRows();
+      setCancelTarget(null);
+    } catch (e: any) {
+      setCancelErr(String(e?.message ?? "キャンセルに失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const countsByYmd = useMemo(() => {
     const m = new Map<
@@ -383,8 +731,28 @@ export function ReservationsClient() {
         <div className="text-sm text-slate-600">カレンダーの日付をタップすると、その日の予約一覧が表示されます。</div>
       ) : (
         <section className="space-y-2">
-          <div className="text-sm font-bold text-slate-900">
-            {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-bold text-slate-900">
+              {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={openBreak}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                disabled={busy || selectedStoreId === "all"}
+                title={selectedStoreId === "all" ? "休憩追加は店舗を選択してから実行してください" : ""}
+              >
+                ＋ 休憩追加
+              </button>
+              <button
+                type="button"
+                onClick={openAdd}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+              >
+                ＋ 予約追加
+              </button>
+            </div>
           </div>
 
           {rows === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
@@ -419,12 +787,33 @@ export function ReservationsClient() {
                         {r.member_name ? `（${r.member_name}）` : ""}
                       </div>
                     </div>
-                    <a
-                      href={`/admin/dashboard/members/${r.member_id}`}
-                      className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                    >
-                      カルテを見る
-                    </a>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(r)}
+                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                        disabled={busy}
+                      >
+                        予約変更
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCancelErr(null);
+                          setCancelTarget(r);
+                        }}
+                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 hover:bg-red-50"
+                        disabled={busy}
+                      >
+                        キャンセル
+                      </button>
+                      <a
+                        href={`/admin/dashboard/members/${r.member_id}`}
+                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        カルテを見る
+                      </a>
+                    </div>
                   </div>
                 </div>
               );
@@ -432,6 +821,573 @@ export function ReservationsClient() {
           </div>
         </section>
       )}
+
+      {/* 予約追加モーダル */}
+      {addOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-900">予約追加</div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => setAddOpen(false)}
+                disabled={busy}
+              >
+                閉じる
+              </button>
+            </div>
+
+            {addErr ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{addErr}</div> : null}
+
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-slate-700">ステップ</div>
+              <div className="mt-1 text-sm text-slate-800">
+                {addStep === "member" ? "会員選択" : addStep === "slot" ? "店舗・日時選択" : "確認"}
+              </div>
+            </div>
+
+            {addStep === "member" ? (
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">会員検索</div>
+                  <input
+                    value={memberQuery}
+                    onChange={(e) => setMemberQuery(e.target.value)}
+                    placeholder="会員番号 / 氏名 / メール"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+                  />
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-2">
+                  {memberResults === null ? (
+                    <div className="px-2 py-3 text-sm text-slate-600">検索ワードを入力してください（未入力でも一覧が出ます）</div>
+                  ) : memberResults.length === 0 ? (
+                    <div className="px-2 py-3 text-sm text-slate-600">該当する会員がいません。</div>
+                  ) : (
+                    <div className="max-h-[320px] overflow-auto">
+                      {memberResults.map((m) => {
+                        const active = selectedMember?.id === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedMember(m);
+                              setAddErr(null);
+                            }}
+                            className={[
+                              "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                              active ? "border-slate-400 bg-white" : "border-transparent bg-transparent hover:bg-white",
+                            ].join(" ")}
+                          >
+                            <div className="text-sm font-semibold text-slate-900">
+                              {m.member_code} {m.name ? `（${m.name}）` : ""}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500 break-all">{m.email ?? ""}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={startAddSlotStep}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                    disabled={busy || !selectedMember}
+                  >
+                    次へ
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {addStep === "slot" ? (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold text-slate-700">会員</div>
+                  <div className="text-sm text-slate-900">
+                    {selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">店舗</div>
+                    <select
+                      value={addStoreId}
+                      onChange={(e) => setAddStoreId(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    >
+                      {(stores ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">日付</div>
+                    <input
+                      type="date"
+                      value={addDateYmd}
+                      onChange={(e) => setAddDateYmd(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">セッション種別</div>
+                    <select
+                      value={addSessionType}
+                      onChange={(e) => setAddSessionType((e.target.value as any) === "online" ? "online" : "store")}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    >
+                      <option value="store">🏠 店舗</option>
+                      <option value="online">💻 オンライン</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs text-slate-600">空き時間をタップしてください（30分）</div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setAddErr(null);
+                      setBusy(true);
+                      setAddSlots(null);
+                      setAddSelectedSlot(null);
+                      try {
+                        const slots = await fetchSlots(addStoreId, addDateYmd);
+                        setAddSlots(slots);
+                      } catch (e: any) {
+                        setAddErr(String(e?.message ?? "空き枠の取得に失敗しました"));
+                        setAddSlots([]);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                    disabled={busy}
+                  >
+                    再取得
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  {addSlots === null ? (
+                    <div className="text-sm text-slate-600">読み込み中…</div>
+                  ) : addSlots.length === 0 ? (
+                    <div className="text-sm text-slate-600">空き枠がありません。</div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                      {addSlots.map((s) => {
+                        const start = DateTime.fromISO(s.start_at).setZone(TZ).toFormat("HH:mm");
+                        const end = DateTime.fromISO(s.end_at).setZone(TZ).toFormat("HH:mm");
+                        const active = addSelectedSlot?.start_at === s.start_at && addSelectedSlot?.end_at === s.end_at;
+                        return (
+                          <button
+                            key={`${s.start_at}|${s.end_at}`}
+                            type="button"
+                            onClick={() => {
+                              setAddSelectedSlot(s);
+                              setAddStep("confirm");
+                              setAddErr(null);
+                            }}
+                            className={[
+                              "rounded-xl border px-3 py-3 text-sm font-semibold",
+                              active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+                            ].join(" ")}
+                          >
+                            {start}〜{end}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddStep("member");
+                      setAddErr(null);
+                    }}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    disabled={busy}
+                  >
+                    戻る
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {addStep === "confirm" ? (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold text-slate-700">この内容で予約を確定しますか？</div>
+                  <div className="mt-2 text-sm text-slate-900">
+                    <div>店舗：{(stores ?? []).find((s) => s.id === addStoreId)?.name ?? addStoreId}</div>
+                    <div>
+                      日時：
+                      {addSelectedSlot
+                        ? `${DateTime.fromISO(addSelectedSlot.start_at).setZone(TZ).toFormat("M/d（ccc） HH:mm")}〜${DateTime.fromISO(addSelectedSlot.end_at)
+                            .setZone(TZ)
+                            .toFormat("HH:mm")}`
+                        : ""}
+                    </div>
+                    <div>
+                      会員：{selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                    </div>
+                    <div>セッション種別：{addSessionType === "online" ? "オンライン" : "店舗"}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-600">確定後、LINE連携済みの会員には確定LINEを送信します。</div>
+                </div>
+
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddStep("slot");
+                      setAddErr(null);
+                    }}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    disabled={busy}
+                  >
+                    戻る
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmAdd}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                    disabled={busy}
+                  >
+                    確定
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* 予約変更モーダル */}
+      {editTarget ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-900">予約変更</div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => setEditTarget(null)}
+                disabled={busy}
+              >
+                閉じる
+              </button>
+            </div>
+
+            {editErr ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{editErr}</div> : null}
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs font-semibold text-slate-700">現在の予約</div>
+              <div className="mt-1 text-sm text-slate-900">
+                <div>店舗：{editTarget.store_name || editTarget.store_id}</div>
+                <div>
+                  日時：
+                  {DateTime.fromISO(editTarget.start_at).setZone(TZ).toFormat("M/d（ccc） HH:mm")}〜
+                  {DateTime.fromISO(editTarget.end_at).setZone(TZ).toFormat("HH:mm")}
+                </div>
+                <div>
+                  会員：{editTarget.member_code || editTarget.member_id}
+                  {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="text-xs font-semibold text-slate-700">店舗</div>
+                <select
+                  value={editStoreId}
+                  onChange={(e) => setEditStoreId(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  disabled={busy}
+                >
+                  {(stores ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-700">日付</div>
+                <input
+                  type="date"
+                  value={editDateYmd}
+                  onChange={(e) => setEditDateYmd(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  disabled={busy}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <div className="text-xs text-slate-600">その日の空き時間をタップしてください</div>
+              <button
+                type="button"
+                onClick={refetchEditSlots}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                disabled={busy}
+              >
+                空き枠を取得
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+              {editSlots === null ? (
+                <div className="text-sm text-slate-600">読み込み中…</div>
+              ) : editSlots.length === 0 ? (
+                <div className="text-sm text-slate-600">空き枠がありません。</div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  {editSlots.map((s) => {
+                    const start = DateTime.fromISO(s.start_at).setZone(TZ).toFormat("HH:mm");
+                    const end = DateTime.fromISO(s.end_at).setZone(TZ).toFormat("HH:mm");
+                    const active = editSelectedSlot?.start_at === s.start_at && editSelectedSlot?.end_at === s.end_at;
+                    return (
+                      <button
+                        key={`${s.start_at}|${s.end_at}`}
+                        type="button"
+                        onClick={() => setEditSelectedSlot(s)}
+                        className={[
+                          "rounded-xl border px-3 py-3 text-sm font-semibold",
+                          active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+                        ].join(" ")}
+                      >
+                        {start}〜{end}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs font-semibold text-slate-700">確認</div>
+              <div className="mt-1 text-sm text-slate-900">
+                <div>店舗：{(stores ?? []).find((s) => s.id === editStoreId)?.name ?? editStoreId}</div>
+                <div>
+                  時間：
+                  {editSelectedSlot
+                    ? `${DateTime.fromISO(editSelectedSlot.start_at).setZone(TZ).toFormat("M/d（ccc） HH:mm")}〜${DateTime.fromISO(editSelectedSlot.end_at)
+                        .setZone(TZ)
+                        .toFormat("HH:mm")}`
+                    : "未選択"}
+                </div>
+                <div>
+                  会員：{editTarget.member_code || editTarget.member_id}
+                  {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-slate-600">確定後、LINE連携済みの会員には変更LINEを送信します。</div>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={confirmEdit}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                disabled={busy || !editSelectedSlot}
+              >
+                この時間に変更しますか？ → 確定
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* キャンセルモーダル */}
+      {cancelTarget ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-lg space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-900">予約のキャンセル</div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => setCancelTarget(null)}
+                disabled={busy}
+              >
+                閉じる
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs font-semibold text-slate-700">店舗</div>
+              <div className="text-sm text-slate-900">{cancelTarget.store_name || cancelTarget.store_id}</div>
+              <div className="mt-2 text-xs font-semibold text-slate-700">日時</div>
+              <div className="text-sm text-slate-900">
+                {DateTime.fromISO(cancelTarget.start_at).setZone(TZ).toFormat("M/d（ccc）")}{" "}
+                {DateTime.fromISO(cancelTarget.start_at).setZone(TZ).toFormat("HH:mm")}〜
+                {DateTime.fromISO(cancelTarget.end_at).setZone(TZ).toFormat("HH:mm")}
+              </div>
+              <div className="mt-2 text-xs font-semibold text-slate-700">会員</div>
+              <div className="text-sm text-slate-900">
+                {cancelTarget.member_code || cancelTarget.member_id}
+                {cancelTarget.member_name ? `（${cancelTarget.member_name}）` : ""}
+              </div>
+              <div className="mt-2 text-xs text-slate-600">この予約をキャンセルしますか？</div>
+            </div>
+
+            {cancelErr ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{cancelErr}</div> : null}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                disabled={busy}
+              >
+                やめる
+              </button>
+              <button
+                type="button"
+                onClick={confirmCancel}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700"
+                disabled={busy}
+              >
+                キャンセル確定
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 休憩追加モーダル */}
+      {breakOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-lg space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-900">休憩追加（30分）</div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => setBreakOpen(false)}
+                disabled={busy}
+              >
+                閉じる
+              </button>
+            </div>
+
+            {breakErr ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{breakErr}</div> : null}
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <div className="text-xs font-semibold text-slate-700">店舗</div>
+                <select
+                  value={breakStoreId}
+                  onChange={(e) => setBreakStoreId(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  disabled={busy}
+                >
+                  {(stores ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-700">日付</div>
+                <input
+                  type="date"
+                  value={breakDateYmd}
+                  onChange={(e) => setBreakDateYmd(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  disabled={busy}
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={openBreak}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-60"
+                  disabled={busy}
+                >
+                  シフト再取得
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-2">
+              <div className="text-xs font-semibold text-slate-700">トレーナー（出勤シフト）</div>
+              {breakShifts === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+              {breakShifts !== null && breakShifts.length === 0 ? (
+                <div className="text-sm text-slate-600">この日のシフトがありません。</div>
+              ) : null}
+              {breakShifts && breakShifts.length > 0 ? (
+                <select
+                  value={breakShiftId}
+                  onChange={(e) => setBreakShiftId(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  disabled={busy}
+                >
+                  {breakShifts.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.trainer_name || s.trainer_id}（{String(s.start_local).slice(0, 5)}〜{String(s.end_local).slice(0, 5)}）
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="text-xs text-slate-600">休憩時間（30分）をタップしてください</div>
+              {breakSlots === null ? <div className="text-sm text-slate-600">候補を生成中…</div> : null}
+              {breakSlots !== null && breakSlots.length === 0 ? (
+                <div className="text-sm text-slate-600">候補がありません。</div>
+              ) : null}
+              {breakSlots && breakSlots.length > 0 ? (
+                <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  {breakSlots.map((s) => {
+                    const active = breakSelected?.start_time === s.start_time && breakSelected?.end_time === s.end_time;
+                    return (
+                      <button
+                        key={`${s.start_time}|${s.end_time}`}
+                        type="button"
+                        onClick={() => setBreakSelected(s)}
+                        className={[
+                          "rounded-xl border px-3 py-3 text-sm font-semibold",
+                          active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+                        ].join(" ")}
+                      >
+                        {s.start_time}〜{s.end_time}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={saveBreak}
+                disabled={busy || !breakSelected}
+                className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {busy ? "保存中…" : "休憩を追加する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

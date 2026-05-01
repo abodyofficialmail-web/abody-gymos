@@ -59,7 +59,9 @@ export async function sendBookingConfirmation(params: {
     console.warn('SMTP not configured, skipping confirmation email');
     return false;
   }
-  const from = process.env.MAIL_FROM || process.env.SMTP_USER || 'noreply@localhost';
+  // 送信元は基本 MAIL_FROM。未設定の場合は運用用の ABODY_EMAIL をフォールバックとして使えるようにする。
+  // ※ 実際に送信できる送信元は SMTP 側の制約（認証ユーザー/ドメイン）にも依存する。
+  const from = process.env.MAIL_FROM || process.env.ABODY_EMAIL || process.env.SMTP_USER || 'noreply@localhost';
   if (!from) {
     console.warn('MAIL_FROM / SMTP_USER not set, using default from address');
   }
@@ -99,7 +101,7 @@ export async function sendCancellationEmail(params: {
   abodyEmail?: string;
 }): Promise<{ member: boolean; abody: boolean }> {
   const transporter = getTransporter();
-  const from = process.env.MAIL_FROM || process.env.SMTP_USER || 'noreply@localhost';
+  const from = process.env.MAIL_FROM || process.env.ABODY_EMAIL || process.env.SMTP_USER || 'noreply@localhost';
   const subject = '【Abodyジム】予約がキャンセルされました';
   const textToMember = `
 ${params.memberName} 様
@@ -164,7 +166,7 @@ export async function sendReminderEmail(params: {
     console.warn('SMTP not configured, skipping reminder email');
     return true;
   }
-  const from = process.env.MAIL_FROM || process.env.SMTP_USER || 'noreply@localhost';
+  const from = process.env.MAIL_FROM || process.env.ABODY_EMAIL || process.env.SMTP_USER || 'noreply@localhost';
   const subject = '【Abodyジム】ご予約のリマインド';
   const text = `
 ${params.memberName} 様
@@ -205,7 +207,7 @@ export async function sendDailyStoreReservationReport(params: {
     console.warn("SMTP not configured, skipping daily report email");
     return false;
   }
-  const from = process.env.MAIL_FROM || process.env.SMTP_USER || "noreply@localhost";
+  const from = process.env.MAIL_FROM || process.env.ABODY_EMAIL || process.env.SMTP_USER || "noreply@localhost";
   try {
     await transporter.sendMail({
       from,

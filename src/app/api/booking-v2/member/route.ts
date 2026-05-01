@@ -8,13 +8,13 @@ export async function OPTIONS() {
 }
 
 const querySchema = z.object({
-  member_code: z.string().min(1, "member_code は必須です"),
+  email: z.string().min(1, "email は必須です").email("メールアドレスの形式が不正です"),
 });
 
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
-    const parsed = querySchema.safeParse({ member_code: url.searchParams.get("member_code") });
+    const parsed = querySchema.safeParse({ email: url.searchParams.get("email") });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
@@ -35,11 +35,12 @@ export async function GET(request: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const code = parsed.data.member_code.trim().toUpperCase();
+    const email = parsed.data.email.trim();
     const { data: member, error } = await supabase
       .from("members")
       .select("id, member_code, name, is_active")
-      .eq("member_code", code)
+      // PostgREST の ilike はパターンマッチだが、% を含めなければ実質「大文字小文字を無視した一致」
+      .ilike("email", email)
       .maybeSingle();
 
     if (error) {

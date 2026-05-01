@@ -66,7 +66,7 @@ export default function BookingCompletePage({
           <div className="text-base font-medium">{startAt && endAt ? formatTimeRange(startAt, endAt) : "-"}</div>
         </div>
         <div className="space-y-1">
-          <div className="text-xs text-ink-500">会員</div>
+          <div className="text-xs text-ink-500">会員（メールアドレス）</div>
           <div className="text-base font-medium">
             {memberName}（{memberId}）
           </div>

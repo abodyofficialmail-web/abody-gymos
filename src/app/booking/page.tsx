@@ -134,7 +134,7 @@ export default function BookingPage() {
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [selectedSlotKey, setSelectedSlotKey] = useState<string>("");
 
-  const [memberCodeInput, setMemberCodeInput] = useState("");
+  const [memberEmailInput, setMemberEmailInput] = useState("");
   const [memberName, setMemberName] = useState<string>("");
 
   const [busy, setBusy] = useState(false);
@@ -220,13 +220,14 @@ export default function BookingPage() {
 
   const theme = useMemo(() => themeForStoreName(selectedStoreName), [selectedStoreName]);
 
-  function validateMemberCode(codeRaw: string): { ok: true; code: string } | { ok: false; message: string } {
-    const code = codeRaw.trim().toUpperCase();
-    if (!code) return { ok: false, message: "会員IDを入力してください" };
-    if (!/^[A-Z]{3}\d{3}$/u.test(code)) {
-      return { ok: false, message: "会員IDの形式が不正です（例: UEN001）" };
+  function validateMemberEmail(emailRaw: string): { ok: true; email: string } | { ok: false; message: string } {
+    const email = String(emailRaw ?? "").trim();
+    if (!email) return { ok: false, message: "メールアドレスを入力してください" };
+    // 厳密にしすぎない（バックエンドでも検証する）
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+      return { ok: false, message: "メールアドレスの形式が不正です" };
     }
-    return { ok: true, code };
+    return { ok: true, email };
   }
 
   async function handleCreateReservation() {
@@ -234,12 +235,12 @@ export default function BookingPage() {
     setBusy(true);
     setError(null);
     try {
-      const v = validateMemberCode(memberCodeInput);
+      const v = validateMemberEmail(memberEmailInput);
       if (!v.ok) {
         setError(v.message);
         return;
       }
-      const code = v.code;
+      const email = v.email;
       const d = await apiPost<{
         reservation: {
           id: string;
@@ -247,10 +248,10 @@ export default function BookingPage() {
           start_at: string;
           end_at: string;
         };
-        member_code?: string;
+        member_email?: string;
       }>("/api/booking-v2/reservations", {
         store_id: selectedStoreId,
-        member_code: code,
+        email,
         session_type: sessionType,
         // UTC(Z)ではなくJST(+09:00)で送る（サーバー側のシフト判定と揃える）
         start_at: dayjs(selectedSlot.startAt).tz(TZ).format(),
@@ -262,7 +263,7 @@ export default function BookingPage() {
         startAt: d.reservation.start_at,
         endAt: d.reservation.end_at,
         memberName: memberName || "",
-        memberId: d.member_code ?? code,
+        memberId: d.member_email ?? email,
         reservationId: d.reservation.id,
         sessionType,
       });
@@ -273,7 +274,7 @@ export default function BookingPage() {
       const statusStr = msg.includes("|") ? msg.split("|")[0] : "";
       const status = Number(statusStr);
       if (status === 404) {
-        setError("会員が見つかりません");
+        setError("会員が見つかりません（メールアドレスをご確認ください）");
       } else {
         setError(m || "予約の作成に失敗しました");
       }
@@ -299,7 +300,7 @@ export default function BookingPage() {
     setSessionType("store");
     setSlots(null);
     setSelectedSlotKey("");
-    setMemberCodeInput("");
+    setMemberEmailInput("");
     setMemberName("");
   }
 
@@ -452,7 +453,7 @@ export default function BookingPage() {
                     onClick={() => {
                       setSelectedDate(ymd);
                       setSelectedSlotKey("");
-                      setMemberCodeInput("");
+                      setMemberEmailInput("");
                       setSessionType("store");
                       setStep(3);
                     }}
@@ -610,21 +611,21 @@ export default function BookingPage() {
           </div>
 
           <div className="space-y-3">
-            <div className="text-base font-semibold">会員ID</div>
-            <div className="text-sm text-ink-500">例: EBI001 / UEN003 / SAK010</div>
+            <div className="text-base font-semibold">メールアドレス</div>
+            <div className="text-sm text-ink-500">会員登録時のメールアドレスを入力してください</div>
             <input
-              value={memberCodeInput}
-              onChange={(e) => setMemberCodeInput(e.target.value.toUpperCase())}
-              placeholder="EBI001"
-              inputMode="text"
-              autoCapitalize="characters"
+              value={memberEmailInput}
+              onChange={(e) => setMemberEmailInput(e.target.value)}
+              placeholder="example@example.com"
+              inputMode="email"
+              autoCapitalize="none"
               className="w-full rounded-xl border border-line px-4 py-3 text-base outline-none"
               style={{ borderColor: "var(--accentBorder)" }}
             />
             <button
               type="button"
               onClick={async () => {
-                const v = validateMemberCode(memberCodeInput);
+                const v = validateMemberEmail(memberEmailInput);
                 if (!v.ok) {
                   setError(v.message);
                   return;
@@ -633,9 +634,9 @@ export default function BookingPage() {
                 setError(null);
                 try {
                   const info = await apiGet<{ member: { id: string; member_code: string; name: string } }>(
-                    `/api/booking-v2/member?member_code=${encodeURIComponent(v.code)}`
+                    `/api/booking-v2/member?email=${encodeURIComponent(v.email)}`
                   );
-                  setMemberCodeInput(info.member.member_code);
+                  setMemberEmailInput(v.email.trim());
                   setMemberName(info.member.name ?? "");
                   setStep(6);
                 } catch (e: any) {
@@ -685,7 +686,7 @@ export default function BookingPage() {
             <div className="space-y-1">
               <div className="text-xs text-ink-500">会員</div>
               <div className="text-base font-medium">
-                <div>-（{memberCodeInput.trim().toUpperCase() || "-"}）</div>
+                <div>-（{memberEmailInput.trim() || "-"}）</div>
                 {memberName ? <div className="pt-1">{memberName}</div> : null}
               </div>
             </div>
@@ -730,13 +731,13 @@ export default function BookingPage() {
             if (step === 3) return;
             if (step === 4 && selectedSlot) return setStep(5);
             if (step === 5) {
-              const v = validateMemberCode(memberCodeInput);
+              const v = validateMemberEmail(memberEmailInput);
               if (!v.ok) {
                 setError(v.message);
                 return;
               }
               // ここで API を叩くと UX が重くなるため、会員名は Step5 の「次へ」で取得済みを前提にする
-              setMemberCodeInput(v.code);
+              setMemberEmailInput(v.email.trim());
               if (!memberName) {
                 setError("会員情報の取得に失敗しました。もう一度お試しください。");
                 return;
@@ -750,7 +751,7 @@ export default function BookingPage() {
             step === 2 ||
             step === 3 ||
             (step === 4 && !selectedSlot) ||
-            (step === 5 && memberCodeInput.trim().length === 0) ||
+            (step === 5 && memberEmailInput.trim().length === 0) ||
             step === 6
           }
           className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"

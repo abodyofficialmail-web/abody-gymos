@@ -97,6 +97,7 @@ export async function GET() {
           start_at: r.start_at,
           end_at: r.end_at,
           session_type: r.session_type ?? "store",
+          reschedule_count: (r as any)?.reschedule_count ?? 0,
           store_id: r.store_id,
           store_name: r.stores?.name ?? "",
           trainer_id: r.trainer_id,

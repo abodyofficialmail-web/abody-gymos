@@ -54,6 +54,7 @@ UEN040｜中園健太｜｜stitchgachooooon@yahoo.co.jp
 UEN041｜奥迫伸治｜｜radical.so@icloud.com
 UEN042｜井上昌彦｜｜masahiko.inoue1129@gmail.com
 UEN043｜梅本｜｜
+UEN045｜古谷優希｜｜yuki23.kotafuru@gmail.com
 
 SAK001｜堤｜｜pirm@yahoo.co.jp
 SAK002｜林芳男｜｜tarutokun.yh@gmail.com
@@ -69,6 +70,7 @@ SAK017｜早川恭平｜｜kh.ponta4.24@ezweb.ne.jp
 SAK018｜中島美早｜｜misaki19850107@icloud.com
 SAK019｜見城玲｜｜reirei.k710@gmail.com
 SAK020｜早坂彩｜｜cocolo420irie@gmail.com
+SAK021｜清水麗緒奈｜｜heavens0404@gmail.com
 SAK023｜大谷茄保｜｜kaho89@ezweb.ne.jp
 SAK024｜山田梨香｜｜neon0609@yahoo.co.jp
 SAK025｜住田篤紀｜｜asumida5@gmail.com
