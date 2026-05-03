@@ -29,11 +29,15 @@ const querySchema = z.object({
   dry_run: z.enum(["0", "1"]).optional(),
 });
 
+/** x-cron-secret + REPORT_CRON_SECRET、または Authorization: Bearer + CRON_SECRET（Vercel標準） */
 function mustCronAuth(req: Request): boolean {
-  const secret = process.env.REPORT_CRON_SECRET;
-  if (!secret) return false;
+  const reportSecret = process.env.REPORT_CRON_SECRET?.trim();
+  const cronSecret = process.env.CRON_SECRET?.trim();
   const got = req.headers.get("x-cron-secret") ?? "";
-  return got === secret;
+  const auth = req.headers.get("authorization") ?? "";
+  if (reportSecret && got === reportSecret) return true;
+  if (cronSecret && auth === `Bearer ${cronSecret}`) return true;
+  return false;
 }
 
 function splitEnvList(raw: string): string[] {
