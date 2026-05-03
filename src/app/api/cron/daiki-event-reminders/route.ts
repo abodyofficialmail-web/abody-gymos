@@ -40,7 +40,7 @@ function isDupInsertError(err: { code?: string; message?: string } | null): bool
 }
 
 /**
- * ダイキ（表示名に「ダイキ」を含むトレーナー、または DAIKI_TRAINER_ID）の
+ * だいき／ダイキ（表示名に「だいき」または「ダイキ」を含むトレーナー、または DAIKI_TRAINER_ID）の
  * trainer_events について、開始の約60分前・約10分前に LINE リマインド。
  * 送信先は日報と同じ（LINE_DAILY_REPORT_* / EBI020）。
  */
@@ -71,14 +71,18 @@ export async function GET(req: Request) {
     const envTrainer = process.env.DAIKI_TRAINER_ID?.trim();
     let daikiId = envTrainer ?? null;
     if (!daikiId) {
+      // カタカナ「ダイキ」・ひらがな「だいき」どちらの表示名にも対応
       const { data: trows } = await supabase
         .from("trainers")
         .select("id,display_name")
         .eq("is_active", true)
-        .ilike("display_name", "%ダイキ%")
-        .limit(3);
+        .or("display_name.ilike.%ダイキ%,display_name.ilike.%だいき%")
+        .limit(8);
       const list = trows ?? [];
-      const exact = list.find((t) => String(t.display_name).trim() === "ダイキ");
+      const exact = list.find((t) => {
+        const n = String(t.display_name).trim();
+        return n === "ダイキ" || n === "だいき";
+      });
       daikiId = (exact ?? list[0])?.id ?? null;
     }
     if (!daikiId) {
