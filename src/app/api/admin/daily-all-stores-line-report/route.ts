@@ -3,8 +3,10 @@ import { z } from "zod";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { chunkLinePushText, pushLineTextChunks } from "@/lib/lineMessagingPush";
+import { dailyReportChannelToken, resolvePushRecipients } from "@/lib/dailyLineRecipients";
 
 const TZ = "Asia/Tokyo";
+const SLOT_MINUTES = 30;
 
 /**
  * --- 送信文面の雛形（全店舗まとめ）-----------------------------------
@@ -40,80 +42,6 @@ function mustCronAuth(req: Request): boolean {
   return false;
 }
 
-function splitEnvList(raw: string): string[] {
-  return raw
-    .split(/[,;\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/**
- * 送信先LINEユーザーIDを集める。
- * - LINE_DAILY_REPORT_USER_IDS / LINE_EBI020_USER_ID … そのまま push 先（U…）
- * - 上記がどちらも無いとき、会員番号 EBI020 を DB から解決（line_user_id）
- * - LINE_DAILY_REPORT_MEMBER_CODES を設定すると、会員番号を追加で解決（カンマ区切り）
- *
- * 予約確定と同じ恵比寿公式チャネル（LINE_CHANNEL_ACCESS_TOKEN）で送る前提で、
- * 受信側はそのボットを友だち追加している会員の line_user_id が必要。
- */
-async function resolvePushRecipients(supabase: ReturnType<typeof createSupabaseServiceClient>): Promise<{
-  ids: string[];
-  member_codes_queried: string[];
-  missing_line_for_codes: string[];
-}> {
-  const explicit: string[] = [];
-  const rawUsers = process.env.LINE_DAILY_REPORT_USER_IDS?.trim();
-  if (rawUsers) explicit.push(...splitEnvList(rawUsers));
-  const legacy = process.env.LINE_EBI020_USER_ID?.trim();
-  if (legacy) explicit.push(legacy);
-
-  const codesEnv = process.env.LINE_DAILY_REPORT_MEMBER_CODES?.trim();
-  let memberCodesToQuery: string[] = [];
-  if (codesEnv !== undefined && codesEnv !== "") {
-    memberCodesToQuery = splitEnvList(codesEnv);
-  } else if (explicit.length === 0) {
-    memberCodesToQuery = ["EBI020"];
-  }
-
-  const fromMembers: string[] = [];
-  const missingLineForCodes: string[] = [];
-
-  if (memberCodesToQuery.length > 0) {
-    const { data, error } = await supabase
-      .from("members")
-      .select("member_code,line_user_id")
-      .in("member_code", memberCodesToQuery)
-      .eq("is_active", true);
-    if (error) {
-      throw new Error(`members_lookup_failed:${error.message}`);
-    }
-    for (const code of memberCodesToQuery) {
-      const row = (data ?? []).find((r) => String(r.member_code) === code);
-      if (!row) {
-        missingLineForCodes.push(code);
-        continue;
-      }
-      const uid = row.line_user_id ? String(row.line_user_id).trim() : "";
-      if (uid) fromMembers.push(uid);
-      else missingLineForCodes.push(code);
-    }
-  }
-
-  const ids = Array.from(new Set([...explicit, ...fromMembers]));
-  return {
-    ids,
-    member_codes_queried: memberCodesToQuery,
-    missing_line_for_codes: missingLineForCodes,
-  };
-}
-
-/** 送信に使う Messaging API チャネルトークン（受信者が友だち追加しているボット） */
-function dailyReportChannelToken(): string | null {
-  const explicit = process.env.LINE_DAILY_REPORT_CHANNEL_TOKEN?.trim();
-  if (explicit) return explicit;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
-}
-
 function formatDateJa(ymd: string) {
   const dt = DateTime.fromISO(ymd, { zone: TZ });
   return dt.isValid ? dt.setLocale("ja").toFormat("yyyy年M月d日（ccc）") : ymd;
@@ -126,6 +54,46 @@ function formatTimeJa(utcIso: string) {
 function sliceHhmm(t: string) {
   const s = String(t ?? "");
   return s.length >= 5 ? s.slice(0, 5) : s;
+}
+
+function requestOrigin(req: Request): string {
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return "";
+  }
+}
+
+async function fetchTrainerAvailableSlots(
+  origin: string,
+  storeId: string,
+  dateYmd: string,
+  trainerId: string
+): Promise<Array<{ start_at: string; end_at: string }>> {
+  if (!origin) return [];
+  try {
+    const u = new URL("/api/booking-v2/available-slots", origin);
+    u.searchParams.set("store_id", storeId);
+    u.searchParams.set("date", dateYmd);
+    u.searchParams.set("trainer_id", trainerId);
+    const res = await fetch(u.toString(), { cache: "no-store" });
+    const j = await res.json().catch(() => []);
+    return Array.isArray(j) ? j : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatFreeSlotsSummary(slots: Array<{ start_at: string; end_at: string }>): string {
+  const n = slots.length;
+  if (n === 0) return "空き枠なし（締切後・過去枠除く）";
+  const minutes = n * SLOT_MINUTES;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const dur = h > 0 && m > 0 ? `${h}時間${m}分` : h > 0 ? `${h}時間` : `${m}分`;
+  const samples = slots.slice(0, 5).map((s) => DateTime.fromISO(s.start_at).setZone(TZ).toFormat("HH:mm"));
+  const more = n > 5 ? ` …他${n - 5}枠` : "";
+  return `${n}枠（計${dur}） ${samples.join(", ")}${more}`;
 }
 
 export async function GET(req: Request) {
@@ -177,12 +145,12 @@ export async function GET(req: Request) {
 
     const { data: storeRows, error: storeErr } = await supabase
       .from("stores")
-      .select("id,name")
+      .select("id,name,timezone")
       .eq("is_active", true)
       .order("name", { ascending: true });
     if (storeErr) return jsonResponse({ error: "stores_fetch_failed", detail: storeErr.message }, 500);
 
-    const stores = (storeRows ?? []) as { id: string; name: string }[];
+    const stores = (storeRows ?? []) as { id: string; name: string; timezone?: string | null }[];
     if (stores.length === 0) {
       return jsonResponse({ error: "no_active_stores", detail: "有効な店舗がありません" }, 500);
     }
@@ -264,8 +232,14 @@ export async function GET(req: Request) {
         ? "明日の業務サマリ（前日22時・JST送信／対象は翌日）"
         : "本日の業務サマリ（当日8時・JST送信／対象は当日）";
 
+    const origin =
+      requestOrigin(req) ||
+      process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+
     const lines: string[] = [
       `【全店舗】${formatDateJa(dateYmd)}｜${timingLabel}`,
+      `全店舗合計予約: ${reservationsFiltered.length}件`,
       ``,
     ];
 
@@ -277,13 +251,44 @@ export async function GET(req: Request) {
         .slice()
         .sort((a, b) => String(a.start_local).localeCompare(String(b.start_local)));
 
-      const shiftLines =
-        shiftList.length === 0
-          ? ["（勤務予定なし）"]
-          : shiftList.map((s) => {
-              const trainerName = trainerNameById.get(String(s.trainer_id)) ?? String(s.trainer_id);
-              return `・${trainerName} ${sliceHhmm(String(s.start_local))}〜${sliceHhmm(String(s.end_local))}`;
-            });
+      const shiftIds = shiftList.map((s) => String((s as { id: string }).id)).filter(Boolean);
+      const breaksByShiftId = new Map<string, Array<{ start_time: string; end_time: string }>>();
+      if (shiftIds.length > 0) {
+        const br = await supabase.from("trainer_shift_breaks").select("shift_id,start_time,end_time").in("shift_id", shiftIds);
+        if (!br.error && br.data) {
+          for (const row of br.data as Array<{ shift_id: string; start_time: string; end_time: string }>) {
+            const id = String(row.shift_id ?? "");
+            if (!id) continue;
+            const arr = breaksByShiftId.get(id) ?? [];
+            arr.push({ start_time: String(row.start_time ?? ""), end_time: String(row.end_time ?? "") });
+            breaksByShiftId.set(id, arr);
+          }
+        }
+      }
+
+      const trainerDutyBlocks: string[] = [];
+      if (shiftList.length === 0) {
+        trainerDutyBlocks.push("（勤務予定なし）");
+      } else {
+        const dutyLines = await Promise.all(
+          shiftList.map(async (s) => {
+            const trainerName = trainerNameById.get(String(s.trainer_id)) ?? String(s.trainer_id);
+            const brList = breaksByShiftId.get(String(s.id)) ?? [];
+            const brText =
+              brList.length > 0
+                ? brList.map((b) => `${sliceHhmm(String(b.start_time))}〜${sliceHhmm(String(b.end_time))}`).join(" / ")
+                : "";
+            const slots = await fetchTrainerAvailableSlots(origin, sid, dateYmd, String(s.trainer_id));
+            const free = formatFreeSlotsSummary(slots);
+            return [
+              `・${trainerName} 勤務 ${sliceHhmm(String(s.start_local))}〜${sliceHhmm(String(s.end_local))}`,
+              brText ? `  休憩: ${brText}` : `  休憩: （登録なし）`,
+              `  空き: ${free}`,
+            ].join("\n");
+          })
+        );
+        trainerDutyBlocks.push(...dutyLines);
+      }
 
       const storeEvents = events.filter((e) => String(e.store_id) === sid);
       const eventLines =
@@ -320,7 +325,18 @@ export async function GET(req: Request) {
               return `・${time}  ${who}（${stype}｜${trainerSuffix}）`;
             });
 
-      lines.push(`━━ ${st.name} ━━`, `■ 勤務予定`, ...shiftLines, ``, `■ 予定（MTG/撮影/作業など）`, ...eventLines, ``, `■ 予約一覧（${resList.length}件）`, ...resLines, ``);
+      lines.push(
+        `━━ ${st.name}（店舗予約 ${resList.length}件）━━`,
+        `■ トレーナー勤務・休憩・空き`,
+        ...trainerDutyBlocks,
+        ``,
+        `■ 予定（MTG/撮影/作業など）`,
+        ...eventLines,
+        ``,
+        `■ 予約一覧（${resList.length}件）`,
+        ...resLines,
+        ``
+      );
     }
 
     const text = lines.join("\n").trimEnd();

@@ -267,11 +267,17 @@ export interface Database {
         };
         Relationships: [];
       };
+      trainer_event_reminder_dispatches: {
+        Row: { event_id: string; kind: "60min" | "10min"; sent_at: string };
+        Insert: { event_id: string; kind: "60min" | "10min"; sent_at?: string };
+        Update: { event_id?: string; kind?: "60min" | "10min"; sent_at?: string };
+        Relationships: [];
+      };
       reservations: {
         Row: {
           id: string;
           store_id: string;
-          member_id: string;
+          member_id: string | null;
           trainer_id: string | null;
           start_at: string;
           end_at: string;
@@ -280,13 +286,15 @@ export interface Database {
           last_rescheduled_at?: string | null;
           status: string;
           notes: string | null;
+          guest_name?: string | null;
+          blocks_capacity?: boolean;
           created_at: string;
           updated_at: string;
         };
         Insert: {
           id?: string;
           store_id: string;
-          member_id: string;
+          member_id?: string | null;
           trainer_id?: string | null;
           start_at: string;
           end_at: string;
@@ -295,13 +303,15 @@ export interface Database {
           last_rescheduled_at?: string | null;
           status: string;
           notes?: string | null;
+          guest_name?: string | null;
+          blocks_capacity?: boolean;
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           id?: string;
           store_id?: string;
-          member_id?: string;
+          member_id?: string | null;
           trainer_id?: string | null;
           start_at?: string;
           end_at?: string;
@@ -310,6 +320,8 @@ export interface Database {
           last_rescheduled_at?: string | null;
           status?: string;
           notes?: string | null;
+          guest_name?: string | null;
+          blocks_capacity?: boolean;
           created_at?: string;
           updated_at?: string;
         };
