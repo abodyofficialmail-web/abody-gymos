@@ -7,6 +7,14 @@
     {
       "path": "/api/admin/daily-store-reservation-report?target=today",
       "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/admin/daily-all-stores-line-report?target=tomorrow",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/admin/daily-all-stores-line-report?target=today",
+      "schedule": "0 23 * * *"
     }
   ]
 }

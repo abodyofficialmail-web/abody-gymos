@@ -11,6 +11,13 @@ const querySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u),
 });
 
+type BreakDto = {
+  id: string;
+  /** HH:mm（表示用） */
+  start_time: string;
+  end_time: string;
+};
+
 type ShiftDto = {
   id: string;
   trainer_id: string;
@@ -19,7 +26,14 @@ type ShiftDto = {
   date: string; // YYYY-MM-DD
   start_local: string; // HH:mm or HH:mm:ss
   end_local: string; // HH:mm or HH:mm:ss
+  breaks: BreakDto[];
 };
+
+function formatTimeHhMm(t: unknown): string {
+  const s = String(t ?? "");
+  if (s.length >= 5) return s.slice(0, 5);
+  return s;
+}
 
 export async function GET(request: Request) {
   try {
@@ -84,12 +98,44 @@ export async function GET(request: Request) {
           date,
           start_local: start,
           end_local: end,
+          breaks: [] as BreakDto[],
         };
       })
       .filter((s) => s.id && s.trainer_id && s.start_local && s.end_local);
 
     // trainer_name あり優先、同名は時刻順
     out.sort((a, b) => (a.trainer_name || a.trainer_id).localeCompare(b.trainer_name || b.trainer_id, "ja"));
+
+    const shiftIds = out.map((s) => s.id).filter(Boolean);
+    if (shiftIds.length > 0) {
+      try {
+        const { data: breakRows, error: brErr } = await supabase
+          .from("trainer_shift_breaks")
+          .select("id, shift_id, start_time, end_time")
+          .in("shift_id", shiftIds);
+        if (!brErr && breakRows?.length) {
+          const byShift = new Map<string, BreakDto[]>();
+          for (const row of breakRows as any[]) {
+            const sid = String(row.shift_id ?? "");
+            if (!sid) continue;
+            const arr = byShift.get(sid) ?? [];
+            arr.push({
+              id: String(row.id),
+              start_time: formatTimeHhMm(row.start_time),
+              end_time: formatTimeHhMm(row.end_time),
+            });
+            byShift.set(sid, arr);
+          }
+          for (const s of out) {
+            const list = byShift.get(s.id) ?? [];
+            list.sort((a, b) => a.start_time.localeCompare(b.start_time, "en"));
+            s.breaks = list;
+          }
+        }
+      } catch {
+        // trainer_shift_breaks 未適用環境などは休憩なしのまま返す
+      }
+    }
 
     return jsonResponse({ shifts: out }, 200);
   } catch (e) {

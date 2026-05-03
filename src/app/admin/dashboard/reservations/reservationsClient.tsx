@@ -1,7 +1,7 @@
 "use client";
 
 import { DateTime } from "luxon";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const TZ = "Asia/Tokyo";
 
@@ -15,6 +15,7 @@ type ShiftDto = {
   date: string; // YYYY-MM-DD
   start_local: string;
   end_local: string;
+  breaks: Array<{ id: string; start_time: string; end_time: string }>;
 };
 
 type MemberRow = {
@@ -161,6 +162,11 @@ export function ReservationsClient() {
   const [breakSlots, setBreakSlots] = useState<Array<{ start_time: string; end_time: string }> | null>(null);
   const [breakSelected, setBreakSelected] = useState<{ start_time: string; end_time: string } | null>(null);
 
+  /** 当日・店舗フィルタに合わせたシフト（休憩一覧用） */
+  const [dayShiftsByStore, setDayShiftsByStore] = useState<Array<{ store_id: string; store_name: string; shifts: ShiftDto[] }> | null>(
+    null
+  );
+
   const selectedStoreName = useMemo(() => {
     if (selectedStoreId === "all") return "全店舗";
     return (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "";
@@ -180,6 +186,33 @@ export function ReservationsClient() {
     const d = await apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${qs.toString()}`);
     setRows(d.reservations ?? []);
   };
+
+  const loadDayShiftsForSelectedDate = useCallback(async () => {
+    if (!selectedYmd || !stores || stores.length === 0) {
+      setDayShiftsByStore(null);
+      return;
+    }
+    const storeIds = selectedStoreId === "all" ? stores.map((s) => s.id) : [selectedStoreId];
+    setDayShiftsByStore(null);
+    try {
+      const blocks = await Promise.all(
+        storeIds.map(async (sid) => {
+          const d = await apiGet<{ shifts: ShiftDto[] }>(
+            `/api/admin/shifts/by-store-date?store_id=${encodeURIComponent(sid)}&date=${encodeURIComponent(selectedYmd)}`
+          );
+          const name = stores.find((s) => s.id === sid)?.name ?? sid;
+          return { store_id: sid, store_name: name, shifts: d.shifts ?? [] };
+        })
+      );
+      setDayShiftsByStore(blocks);
+    } catch {
+      setDayShiftsByStore([]);
+    }
+  }, [selectedYmd, selectedStoreId, stores]);
+
+  useEffect(() => {
+    void loadDayShiftsForSelectedDate();
+  }, [loadDayShiftsForSelectedDate]);
 
   useEffect(() => {
     setErr(null);
@@ -284,6 +317,7 @@ export function ReservationsClient() {
       setBreakOpen(false);
       // 枠の提案に影響するので、予約一覧も更新（任意）
       await refreshRows();
+      await loadDayShiftsForSelectedDate();
     } catch (e: any) {
       setBreakErr(String(e?.message ?? "休憩の追加に失敗しました"));
     } finally {
@@ -511,6 +545,27 @@ export function ReservationsClient() {
     const list = (rows ?? []).filter((r) => DateTime.fromISO(r.start_at).setZone(TZ).toISODate() === selectedYmd);
     return list.sort((a, b) => DateTime.fromISO(a.start_at).toMillis() - DateTime.fromISO(b.start_at).toMillis());
   }, [rows, selectedYmd]);
+
+  const breakDisplayLines = useMemo(() => {
+    if (!dayShiftsByStore || dayShiftsByStore.length === 0) return [];
+    const lines: { key: string; sort: string; text: string }[] = [];
+    for (const block of dayShiftsByStore) {
+      for (const sh of block.shifts) {
+        for (const br of sh.breaks ?? []) {
+          lines.push({
+            key: `${block.store_id}-${sh.id}-${br.id}`,
+            sort: `${br.start_time}-${block.store_id}-${sh.trainer_id}`,
+            text:
+              selectedStoreId === "all"
+                ? `${block.store_name} · ${sh.trainer_name || sh.trainer_id} ${br.start_time}〜${br.end_time}`
+                : `${sh.trainer_name || sh.trainer_id} ${br.start_time}〜${br.end_time}`,
+          });
+        }
+      }
+    }
+    lines.sort((a, b) => a.sort.localeCompare(b.sort, "en"));
+    return lines;
+  }, [dayShiftsByStore, selectedStoreId]);
 
   return (
     <div className="space-y-3">
@@ -754,6 +809,21 @@ export function ReservationsClient() {
               </button>
             </div>
           </div>
+
+          {dayShiftsByStore === null ? (
+            <div className="text-xs text-slate-500">休憩情報を読み込み中…</div>
+          ) : breakDisplayLines.length > 0 ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 shadow-sm">
+              <div className="text-xs font-bold text-amber-950">トレーナー休憩</div>
+              <ul className="mt-2 space-y-1.5 text-sm text-amber-950">
+                {breakDisplayLines.map((line) => (
+                  <li key={line.key} className="pl-1">
+                    {line.text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           {rows === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
           {rows !== null && selectedDayRows.length === 0 ? (
