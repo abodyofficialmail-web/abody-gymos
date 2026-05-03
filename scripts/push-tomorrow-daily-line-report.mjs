@@ -13,6 +13,7 @@ import path from "path";
 const TZ = "Asia/Tokyo";
 const MAX = 4800;
 
+/** 既に環境変数が入っているキーは上書きしない（CLI で渡した LINE トークンを vercel pull の空値で潰さない） */
 function loadEnvFile(name) {
   const p = path.join(process.cwd(), name);
   if (!fs.existsSync(p)) return;
@@ -23,6 +24,7 @@ function loadEnvFile(name) {
     const i = t.indexOf("=");
     if (i === -1) continue;
     const k = t.slice(0, i).trim();
+    if (process.env[k] !== undefined && process.env[k] !== "") continue;
     let v = t.slice(i + 1).trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     process.env[k] = v;
