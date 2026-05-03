@@ -36,17 +36,71 @@ function mustCronAuth(req: Request): boolean {
   return got === secret;
 }
 
-/** カンマ・スペース区切り。未設定時は LINE_EBI020_USER_ID を1件として使う */
-function parseLineRecipients(): string[] {
-  const raw = process.env.LINE_DAILY_REPORT_USER_IDS?.trim();
-  if (raw) {
-    return raw
-      .split(/[,;\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
+function splitEnvList(raw: string): string[] {
+  return raw
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 送信先LINEユーザーIDを集める。
+ * - LINE_DAILY_REPORT_USER_IDS / LINE_EBI020_USER_ID … そのまま push 先（U…）
+ * - 上記がどちらも無いとき、会員番号 EBI020 を DB から解決（line_user_id）
+ * - LINE_DAILY_REPORT_MEMBER_CODES を設定すると、会員番号を追加で解決（カンマ区切り）
+ *
+ * 予約確定と同じ恵比寿公式チャネル（LINE_CHANNEL_ACCESS_TOKEN）で送る前提で、
+ * 受信側はそのボットを友だち追加している会員の line_user_id が必要。
+ */
+async function resolvePushRecipients(supabase: ReturnType<typeof createSupabaseServiceClient>): Promise<{
+  ids: string[];
+  member_codes_queried: string[];
+  missing_line_for_codes: string[];
+}> {
+  const explicit: string[] = [];
+  const rawUsers = process.env.LINE_DAILY_REPORT_USER_IDS?.trim();
+  if (rawUsers) explicit.push(...splitEnvList(rawUsers));
   const legacy = process.env.LINE_EBI020_USER_ID?.trim();
-  return legacy ? [legacy] : [];
+  if (legacy) explicit.push(legacy);
+
+  const codesEnv = process.env.LINE_DAILY_REPORT_MEMBER_CODES?.trim();
+  let memberCodesToQuery: string[] = [];
+  if (codesEnv !== undefined && codesEnv !== "") {
+    memberCodesToQuery = splitEnvList(codesEnv);
+  } else if (explicit.length === 0) {
+    memberCodesToQuery = ["EBI020"];
+  }
+
+  const fromMembers: string[] = [];
+  const missingLineForCodes: string[] = [];
+
+  if (memberCodesToQuery.length > 0) {
+    const { data, error } = await supabase
+      .from("members")
+      .select("member_code,line_user_id")
+      .in("member_code", memberCodesToQuery)
+      .eq("is_active", true);
+    if (error) {
+      throw new Error(`members_lookup_failed:${error.message}`);
+    }
+    for (const code of memberCodesToQuery) {
+      const row = (data ?? []).find((r) => String(r.member_code) === code);
+      if (!row) {
+        missingLineForCodes.push(code);
+        continue;
+      }
+      const uid = row.line_user_id ? String(row.line_user_id).trim() : "";
+      if (uid) fromMembers.push(uid);
+      else missingLineForCodes.push(code);
+    }
+  }
+
+  const ids = Array.from(new Set([...explicit, ...fromMembers]));
+  return {
+    ids,
+    member_codes_queried: memberCodesToQuery,
+    missing_line_for_codes: missingLineForCodes,
+  };
 }
 
 /** 送信に使う Messaging API チャネルトークン（受信者が友だち追加しているボット） */
@@ -89,17 +143,9 @@ export async function GET(req: Request) {
     const nowJst = DateTime.now().setZone(TZ);
     const dateYmd = (target === "today" ? nowJst : nowJst.plus({ days: 1 })).toISODate()!;
 
-    const recipients = parseLineRecipients();
-    if (!dryRun && recipients.length === 0) {
-      return jsonResponse(
-        {
-          error: "missing_env",
-          detail:
-            "LINE_DAILY_REPORT_USER_IDS（カンマ区切り）または LINE_EBI020_USER_ID を設定してください",
-        },
-        500
-      );
-    }
+    const supabase = createSupabaseServiceClient();
+
+    const { ids: recipientIds, member_codes_queried, missing_line_for_codes } = await resolvePushRecipients(supabase);
 
     const token = dailyReportChannelToken();
     if (!dryRun && !token) {
@@ -112,7 +158,18 @@ export async function GET(req: Request) {
       );
     }
 
-    const supabase = createSupabaseServiceClient();
+    if (!dryRun && recipientIds.length === 0) {
+      return jsonResponse(
+        {
+          error: "missing_recipients",
+          detail:
+            "送信先がありません。LINE_DAILY_REPORT_USER_IDS を設定するか、会員番号（既定EBI020）の LINE連携（line_user_id）を確認してください。",
+          member_codes_queried,
+          missing_line_for_codes,
+        },
+        500
+      );
+    }
 
     const { data: storeRows, error: storeErr } = await supabase
       .from("stores")
@@ -272,6 +329,9 @@ export async function GET(req: Request) {
           target,
           date: dateYmd,
           store_count: stores.length,
+          recipient_count: recipientIds.length,
+          member_codes_queried,
+          missing_line_for_codes,
           text,
         },
         200
@@ -282,7 +342,7 @@ export async function GET(req: Request) {
     const perRecipient: Array<{ user_id: string; ok: boolean; chunks_sent: number; pushResults: Awaited<ReturnType<typeof pushLineTextChunks>> }> =
       [];
 
-    for (const toUserId of recipients) {
+    for (const toUserId of recipientIds) {
       const pushResults = await pushLineTextChunks({ token: token!, toUserId, chunks });
       const allOk = pushResults.length > 0 && pushResults.every((r) => r.ok);
       perRecipient.push({ user_id: toUserId, ok: allOk, chunks_sent: chunks.length, pushResults });
