@@ -14,11 +14,7 @@
     },
     {
       "path": "/api/admin/daily-all-stores-line-report?target=today",
-      "schedule": "0 23 * * *"
-    },
-    {
-      "path": "/api/cron/daiki-event-reminders",
-      "schedule": "* * * * *"
+      "schedule": "0 22 * * *"
     }
   ]
 }
