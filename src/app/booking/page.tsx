@@ -108,7 +108,21 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = (json as any).error ?? "送信に失敗しました";
-    throw new Error(`${res.status}|${msg}`);
+    const detail = (json as any).detail;
+    const detailStr =
+      detail == null
+        ? ""
+        : typeof detail === "string"
+          ? detail
+          : (() => {
+              try {
+                return JSON.stringify(detail);
+              } catch {
+                return String(detail);
+              }
+            })();
+    const full = detailStr ? `${msg}（${detailStr}）` : msg;
+    throw new Error(`${res.status}|${full}`);
   }
   return json as T;
 }

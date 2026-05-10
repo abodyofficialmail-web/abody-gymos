@@ -28,29 +28,59 @@ export async function GET() {
     const start = DateTime.fromISO(`${monthKey}-01`, { zone: TZ }).startOf("month");
     const end = start.plus({ months: 2 });
 
-    const { data: reservations, error: rErr } = await (supabase as any)
+    const reservationSelectFull =
+      "id, start_at, end_at, session_type, trainer_id, member_id, store_id, status, created_at, reschedule_count";
+    const reservationSelectLegacy =
+      "id, start_at, end_at, session_type, trainer_id, member_id, store_id, status, created_at";
+
+    let resQuery = (supabase as any)
       .from("reservations")
-      .select(
-        `
-          id,
-          start_at,
-          end_at,
-          session_type,
-          trainer_id,
-          member_id,
-          store_id,
-          status,
-          created_at,
-          trainers(id, display_name),
-          stores(id, name)
-        `
-      )
+      .select(reservationSelectFull)
       .eq("member_id", memberId)
       .neq("status", "cancelled")
       .gte("start_at", start.toUTC().toISO()!)
       .lt("start_at", end.toUTC().toISO()!)
       .order("start_at", { ascending: true });
+    let { data: resRows, error: rErr } = await resQuery;
+    if (rErr) {
+      const msg = String(rErr.message ?? "");
+      const retry =
+        /reschedule_count|does not exist|column/i.test(msg) || (/PGRST/i.test(msg) && /column/i.test(msg));
+      if (retry) {
+        const second = await (supabase as any)
+          .from("reservations")
+          .select(reservationSelectLegacy)
+          .eq("member_id", memberId)
+          .neq("status", "cancelled")
+          .gte("start_at", start.toUTC().toISO()!)
+          .lt("start_at", end.toUTC().toISO()!)
+          .order("start_at", { ascending: true });
+        resRows = second.data;
+        rErr = second.error;
+      }
+    }
     if (rErr) return json({ error: "予約の取得に失敗しました", detail: rErr.message }, 500);
+
+    const rows = (resRows ?? []) as any[];
+    const storeIds = Array.from(new Set(rows.map((r) => r.store_id).filter(Boolean)));
+    const trainerIds = Array.from(new Set(rows.map((r) => r.trainer_id).filter(Boolean))) as string[];
+    const [storesRes, trainersRes] = await Promise.all([
+      storeIds.length
+        ? (supabase as any).from("stores").select("id, name").in("id", storeIds)
+        : Promise.resolve({ data: [], error: null }),
+      trainerIds.length
+        ? (supabase as any).from("trainers").select("id, display_name").in("id", trainerIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    const storeById = new Map<string, string>((storesRes.data ?? []).map((s: any) => [s.id, String(s.name ?? "")]));
+    const trainerById = new Map<string, string>(
+      (trainersRes.data ?? []).map((t: any) => [t.id, String(t.display_name ?? "")])
+    );
+    const reservations = rows.map((r: any) => ({
+      ...r,
+      stores: { name: storeById.get(r.store_id) ?? "" },
+      trainers: r.trainer_id ? { display_name: trainerById.get(r.trainer_id) ?? "" } : null,
+    }));
 
     // client_notes は環境によって未作成/スキーマキャッシュ未反映の場合があるため、失敗しても予約表示は継続する
     let notes: any[] = [];

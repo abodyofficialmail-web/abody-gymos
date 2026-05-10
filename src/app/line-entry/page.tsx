@@ -9,15 +9,25 @@ declare global {
   }
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+async function postLineLogin(body: { line_user_id: string }): Promise<void> {
+  const res = await fetch("/api/member/line-login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as any)?.code ?? (json as any)?.error ?? "ログインに失敗しました");
-  return json as T;
+  const json = (await res.json().catch(() => ({}))) as {
+    code?: string;
+    error?: string;
+    message?: string;
+  };
+  if (!res.ok) {
+    if (res.status === 404 && json.code === "NOT_LINKED") {
+      throw new Error(
+        "このLINEはまだ会員と紐付いていません。店舗のLINE公式トークで会員番号（例：EBI001）を送信し、案内に従って「はい」で連携したあと、もう一度この画面を開いてください。"
+      );
+    }
+    throw new Error(json.message || json.error || json.code || "ログインに失敗しました");
+  }
 }
 
 export default function LineEntryPage() {
@@ -46,11 +56,10 @@ export default function LineEntryPage() {
         const userId = profile?.userId;
         if (!userId) throw new Error("LINEユーザーIDの取得に失敗しました");
 
-        await apiPost("/api/member/line-login", { line_user_id: userId });
+        await postLineLogin({ line_user_id: userId });
         window.location.href = "/member";
       } catch (e: any) {
         const code = String(e?.message ?? "");
-        // 未紐付け or 何らかの失敗は手動ログインへ
         window.location.href = `/login?from=line&reason=${encodeURIComponent(code)}`;
       }
     };

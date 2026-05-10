@@ -15,6 +15,7 @@ export async function OPTIONS() {
 const querySchema = z.object({
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date は YYYY-MM-DD 形式である必要があります"),
+  trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
 });
 const SLOT_MINUTES = 30;
 function isApril2026Closed(ymd: string) {
@@ -92,11 +93,12 @@ export async function GET(request: Request) {
     const parsed = querySchema.safeParse({
       store_id: url.searchParams.get("store_id"),
       date: url.searchParams.get("date"),
+      trainer_id: url.searchParams.get("trainer_id") ?? undefined,
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
-    const { store_id, date } = parsed.data;
+    const { store_id, date, trainer_id: filterTrainerId } = parsed.data;
     console.log("slots debug", { store_id, date });
     if (isApril2026Closed(date)) {
       return jsonResponse([], 200);
@@ -250,19 +252,43 @@ export async function GET(request: Request) {
     }
     const dayStartUtc = DateTime.fromISO(date, { zone }).startOf("day").toUTC();
     const dayEndUtc = dayStartUtc.plus({ days: 1 });
-    const { data: resRaw, error: resErr } = await supabase
-      .from("reservations")
-      .select("trainer_id, start_at, end_at, status")
-      .eq("store_id", store_id)
-      .neq("status", "cancelled")
-      .gte("start_at", dayStartUtc.toISO()!)
-      .lt("start_at", dayEndUtc.toISO()!);
+    async function fetchReservationsDay(selectCols: string) {
+      return supabase
+        .from("reservations")
+        .select(selectCols)
+        .eq("store_id", store_id)
+        .neq("status", "cancelled")
+        .gte("start_at", dayStartUtc.toISO()!)
+        .lt("start_at", dayEndUtc.toISO()!);
+    }
+    let { data: resRaw, error: resErr } = await fetchReservationsDay(
+      "trainer_id, start_at, end_at, status, blocks_capacity"
+    );
+    if (resErr) {
+      const msg = String(resErr.message ?? "");
+      const retryNoBlocks =
+        /blocks_capacity|does not exist|column/i.test(msg) ||
+        (/PGRST/i.test(msg) && /column/i.test(msg));
+      if (retryNoBlocks) {
+        const second = await fetchReservationsDay("trainer_id, start_at, end_at, status");
+        resRaw = second.data;
+        resErr = second.error;
+      }
+    }
     if (resErr) {
       return jsonResponse({ error: "予約の取得に失敗しました", detail: resErr.message }, 500);
     }
+    const resList = (resRaw ?? []) as unknown as Array<{
+      trainer_id: string | null;
+      start_at: string;
+      end_at: string;
+      status?: string;
+      blocks_capacity?: boolean | null;
+    }>;
     const busyByTrainer = new Map<string, { start: number; end: number }[]>();
     const unassignedReservations: { start: number; end: number }[] = [];
-    for (const r of resRaw ?? []) {
+    for (const r of resList) {
+      if (r.blocks_capacity === false) continue;
       const tId = r.trainer_id;
       const s = DateTime.fromISO(r.start_at).toMillis();
       const e = DateTime.fromISO(r.end_at).toMillis();
@@ -367,6 +393,7 @@ export async function GET(request: Request) {
 
     const results: AvailableSlotDto[] = [];
     for (const [key, trainersSet] of freeTrainerSetBySlotKey) {
+      if (filterTrainerId && !trainersSet.has(filterTrainerId)) continue;
       const capacity = trainersSet.size;
       const used = unassignedCountBySlotKey.get(key) ?? 0;
       if (capacity <= used) continue;

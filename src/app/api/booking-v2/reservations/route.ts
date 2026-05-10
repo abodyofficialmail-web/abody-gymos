@@ -288,6 +288,71 @@ const getQuerySchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/u, "month は YYYY-MM 形式である必要があります").optional(),
 });
 
+/** reservations はスカラーのみ取得し、店舗・トレーナー・会員名は別クエリで付与（PostgREST の embed 関係エラーを避ける） */
+async function enrichReservationRowsFromScalars(
+  supabase: SupabaseClient<Database>,
+  rows: Array<{
+    id: string;
+    start_at: string;
+    end_at: string;
+    session_type?: string | null;
+    trainer_id: string | null;
+    member_id: string | null;
+    guest_name?: string | null;
+    blocks_capacity?: boolean | null;
+    store_id: string;
+    status: string;
+    created_at: string;
+  }>
+) {
+  const storeIds = Array.from(new Set(rows.map((r) => r.store_id).filter(Boolean)));
+  const trainerIds = Array.from(new Set(rows.map((r) => r.trainer_id).filter(Boolean))) as string[];
+  const memberIds = Array.from(new Set(rows.map((r) => r.member_id).filter(Boolean))) as string[];
+
+  const [storesRes, trainersRes, membersRes] = await Promise.all([
+    storeIds.length
+      ? (supabase as any).from("stores").select("id, name").in("id", storeIds)
+      : Promise.resolve({ data: [] as any[], error: null }),
+    trainerIds.length
+      ? (supabase as any).from("trainers").select("id, display_name").in("id", trainerIds)
+      : Promise.resolve({ data: [] as any[], error: null }),
+    memberIds.length
+      ? (supabase as any).from("members").select("id, member_code, name").in("id", memberIds)
+      : Promise.resolve({ data: [] as any[], error: null }),
+  ]);
+
+  const storeById = new Map<string, string>((storesRes.data ?? []).map((s: any) => [s.id, String(s.name ?? "")]));
+  const trainerById = new Map<string, string>((trainersRes.data ?? []).map((t: any) => [t.id, String(t.display_name ?? "")]));
+  const memberById = new Map<string, { member_code: string; name: string }>(
+    (membersRes.data ?? []).map((m: any) => [
+      m.id,
+      { member_code: String(m.member_code ?? ""), name: String(m.name ?? "") },
+    ])
+  );
+
+  return rows.map((r) => {
+    const mem = r.member_id ? memberById.get(r.member_id) : undefined;
+    return {
+      id: r.id,
+      store_id: r.store_id,
+      trainer_id: r.trainer_id,
+      member_id: r.member_id,
+      guest_name: r.guest_name ?? null,
+      blocks_capacity: r.blocks_capacity ?? true,
+      start_at: r.start_at,
+      end_at: r.end_at,
+      session_type: r.session_type ?? "store",
+      status: r.status,
+      created_at: r.created_at,
+      store_name: storeById.get(r.store_id) ?? "",
+      trainer_name: r.trainer_id ? trainerById.get(r.trainer_id) ?? "" : "",
+      member_code: mem?.member_code ?? "",
+      member_name: mem?.name ?? "",
+      member: mem && r.member_id ? { id: r.member_id, name: mem.name } : null,
+    };
+  });
+}
+
 function isApril2026Closed(ymd: string) {
   // 要望: 2026年4月の予約を一旦閉じる
   return String(ymd).startsWith("2026-04-");
@@ -331,64 +396,61 @@ export async function GET(request: Request) {
     const monthKey = month ?? DateTime.now().setZone("Asia/Tokyo").toFormat("yyyy-MM");
     const start = DateTime.fromISO(`${monthKey}-01`, { zone: "Asia/Tokyo" }).startOf("month");
     const end = start.plus({ months: 1 });
-    // NOTE: Database 型定義にリレーションが無い場合でも JOIN できるよう any 経由で実行
-    let q = (supabase as any)
-      .from("reservations")
-      .select(
-        `
-          id,
-          start_at,
-          end_at,
-          session_type,
-          trainer_id,
-          member_id,
-          store_id,
-          status,
-          created_at,
-          member:members(
-            id,
-            member_code,
-            name
-          ),
-          trainers(
-            id,
-            display_name
-          ),
-          stores(
-            id,
-            name
-          )
-        `
-      )
-      .neq("status", "cancelled")
-      .gte("start_at", start.toUTC().toISO()!)
-      .lt("start_at", end.toUTC().toISO()!)
-      .order("start_at", { ascending: true });
-    if (trainer_id) q = q.eq("trainer_id", trainer_id);
-    if (member_id) q = q.eq("member_id", member_id);
-    if (store_id) q = q.eq("store_id", store_id);
-    const { data, error } = await q;
+
+    const selectFlatExtended =
+      "id, start_at, end_at, session_type, trainer_id, member_id, guest_name, blocks_capacity, store_id, status, created_at";
+    const selectFlatLegacy =
+      "id, start_at, end_at, session_type, trainer_id, member_id, store_id, status, created_at";
+
+    const runList = async (selectStr: string) => {
+      let q = (supabase as any)
+        .from("reservations")
+        .select(selectStr)
+        .neq("status", "cancelled")
+        .gte("start_at", start.toUTC().toISO()!)
+        .lt("start_at", end.toUTC().toISO()!)
+        .order("start_at", { ascending: true });
+      if (trainer_id) q = q.eq("trainer_id", trainer_id);
+      if (member_id) q = q.eq("member_id", member_id);
+      if (store_id) q = q.eq("store_id", store_id);
+      return q;
+    };
+
+    let first = await runList(selectFlatExtended);
+    let data = first.data;
+    let error = first.error;
+
+    if (error) {
+      const msg = String(error.message ?? "");
+      const retryAsLegacy =
+        /does not exist/i.test(msg) ||
+        /guest_name|blocks_capacity/i.test(msg) ||
+        (/column/i.test(msg) && (/unknown|schema/i.test(msg) || /PGRST/i.test(msg)));
+      if (retryAsLegacy) {
+        const second = await runList(selectFlatLegacy);
+        data = second.data;
+        error = second.error;
+      }
+    }
+
     if (error) {
       return jsonResponse({ error: "予約一覧の取得に失敗しました", detail: error.message }, 500);
     }
 
-    const rows = (data ?? []) as any[];
-    const enrichedBase = rows.map((r) => ({
-      id: r.id,
-      store_id: r.store_id,
-      trainer_id: r.trainer_id,
-      member_id: r.member_id,
-      start_at: r.start_at,
-      end_at: r.end_at,
-      session_type: (r as any).session_type ?? "store",
-      status: r.status,
-      created_at: r.created_at,
-      store_name: r.stores?.name ?? "",
-      trainer_name: r.trainers?.display_name ?? "",
-      member_code: r.member?.member_code ?? "",
-      member_name: r.member?.name ?? "",
-      member: r.member ? { id: r.member.id, name: r.member.name ?? "" } : null,
-    }));
+    const rows = (data ?? []) as Array<{
+      id: string;
+      start_at: string;
+      end_at: string;
+      session_type?: string | null;
+      trainer_id: string | null;
+      member_id: string | null;
+      guest_name?: string | null;
+      blocks_capacity?: boolean | null;
+      store_id: string;
+      status: string;
+      created_at: string;
+    }>;
+    const enrichedBase = await enrichReservationRowsFromScalars(supabase, rows);
 
     const enriched = await Promise.all(
       enrichedBase.map(async (r) => {
@@ -562,14 +624,27 @@ export async function POST(request: Request) {
         return jsonResponse({ error: "この時間は予約できません" }, 409);
       }
 
-      // 既存予約数（同一店舗・同一開始時刻）を見て、容量を超えるなら不可
-      const { count: bookedCount, error: bookedErr } = await supabase
-        .from("reservations")
-        .select("id", { count: "exact", head: true })
-        .eq("store_id", store_id)
-        .lt("start_at", end_at)
-        .gt("end_at", start_at)
-        .neq("status", "cancelled");
+      // 既存予約数（枠を潰す予約のみ）を見て、容量を超えるなら不可
+      // blocks_capacity 列が無い・型エラー等で第1クエリが失敗したら、列を使わない件数にフォールバック
+      async function countOverlappingBlockingCapacity(): Promise<{ count: number | null; error: any }> {
+        const run = (onlyBlockingCapacity: boolean) => {
+          let q = supabase
+            .from("reservations")
+            .select("id", { count: "exact", head: true })
+            .eq("store_id", store_id)
+            .lt("start_at", end_at)
+            .gt("end_at", start_at)
+            .neq("status", "cancelled");
+          if (onlyBlockingCapacity) q = q.eq("blocks_capacity", true);
+          return q;
+        };
+        const primary = await run(true);
+        if (!primary.error) return { count: primary.count ?? 0, error: null };
+        const fallback = await run(false);
+        if (!fallback.error) return { count: fallback.count ?? 0, error: null };
+        return { count: null, error: fallback.error ?? primary.error };
+      }
+      const { count: bookedCount, error: bookedErr } = await countOverlappingBlockingCapacity();
       if (bookedErr) {
         return jsonResponse({ error: "予約状況の確認に失敗しました", detail: bookedErr.message }, 500);
       }
@@ -628,19 +703,38 @@ export async function POST(request: Request) {
       session_type,
       status: "confirmed",
       notes: "created_from=member_booking_site",
+      blocks_capacity: true,
     };
     if (trainer_id) {
       (insertRow as any).trainer_id = trainer_id;
     } else {
       (insertRow as any).trainer_id = null;
     }
-    const { data: inserted, error: insErr } = await supabase
-      .from("reservations")
-      .insert(insertRow)
-      .select(
-        "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status, notes, created_at, updated_at"
-      )
-      .single();
+    const selectFull =
+      "id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status, notes, created_at, updated_at";
+    const selectLegacy = "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status, notes, created_at, updated_at";
+
+    let inserted: any = null;
+    let insErr: any = null;
+    {
+      const first = await supabase.from("reservations").insert(insertRow).select(selectFull).single();
+      inserted = first.data;
+      insErr = first.error;
+      if (insErr) {
+        const msg = String(insErr.message ?? "");
+        const retryCols =
+          /guest_name|blocks_capacity|does not exist|column/i.test(msg) ||
+          (/PGRST/i.test(msg) && /column/i.test(msg));
+        if (retryCols) {
+          const rowMinimal = { ...insertRow } as Record<string, unknown>;
+          delete rowMinimal.blocks_capacity;
+          delete rowMinimal.guest_name;
+          const second = await supabase.from("reservations").insert(rowMinimal as any).select(selectLegacy).single();
+          inserted = second.data;
+          insErr = second.error;
+        }
+      }
+    }
     if (insErr) {
       // partial unique index による二重予約防止（Postgres unique_violation）
       if ((insErr as any)?.code === "23505") {

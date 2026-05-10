@@ -152,15 +152,31 @@ export async function GET(request: Request) {
     }
     const monthStartUtc = monthStartLocal.startOf("day").toUTC();
     const nextMonthStartUtc = monthStartLocal.plus({ months: 1 }).startOf("month").toUTC();
-    let resQuery = supabase
-      .from("reservations")
-      .select("trainer_id, start_at, end_at, status")
-      .eq("store_id", store_id)
-      .neq("status", "cancelled")
-      .gte("start_at", monthStartUtc.toISO()!)
-      .lt("start_at", nextMonthStartUtc.toISO()!);
-    if (trainer_id) resQuery = resQuery.eq("trainer_id", trainer_id);
-    const { data: resRaw, error: resErr } = await resQuery;
+    async function fetchReservationsForMonth(selectCols: string) {
+      let q = supabase
+        .from("reservations")
+        .select(selectCols)
+        .eq("store_id", store_id)
+        .neq("status", "cancelled")
+        .gte("start_at", monthStartUtc.toISO()!)
+        .lt("start_at", nextMonthStartUtc.toISO()!);
+      if (trainer_id) q = q.eq("trainer_id", trainer_id);
+      return q;
+    }
+    let { data: resRaw, error: resErr } = await fetchReservationsForMonth(
+      "trainer_id, start_at, end_at, status, blocks_capacity"
+    );
+    if (resErr) {
+      const msg = String(resErr.message ?? "");
+      const retryNoBlocks =
+        /blocks_capacity|does not exist|column/i.test(msg) ||
+        (/PGRST/i.test(msg) && /column/i.test(msg));
+      if (retryNoBlocks) {
+        const second = await fetchReservationsForMonth("trainer_id, start_at, end_at, status");
+        resRaw = second.data;
+        resErr = second.error;
+      }
+    }
     if (resErr) {
       return jsonResponse({ error: "予約の取得に失敗しました", detail: resErr.message }, 500);
     }
@@ -169,6 +185,7 @@ export async function GET(request: Request) {
     // unassignedByDate: key = `${YYYY-MM-DD}`（trainer_id=null の予約は「その時間帯の容量」を消費する）
     const unassignedByDate = new Map<string, { start: number; end: number }[]>();
     for (const r of resRaw ?? []) {
+      if ((r as any).blocks_capacity === false) continue;
       const tId = (r as any).trainer_id as string | null;
       const sIso = (r as any).start_at as string;
       const eIso = (r as any).end_at as string;

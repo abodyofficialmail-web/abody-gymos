@@ -15,13 +15,33 @@ export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
 
-const bodySchema = z.object({
-  store_id: z.string().uuid(),
-  member_id: z.string().uuid(),
-  start_at: z.string().min(1),
-  end_at: z.string().min(1),
-  session_type: z.enum(["store", "online"]).optional().default("store"),
-});
+const bodySchema = z
+  .object({
+    store_id: z.string().uuid(),
+    member_id: z.string().uuid().optional(),
+    guest_name: z.string().optional(),
+    trainer_id: z.string().uuid().optional(),
+    blocks_capacity: z.boolean().optional(),
+    start_at: z.string().min(1),
+    end_at: z.string().min(1),
+    session_type: z.enum(["store", "online"]).optional().default("store"),
+  })
+  .superRefine((data, ctx) => {
+    const trial = Boolean(String(data.guest_name ?? "").trim());
+    if (trial) {
+      if (!data.trainer_id) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "担当トレーナーを指定してください", path: ["trainer_id"] });
+      }
+      if (data.blocks_capacity === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "予約枠を確保するか指定してください", path: ["blocks_capacity"] });
+      }
+      if (data.member_id) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "体験予約では会員IDは指定できません", path: ["member_id"] });
+      }
+    } else if (!data.member_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "会員を指定してください", path: ["member_id"] });
+    }
+  });
 
 function tokenForStoreName(storeName: string): string | null {
   if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
@@ -160,28 +180,167 @@ async function fetchShiftsForCapacityCheck(params: {
     .filter((r) => r.trainer_id && Number.isFinite(r.start_min) && Number.isFinite(r.end_min) && r.end_min > r.start_min);
 }
 
+async function countOverlappingBlocking(params: {
+  supabase: ReturnType<typeof createSupabaseServiceClient>;
+  store_id: string;
+  end_at: string;
+  start_at: string;
+}) {
+  const { supabase, store_id, end_at, start_at } = params;
+  const run = (onlyBlockingCapacity: boolean) => {
+    let q = supabase
+      .from("reservations")
+      .select("id", { count: "exact", head: true })
+      .eq("store_id", store_id)
+      .lt("start_at", end_at)
+      .gt("end_at", start_at)
+      .neq("status", "cancelled");
+    if (onlyBlockingCapacity) q = q.eq("blocks_capacity", true);
+    return q;
+  };
+  const primary = await run(true);
+  if (!primary.error) return primary;
+  return await run(false);
+}
+
 export async function POST(request: Request) {
   try {
     const raw = await request.json().catch(() => null);
     const parsed = bodySchema.safeParse(raw);
     if (!parsed.success) return jsonResponse({ error: "リクエストが不正です", detail: parsed.error.flatten() }, 400);
 
-    const { store_id, member_id, start_at, end_at, session_type } = parsed.data;
+    const { store_id, member_id, guest_name, trainer_id, blocks_capacity, start_at, end_at, session_type } = parsed.data;
     const supabase = createSupabaseServiceClient();
 
     const { data: store, error: storeErr } = await supabase.from("stores").select("id, name").eq("id", store_id).maybeSingle();
     if (storeErr) return jsonResponse({ error: "店舗の取得に失敗しました", detail: storeErr.message }, 500);
     if (!store) return jsonResponse({ error: "店舗が見つかりません" }, 404);
 
+    const trialGuestName = String(guest_name ?? "").trim();
+    const isTrial = trialGuestName.length > 0;
+
+    if (isTrial) {
+      const tid = trainer_id!;
+      const blocks = blocks_capacity!;
+
+      const { data: trainerRow, error: trErr } = await supabase
+        .from("trainers")
+        .select("id, store_id, is_active")
+        .eq("id", tid)
+        .maybeSingle();
+      if (trErr) return jsonResponse({ error: "トレーナーの照会に失敗しました", detail: trErr.message }, 500);
+      if (!trainerRow || !trainerRow.is_active) {
+        return jsonResponse({ error: "担当トレーナーが不正です", detail: { trainer_id: tid } }, 400);
+      }
+
+      const newStart = dayjs(start_at).tz("Asia/Tokyo");
+      const newEnd = dayjs(end_at).tz("Asia/Tokyo");
+      const dateYmd = newStart.format("YYYY-MM-DD");
+      const startMin = newStart.hour() * 60 + newStart.minute();
+      const endMin = newEnd.hour() * 60 + newEnd.minute();
+      if (!dateYmd || !Number.isFinite(startMin) || !Number.isFinite(endMin) || endMin <= startMin) {
+        return jsonResponse({ error: "start_at / end_at が不正です" }, 400);
+      }
+
+      const shifts = await fetchShiftsForCapacityCheck({ supabase, store_id, dateYmd });
+
+      if (blocks) {
+        const availableTrainerSet = new Set<string>();
+        for (const s of shifts) {
+          if (s.is_break) continue;
+          if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
+        }
+        // 開催店舗にシフトが無くても、管理画面で明示した担当トレーナーは枠として数える（他店所属トレでの体験など）
+        availableTrainerSet.add(tid);
+        const capacity = availableTrainerSet.size;
+
+        const { count: bookedCount, error: bookedErr } = await countOverlappingBlocking({
+          supabase,
+          store_id,
+          end_at,
+          start_at,
+        });
+        if (bookedErr) return jsonResponse({ error: "予約状況の確認に失敗しました", detail: bookedErr.message }, 500);
+        if ((bookedCount ?? 0) >= capacity) return jsonResponse({ error: "この時間は予約できません" }, 409);
+      }
+
+      const insertRow: Database["public"]["Tables"]["reservations"]["Insert"] = {
+        store_id,
+        member_id: null,
+        trainer_id: tid,
+        guest_name: trialGuestName,
+        blocks_capacity: blocks,
+        start_at,
+        end_at,
+        session_type,
+        status: "confirmed",
+        notes: "created_from=admin_dashboard_trial",
+      };
+
+      const selectTrialFull =
+        "id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status, created_at";
+      const selectTrialLegacy =
+        "id, store_id, member_id, trainer_id, guest_name, start_at, end_at, session_type, status, created_at";
+      const selectTrialMinimal =
+        "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status, created_at";
+
+      let inserted: Record<string, unknown> | null = null;
+      let insErr: { message?: string; code?: string } | null = null;
+      {
+        const first = await supabase.from("reservations").insert(insertRow).select(selectTrialFull).single();
+        inserted = first.data as Record<string, unknown> | null;
+        insErr = first.error;
+      }
+      const schemaMsg = (e: unknown) => String((e as any)?.message ?? "");
+      if (insErr && /blocks_capacity|guest_name|schema cache|Could not find/i.test(schemaMsg(insErr))) {
+        const row2 = { ...(insertRow as Record<string, unknown>) };
+        delete row2.blocks_capacity;
+        const second = await supabase.from("reservations").insert(row2 as any).select(selectTrialLegacy).single();
+        inserted = second.data as Record<string, unknown> | null;
+        insErr = second.error;
+      }
+      if (insErr && /guest_name|schema cache|Could not find/i.test(schemaMsg(insErr))) {
+        const row3: Record<string, unknown> = {
+          store_id,
+          member_id: null,
+          trainer_id: tid,
+          start_at,
+          end_at,
+          session_type,
+          status: "confirmed",
+          notes: `created_from=admin_dashboard_trial|guest=${encodeURIComponent(trialGuestName)}`,
+        };
+        const third = await supabase.from("reservations").insert(row3 as any).select(selectTrialMinimal).single();
+        inserted = third.data as Record<string, unknown> | null;
+        insErr = third.error;
+      }
+      if (insErr) {
+        if ((insErr as any)?.code === "23505") return jsonResponse({ error: "既に予約されています" }, 409);
+        return jsonResponse({ error: "予約の保存に失敗しました", detail: insErr.message }, 500);
+      }
+      if (!inserted) {
+        return jsonResponse({ error: "予約の保存に失敗しました" }, 500);
+      }
+
+      return jsonResponse(
+        {
+          reservation: inserted,
+          guest: { name: trialGuestName },
+          store: { id: store.id, name: store.name ?? "" },
+        },
+        200
+      );
+    }
+
+    const memberIdForInsert = member_id as string;
     const { data: member, error: memberErr } = await (supabase as any)
       .from("members")
       .select("id, member_code, name, is_active, line_user_id")
-      .eq("id", member_id)
+      .eq("id", memberIdForInsert)
       .maybeSingle();
     if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
     if (!member || !member.is_active) return jsonResponse({ error: "会員が見つかりません" }, 404);
 
-    // シフト容量チェック（trainer未指定の店舗予約を前提）
     {
       const newStart = dayjs(start_at).tz("Asia/Tokyo");
       const newEnd = dayjs(end_at).tz("Asia/Tokyo");
@@ -201,23 +360,21 @@ export async function POST(request: Request) {
       const capacity = availableTrainerSet.size;
       if (capacity === 0) return jsonResponse({ error: "この時間は予約できません" }, 409);
 
-      const { count: bookedCount, error: bookedErr } = await supabase
-        .from("reservations")
-        .select("id", { count: "exact", head: true })
-        .eq("store_id", store_id)
-        .lt("start_at", end_at)
-        .gt("end_at", start_at)
-        .neq("status", "cancelled");
+      const { count: bookedCount, error: bookedErr } = await countOverlappingBlocking({
+        supabase,
+        store_id,
+        end_at,
+        start_at,
+      });
       if (bookedErr) return jsonResponse({ error: "予約状況の確認に失敗しました", detail: bookedErr.message }, 500);
       if ((bookedCount ?? 0) >= capacity) return jsonResponse({ error: "この時間は予約できません" }, 409);
     }
 
-    // 会員の重複予約チェック
     {
       const { count, error } = await supabase
         .from("reservations")
         .select("id", { count: "exact", head: true })
-        .eq("member_id", member_id)
+        .eq("member_id", memberIdForInsert)
         .lt("start_at", end_at)
         .gt("end_at", start_at)
         .neq("status", "cancelled");
@@ -227,36 +384,53 @@ export async function POST(request: Request) {
 
     const insertRow: Database["public"]["Tables"]["reservations"]["Insert"] = {
       store_id,
-      member_id,
+      member_id: memberIdForInsert,
       start_at,
       end_at,
       session_type,
       status: "confirmed",
       notes: "created_from=admin_dashboard",
+      blocks_capacity: true,
     };
     (insertRow as any).trainer_id = null;
 
-    const { data: inserted, error: insErr } = await supabase
-      .from("reservations")
-      .insert(insertRow)
-      .select("id, store_id, member_id, trainer_id, start_at, end_at, session_type, status, created_at")
-      .single();
+    const selectMemberFull =
+      "id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status, created_at";
+    const selectMemberLegacy =
+      "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status, created_at";
+
+    let inserted: Record<string, unknown> | null = null;
+    let insErr: { message?: string; code?: string } | null = null;
+    {
+      const first = await supabase.from("reservations").insert(insertRow).select(selectMemberFull).single();
+      inserted = first.data as Record<string, unknown> | null;
+      insErr = first.error;
+    }
+    if (insErr && /blocks_capacity|schema cache|Could not find/i.test(String((insErr as any)?.message ?? ""))) {
+      const row2 = { ...(insertRow as Record<string, unknown>) };
+      delete row2.blocks_capacity;
+      const second = await supabase.from("reservations").insert(row2 as any).select(selectMemberLegacy).single();
+      inserted = second.data as Record<string, unknown> | null;
+      insErr = second.error;
+    }
     if (insErr) {
       if ((insErr as any)?.code === "23505") return jsonResponse({ error: "既に予約されています" }, 409);
       return jsonResponse({ error: "予約の保存に失敗しました", detail: insErr.message }, 500);
     }
+    if (!inserted) {
+      return jsonResponse({ error: "予約の保存に失敗しました" }, 500);
+    }
 
-    // LINE通知（連携済みの場合のみ）
     try {
       const lineUserId = (member as any)?.line_user_id as string | null | undefined;
       if (lineUserId) {
         const token = tokenForStoreName(store.name ?? "");
-        const st = ((inserted as any)?.session_type as string | null | undefined) ?? session_type ?? "store";
+        const st = (String(inserted["session_type"] ?? "") as string | null | undefined) || session_type || "store";
         const sessionTypeNormalized: "store" | "online" = st === "online" ? "online" : "store";
         const text = messageForAdminCreate({
           storeName: store.name ?? "",
-          startAtUtcIso: inserted.start_at,
-          endAtUtcIso: inserted.end_at,
+          startAtUtcIso: String(inserted["start_at"] ?? ""),
+          endAtUtcIso: String(inserted["end_at"] ?? ""),
           sessionType: sessionTypeNormalized,
         });
         await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store.name ?? "", hasToken: Boolean(token) } });

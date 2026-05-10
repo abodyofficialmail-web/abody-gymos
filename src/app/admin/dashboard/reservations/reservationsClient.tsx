@@ -33,7 +33,9 @@ type ReservationRow = {
   trainer_id: string | null;
   trainer_name?: string;
   trainer_candidates?: string[];
-  member_id: string;
+  member_id: string | null;
+  guest_name?: string | null;
+  blocks_capacity?: boolean;
   member_code?: string;
   member_name?: string;
   session_type?: string | null;
@@ -42,6 +44,21 @@ type ReservationRow = {
   status: string;
   created_at: string;
 };
+
+/** 予約一覧に混ぜて表示するシフト休憩（APIと同一ソース） */
+type DayBreakItem = {
+  key: string;
+  store_id: string;
+  store_name: string;
+  trainer_name: string;
+  start_time: string;
+  end_time: string;
+  startMs: number;
+};
+
+type DayTimelineEntry =
+  | { kind: "reservation"; sort: number; r: ReservationRow }
+  | { kind: "break"; sort: number; b: DayBreakItem };
 
 type StoreTheme = {
   accent: string;
@@ -97,7 +114,17 @@ async function apiPost<T>(path: string, body: any): Promise<T> {
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as any)?.error ?? "保存に失敗しました");
+  if (!res.ok) {
+    const errMsg = (json as any)?.error ?? "保存に失敗しました";
+    const detail = (json as any)?.detail;
+    const detailMsg =
+      typeof detail === "string"
+        ? detail
+        : detail != null && typeof detail === "object"
+          ? JSON.stringify(detail)
+          : "";
+    throw new Error(detailMsg ? `${errMsg}: ${detailMsg}` : errMsg);
+  }
   return json as T;
 }
 
@@ -108,7 +135,17 @@ async function apiPatch<T>(path: string, body: any): Promise<T> {
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as any)?.error ?? "更新に失敗しました");
+  if (!res.ok) {
+    const errMsg = (json as any)?.error ?? "更新に失敗しました";
+    const detail = (json as any)?.detail;
+    const detailMsg =
+      typeof detail === "string"
+        ? detail
+        : detail != null && typeof detail === "object"
+          ? JSON.stringify(detail)
+          : "";
+    throw new Error(detailMsg ? `${errMsg}: ${detailMsg}` : errMsg);
+  }
   return json as T;
 }
 
@@ -139,6 +176,20 @@ export function ReservationsClient() {
   const [addSelectedSlot, setAddSelectedSlot] = useState<{ start_at: string; end_at: string } | null>(null);
   const [addSessionType, setAddSessionType] = useState<"store" | "online">("store");
   const [addErr, setAddErr] = useState<string | null>(null);
+
+  // 体験予約モーダル（休憩追加と同様、会員の予約追加とは別）
+  const [trialOpen, setTrialOpen] = useState(false);
+  const [trialErr, setTrialErr] = useState<string | null>(null);
+  const [trialStep, setTrialStep] = useState<"form" | "confirm">("form");
+  const [trialGuestName, setTrialGuestName] = useState("");
+  const [trialBlocks, setTrialBlocks] = useState(true);
+  const [trialTrainerId, setTrialTrainerId] = useState("");
+  const [trialTrainers, setTrialTrainers] = useState<Array<{ id: string; display_name: string; store_name?: string }> | null>(null);
+  const [trialStoreId, setTrialStoreId] = useState("");
+  const [trialDateYmd, setTrialDateYmd] = useState("");
+  const [trialStartTime, setTrialStartTime] = useState("10:00");
+  const [trialEndTime, setTrialEndTime] = useState("10:30");
+  const [trialSessionType, setTrialSessionType] = useState<"store" | "online">("store");
 
   // 予約変更モーダル
   const [editTarget, setEditTarget] = useState<ReservationRow | null>(null);
@@ -246,6 +297,17 @@ export function ReservationsClient() {
     const d = selectedYmd ?? todayYmd;
     if (!breakDateYmd) setBreakDateYmd(d);
   }, [selectedYmd, todayYmd, breakDateYmd]);
+
+  useEffect(() => {
+    if (!stores || stores.length === 0) return;
+    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    if (!trialStoreId && trialOpen) setTrialStoreId(defaultStoreId);
+  }, [stores, selectedStoreId, trialStoreId, trialOpen]);
+
+  useEffect(() => {
+    const d = selectedYmd ?? todayYmd;
+    if (trialOpen && !trialDateYmd) setTrialDateYmd(d);
+  }, [selectedYmd, todayYmd, trialOpen, trialDateYmd]);
 
   const openBreak = async () => {
     setBreakErr(null);
@@ -364,13 +426,45 @@ export function ReservationsClient() {
     setAddSelectedSlot(null);
     setAddSlots(null);
     setAddSessionType("store");
-    // store/date は既存stateを使う
   };
 
-  const fetchSlots = async (storeId: string, dateYmd: string) => {
-    const list = await apiGet<Array<{ start_at: string; end_at: string }>>(
-      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(storeId)}&date=${encodeURIComponent(dateYmd)}`
-    );
+  const openTrial = () => {
+    setTrialErr(null);
+    setTrialOpen(true);
+    setTrialStep("form");
+    setTrialGuestName("");
+    setTrialBlocks(true);
+    setTrialTrainerId("");
+    setTrialSessionType("store");
+    setTrialStartTime("10:00");
+    setTrialEndTime("10:30");
+    const sid =
+      selectedStoreId !== "all" && selectedStoreId
+        ? selectedStoreId
+        : (stores ?? []).find(Boolean)?.id ?? "";
+    setTrialStoreId(sid);
+    setTrialDateYmd(selectedYmd ?? todayYmd);
+  };
+
+  function buildTrialStartEndUtc(): { start_at: string; end_at: string } | null {
+    const ymd = trialDateYmd.trim();
+    const startDt = DateTime.fromFormat(`${ymd} ${trialStartTime.trim()}`, "yyyy-MM-dd HH:mm", { zone: TZ });
+    const endDt = DateTime.fromFormat(`${ymd} ${trialEndTime.trim()}`, "yyyy-MM-dd HH:mm", { zone: TZ });
+    if (!startDt.isValid || !endDt.isValid || endDt <= startDt) return null;
+    return { start_at: startDt.toUTC().toISO()!, end_at: endDt.toUTC().toISO()! };
+  }
+
+  const bumpTrialEndAfterStart = (startHHMM: string) => {
+    const startDt = DateTime.fromFormat(`2000-01-01 ${startHHMM.trim()}`, "yyyy-MM-dd HH:mm", { zone: TZ });
+    if (!startDt.isValid) return;
+    const endDt = startDt.plus({ minutes: 30 });
+    setTrialEndTime(endDt.toFormat("HH:mm"));
+  };
+
+  const fetchSlots = async (storeId: string, dateYmd: string, trainerId?: string) => {
+    const qs = new URLSearchParams({ store_id: storeId, date: dateYmd });
+    if (trainerId) qs.set("trainer_id", trainerId);
+    const list = await apiGet<Array<{ start_at: string; end_at: string }>>(`/api/booking-v2/available-slots?${qs.toString()}`);
     return list ?? [];
   };
 
@@ -399,8 +493,48 @@ export function ReservationsClient() {
     }
   };
 
+  useEffect(() => {
+    if (!trialOpen) {
+      setTrialTrainers(null);
+      return;
+    }
+    let cancelled = false;
+    apiGet<{ trainers: Array<{ id: string; display_name: string; store_name?: string }> }>(`/api/booking-v2/trainers?all=1`)
+      .then((d) => {
+        if (!cancelled) setTrialTrainers(d.trainers ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setTrialTrainers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trialOpen]);
+
+  const goTrialConfirm = () => {
+    if (!trialGuestName.trim()) {
+      setTrialErr("体験者名を入力してください");
+      return;
+    }
+    if (!trialTrainerId) {
+      setTrialErr("担当トレーナーを選択してください");
+      return;
+    }
+    if (!trialStoreId || !trialDateYmd) {
+      setTrialErr("店舗と日付を選択してください");
+      return;
+    }
+    const range = buildTrialStartEndUtc();
+    if (!range) {
+      setTrialErr("開始・終了時刻を正しく入力してください（終了は開始より後）");
+      return;
+    }
+    setTrialErr(null);
+    setTrialStep("confirm");
+  };
+
   const confirmAdd = async () => {
-    if (!selectedMember || !addSelectedSlot) {
+    if (!addSelectedSlot || !selectedMember) {
       setAddErr("会員と時間を選択してください");
       return;
     }
@@ -423,6 +557,33 @@ export function ReservationsClient() {
     }
   };
 
+  const confirmTrial = async () => {
+    const range = buildTrialStartEndUtc();
+    if (!range || !trialGuestName.trim() || !trialTrainerId) {
+      setTrialErr("入力が不足しています");
+      return;
+    }
+    setTrialErr(null);
+    setBusy(true);
+    try {
+      await apiPost("/api/admin/reservations", {
+        store_id: trialStoreId,
+        guest_name: trialGuestName.trim(),
+        trainer_id: trialTrainerId,
+        blocks_capacity: trialBlocks,
+        start_at: range.start_at,
+        end_at: range.end_at,
+        session_type: trialSessionType,
+      });
+      await refreshRows();
+      setTrialOpen(false);
+    } catch (e: any) {
+      setTrialErr(String(e?.message ?? "体験予約の追加に失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openEdit = async (r: ReservationRow) => {
     setEditErr(null);
     setEditTarget(r);
@@ -433,7 +594,8 @@ export function ReservationsClient() {
     setEditSelectedSlot(null);
     setBusy(true);
     try {
-      const slots = await fetchSlots(r.store_id, ymd);
+      const trainerFilter = r.member_id ? undefined : r.trainer_id ?? undefined;
+      const slots = await fetchSlots(r.store_id, ymd, trainerFilter);
       setEditSlots(slots);
     } catch (e: any) {
       setEditErr(String(e?.message ?? "空き枠の取得に失敗しました"));
@@ -451,7 +613,8 @@ export function ReservationsClient() {
     setEditSlots(null);
     setEditSelectedSlot(null);
     try {
-      const slots = await fetchSlots(editStoreId, editDateYmd);
+      const trainerFilter = editTarget.member_id ? undefined : editTarget.trainer_id ?? undefined;
+      const slots = await fetchSlots(editStoreId, editDateYmd, trainerFilter);
       setEditSlots(slots);
     } catch (e: any) {
       setEditErr(String(e?.message ?? "空き枠の取得に失敗しました"));
@@ -546,26 +709,45 @@ export function ReservationsClient() {
     return list.sort((a, b) => DateTime.fromISO(a.start_at).toMillis() - DateTime.fromISO(b.start_at).toMillis());
   }, [rows, selectedYmd]);
 
-  const breakDisplayLines = useMemo(() => {
-    if (!dayShiftsByStore || dayShiftsByStore.length === 0) return [];
-    const lines: { key: string; sort: string; text: string }[] = [];
+  const dayBreakItems = useMemo((): DayBreakItem[] => {
+    if (!selectedYmd || !dayShiftsByStore || dayShiftsByStore.length === 0) return [];
+    const out: DayBreakItem[] = [];
     for (const block of dayShiftsByStore) {
       for (const sh of block.shifts) {
         for (const br of sh.breaks ?? []) {
-          lines.push({
-            key: `${block.store_id}-${sh.id}-${br.id}`,
-            sort: `${br.start_time}-${block.store_id}-${sh.trainer_id}`,
-            text:
-              selectedStoreId === "all"
-                ? `${block.store_name} · ${sh.trainer_name || sh.trainer_id} ${br.start_time}〜${br.end_time}`
-                : `${sh.trainer_name || sh.trainer_id} ${br.start_time}〜${br.end_time}`,
+          const startDt = DateTime.fromFormat(`${selectedYmd} ${br.start_time}`, "yyyy-MM-dd HH:mm", { zone: TZ });
+          const startMs = startDt.isValid ? startDt.toMillis() : Number.MAX_SAFE_INTEGER;
+          out.push({
+            key: `break-${block.store_id}-${sh.id}-${br.id}`,
+            store_id: block.store_id,
+            store_name: block.store_name,
+            trainer_name: sh.trainer_name || sh.trainer_id,
+            start_time: br.start_time,
+            end_time: br.end_time,
+            startMs,
           });
         }
       }
     }
-    lines.sort((a, b) => a.sort.localeCompare(b.sort, "en"));
-    return lines;
-  }, [dayShiftsByStore, selectedStoreId]);
+    return out;
+  }, [dayShiftsByStore, selectedYmd]);
+
+  const dayTimeline = useMemo((): DayTimelineEntry[] => {
+    const entries: DayTimelineEntry[] = [];
+    for (const r of selectedDayRows) {
+      entries.push({ kind: "reservation", sort: DateTime.fromISO(r.start_at).toMillis(), r });
+    }
+    for (const b of dayBreakItems) {
+      entries.push({ kind: "break", sort: b.startMs, b });
+    }
+    entries.sort((a, b) => {
+      const d = a.sort - b.sort;
+      if (d !== 0) return d;
+      if (a.kind !== b.kind) return a.kind === "break" ? -1 : 1;
+      return 0;
+    });
+    return entries;
+  }, [selectedDayRows, dayBreakItems]);
 
   return (
     <div className="space-y-3">
@@ -790,7 +972,7 @@ export function ReservationsClient() {
             <div className="text-sm font-bold text-slate-900">
               {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={openBreak}
@@ -802,36 +984,52 @@ export function ReservationsClient() {
               </button>
               <button
                 type="button"
+                onClick={openTrial}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-950 hover:bg-amber-100"
+                disabled={busy || selectedStoreId === "all"}
+                title={selectedStoreId === "all" ? "体験予約は店舗を選択してから実行してください" : ""}
+              >
+                ＋ 体験予約
+              </button>
+              <button
+                type="button"
                 onClick={openAdd}
                 className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
               >
-                ＋ 予約追加
+                ＋ 会員予約
               </button>
             </div>
           </div>
 
-          {dayShiftsByStore === null ? (
-            <div className="text-xs text-slate-500">休憩情報を読み込み中…</div>
-          ) : breakDisplayLines.length > 0 ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 shadow-sm">
-              <div className="text-xs font-bold text-amber-950">トレーナー休憩</div>
-              <ul className="mt-2 space-y-1.5 text-sm text-amber-950">
-                {breakDisplayLines.map((line) => (
-                  <li key={line.key} className="pl-1">
-                    {line.text}
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {rows === null || dayShiftsByStore === null ? (
+            <div className="text-sm text-slate-600">読み込み中…</div>
           ) : null}
 
-          {rows === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-          {rows !== null && selectedDayRows.length === 0 ? (
-            <div className="text-sm text-slate-600">この日の予約はありません。</div>
+          {rows !== null && dayShiftsByStore !== null && dayTimeline.length === 0 ? (
+            <div className="text-sm text-slate-600">この日の予約・休憩はありません。</div>
           ) : null}
 
           <div className="grid gap-2">
-            {selectedDayRows.map((r) => {
+            {dayTimeline.map((entry) => {
+              if (entry.kind === "break") {
+                const b = entry.b;
+                return (
+                  <div
+                    key={b.key}
+                    className="rounded-2xl border border-amber-200 bg-amber-50/90 p-4 shadow-sm"
+                    style={{ borderLeftWidth: 6, borderLeftColor: "#F59E0B" }}
+                  >
+                    <div className="text-sm font-bold text-amber-950">
+                      {b.start_time}〜{b.end_time}
+                    </div>
+                    <div className="mt-1 text-xs font-semibold text-amber-950">☕ トレーナー休憩</div>
+                    <div className="mt-1 text-xs text-amber-900">
+                      {selectedStoreId === "all" ? `${b.trainer_name} · ${b.store_name}` : b.trainer_name}
+                    </div>
+                  </div>
+                );
+              }
+              const r = entry.r;
               const sa = reservationAccent(stores, r);
               const trainerText =
                 r.trainer_name ||
@@ -848,13 +1046,27 @@ export function ReservationsClient() {
                         {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("HH:mm")}〜
                         {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
                       </div>
-                      <div className="mt-1 text-xs font-semibold text-slate-700">{sessionTypeBadge(r.session_type)}</div>
+                      <div className="mt-1 text-xs font-semibold text-slate-700">
+                        {sessionTypeBadge(r.session_type)}
+                        {!r.member_id ? (
+                          <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">体験</span>
+                        ) : null}
+                        {r.blocks_capacity === false ? (
+                          <span className="ml-2 rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-800">枠未確保</span>
+                        ) : null}
+                      </div>
                       <div className="mt-1 text-xs text-slate-500">
                         トレーナー: {trainerText} / 店舗: {r.store_name || r.store_id}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        会員: {r.member_code || r.member_id}
-                        {r.member_name ? `（${r.member_name}）` : ""}
+                        {r.member_id ? (
+                          <>
+                            会員: {r.member_code || r.member_id}
+                            {r.member_name ? `（${r.member_name}）` : ""}
+                          </>
+                        ) : (
+                          <>体験: {String(r.guest_name ?? "").trim() || "（名前なし）"}</>
+                        )}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -877,12 +1089,14 @@ export function ReservationsClient() {
                       >
                         キャンセル
                       </button>
-                      <a
-                        href={`/admin/dashboard/members/${r.member_id}`}
-                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                      >
-                        カルテを見る
-                      </a>
+                      {r.member_id ? (
+                        <a
+                          href={`/admin/dashboard/members/${r.member_id}`}
+                          className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                        >
+                          カルテを見る
+                        </a>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -897,7 +1111,7 @@ export function ReservationsClient() {
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
           <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-lg">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-bold text-slate-900">予約追加</div>
+              <div className="text-sm font-bold text-slate-900">会員予約を追加</div>
               <button
                 type="button"
                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
@@ -913,7 +1127,7 @@ export function ReservationsClient() {
             <div className="mt-4">
               <div className="text-xs font-semibold text-slate-700">ステップ</div>
               <div className="mt-1 text-sm text-slate-800">
-                {addStep === "member" ? "会員選択" : addStep === "slot" ? "店舗・日時選択" : "確認"}
+                {addStep === "member" ? "会員を選ぶ" : addStep === "slot" ? "店舗・日時・枠" : "確認"}
               </div>
             </div>
 
@@ -1145,6 +1359,203 @@ export function ReservationsClient() {
         </div>
       ) : null}
 
+      {/* 体験予約モーダル（休憩追加と同様に別操作） */}
+      {trialOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-lg">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-900">体験予約を追加</div>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                onClick={() => setTrialOpen(false)}
+                disabled={busy}
+              >
+                閉じる
+              </button>
+            </div>
+
+            {trialErr ? (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{trialErr}</div>
+            ) : null}
+
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-slate-700">ステップ</div>
+              <div className="mt-1 text-sm text-slate-800">{trialStep === "form" ? "日時・内容を入力" : "確認"}</div>
+            </div>
+
+            {trialStep === "form" ? (
+              <div className="mt-4 space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">店舗（開催店舗）</div>
+                    <select
+                      value={trialStoreId}
+                      onChange={(e) => {
+                        setTrialStoreId(e.target.value);
+                        setTrialErr(null);
+                      }}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    >
+                      {(stores ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">日付</div>
+                    <input
+                      type="date"
+                      value={trialDateYmd}
+                      onChange={(e) => setTrialDateYmd(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">開始時刻</div>
+                    <input
+                      type="time"
+                      value={trialStartTime}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTrialStartTime(v);
+                        bumpTrialEndAfterStart(v);
+                        setTrialErr(null);
+                      }}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">終了時刻</div>
+                    <input
+                      type="time"
+                      value={trialEndTime}
+                      onChange={(e) => {
+                        setTrialEndTime(e.target.value);
+                        setTrialErr(null);
+                      }}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">体験者名（表示名）</div>
+                  <input
+                    value={trialGuestName}
+                    onChange={(e) => setTrialGuestName(e.target.value)}
+                    placeholder="例）山田 太郎（お試し）"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">担当トレーナー（全店舗から選択）</div>
+                  <select
+                    value={trialTrainerId}
+                    onChange={(e) => setTrialTrainerId(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  >
+                    <option value="">選択してください</option>
+                    {(trialTrainers ?? []).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.display_name}
+                      </option>
+                    ))}
+                  </select>
+                  {trialTrainers && trialTrainers.length === 0 ? (
+                    <div className="mt-1 text-xs text-amber-700">アクティブなトレーナーが取得できませんでした。</div>
+                  ) : null}
+                </div>
+                <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <input type="checkbox" checked={trialBlocks} onChange={(e) => setTrialBlocks(e.target.checked)} className="mt-1" />
+                  <span>
+                    <span className="text-sm font-semibold text-slate-900">公開予約の枠を確保する</span>
+                    <span className="mt-0.5 block text-xs text-slate-600">
+                      オフにするとメモのみ（空き枠計算に載りません）。シフト外の時間でも登録できます。
+                    </span>
+                  </span>
+                </label>
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">セッション種別</div>
+                  <select
+                    value={trialSessionType}
+                    onChange={(e) => setTrialSessionType((e.target.value as any) === "online" ? "online" : "store")}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
+                  >
+                    <option value="store">🏠 店舗</option>
+                    <option value="online">💻 オンライン</option>
+                  </select>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={goTrialConfirm}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                    disabled={busy || !trialGuestName.trim() || !trialTrainerId}
+                  >
+                    内容確認へ →
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {trialStep === "confirm" ? (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold text-slate-700">この内容で体験予約を確定しますか？</div>
+                  <div className="mt-2 text-sm text-slate-900">
+                    <div>店舗：{(stores ?? []).find((s) => s.id === trialStoreId)?.name ?? trialStoreId}</div>
+                    <div>
+                      日時：
+                      {(() => {
+                        const r = buildTrialStartEndUtc();
+                        if (!r) return "—";
+                        return `${DateTime.fromISO(r.start_at).setZone(TZ).toFormat("M/d（ccc） HH:mm")}〜${DateTime.fromISO(r.end_at)
+                          .setZone(TZ)
+                          .toFormat("HH:mm")}`;
+                      })()}
+                    </div>
+                    <div>体験者：{trialGuestName.trim()}</div>
+                    <div className="text-xs text-slate-600">
+                      担当：{(trialTrainers ?? []).find((t) => t.id === trialTrainerId)?.display_name ?? "—"} / 枠を確保:{" "}
+                      {trialBlocks ? "はい" : "いいえ"}
+                    </div>
+                    <div>セッション種別：{trialSessionType === "online" ? "オンライン" : "店舗"}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-600">
+                    会員向けLINE通知は送信されません。トレーナー給与には体験分の時間が時給に加算されます。
+                  </div>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrialStep("form");
+                      setTrialErr(null);
+                    }}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    disabled={busy}
+                  >
+                    戻る
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmTrial}
+                    className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                    disabled={busy}
+                  >
+                    確定
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {/* 予約変更モーダル */}
       {editTarget ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
@@ -1173,8 +1584,14 @@ export function ReservationsClient() {
                   {DateTime.fromISO(editTarget.end_at).setZone(TZ).toFormat("HH:mm")}
                 </div>
                 <div>
-                  会員：{editTarget.member_code || editTarget.member_id}
-                  {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                  {editTarget.member_id ? (
+                    <>
+                      会員：{editTarget.member_code || editTarget.member_id}
+                      {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                    </>
+                  ) : (
+                    <>体験：{String(editTarget.guest_name ?? "").trim() || "—"}</>
+                  )}
                 </div>
               </div>
             </div>
@@ -1184,7 +1601,10 @@ export function ReservationsClient() {
                 <div className="text-xs font-semibold text-slate-700">店舗</div>
                 <select
                   value={editStoreId}
-                  onChange={(e) => setEditStoreId(e.target.value)}
+                  onChange={(e) => {
+                    setEditStoreId(e.target.value);
+                    setEditSelectedSlot(null);
+                  }}
                   className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
                   disabled={busy}
                 >
@@ -1261,11 +1681,19 @@ export function ReservationsClient() {
                     : "未選択"}
                 </div>
                 <div>
-                  会員：{editTarget.member_code || editTarget.member_id}
-                  {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                  {editTarget.member_id ? (
+                    <>
+                      会員：{editTarget.member_code || editTarget.member_id}
+                      {editTarget.member_name ? `（${editTarget.member_name}）` : ""}
+                    </>
+                  ) : (
+                    <>体験：{String(editTarget.guest_name ?? "").trim() || "—"}</>
+                  )}
                 </div>
               </div>
-              <div className="mt-2 text-xs text-slate-600">確定後、LINE連携済みの会員には変更LINEを送信します。</div>
+              <div className="mt-2 text-xs text-slate-600">
+                {editTarget.member_id ? "確定後、LINE連携済みの会員には変更LINEを送信します。" : "体験予約のため会員向けLINEは送信されません。"}
+              </div>
             </div>
 
             <div className="mt-4 flex justify-end gap-2">

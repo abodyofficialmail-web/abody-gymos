@@ -100,8 +100,18 @@ async function replyMessage(token: string, replyToken: string, text: string) {
 }
 
 function normalizeMemberCodeInput(raw: string): string | null {
-  const code = raw.trim().toUpperCase();
+  // NFKC: 全角英数字→半角など（コピペ・IME由来の表記ゆれを吸収）
+  const nfkc = raw.normalize("NFKC").trim();
+  const stripped = nfkc.replace(/[\u200B-\u200D\uFEFF]/g, "");
+  const code = stripped.toUpperCase();
   return code.length > 0 ? code : null;
+}
+
+/** 会員番号らしい英数字か（雑談等では DB を検索しない） */
+function isPlausibleMemberCode(code: string): boolean {
+  if (code.length < 4 || code.length > 24) return false;
+  if (!/^[A-Z0-9]+$/.test(code)) return false;
+  return /[A-Z]/.test(code) && /[0-9]/.test(code);
 }
 
 type LineSessionRow = Database["public"]["Tables"]["line_sessions"]["Row"];
@@ -221,13 +231,12 @@ export async function POST(request: Request) {
       // セッション取得
       const session = await getSession(supabase, userId);
 
-      // ① 確認ステップ
+      // ① 確認ステップ（正しい会員番号通過後のみこのセッションに入る。案内は返さず、完了時だけ返信）
       if (session?.status === "confirm") {
         const normalized = text.trim();
         if (normalized === "はい") {
           if (!session.temp_member_id) {
             await clearSession(supabase, userId);
-            await replyMessage(replyTokenForChannel, replyToken, "確認情報が失われました。もう一度会員番号を入力してください。");
             continue;
           }
 
@@ -239,12 +248,10 @@ export async function POST(request: Request) {
           if (memErr) throw memErr;
           if (!member || !member.is_active) {
             await clearSession(supabase, userId);
-            await replyMessage(replyTokenForChannel, replyToken, "会員が見つかりません。もう一度会員番号を入力してください。");
             continue;
           }
           if (member.line_user_id && member.line_user_id !== userId) {
             await clearSession(supabase, userId);
-            await replyMessage(replyTokenForChannel, replyToken, "この会員は別のLINEアカウントと連携済みです。店舗へお問い合わせください。");
             continue;
           }
 
@@ -256,34 +263,30 @@ export async function POST(request: Request) {
 
         if (normalized === "いいえ" || normalized === "キャンセル") {
           await clearSession(supabase, userId);
-          await replyMessage(replyTokenForChannel, replyToken, "キャンセルしました。会員番号を入力してください。");
           continue;
         }
 
-        await replyMessage(
-          replyTokenForChannel,
-          replyToken,
-          "「はい」で確定、「いいえ」でキャンセルできます。\n会員番号を変更したい場合は「いいえ」と返信してください。"
-        );
         continue;
       }
 
       // ② 会員番号入力（trim + uppercase の完全一致で検索）
-      // 連携済みの人が通常トークを送った場合は「会員番号が見つかりません」を返さない（無反応でOK）
+      // 連携済みの人が通常トークを送った場合は無反応（リプライしない）
       const linkedMember = await findMemberByLineUserId(supabase, userId);
       if (linkedMember) {
         continue;
       }
       const memberCode = normalizeMemberCodeInput(text);
       if (!memberCode) {
-        await replyMessage(replyTokenForChannel, replyToken, "会員番号を入力してください");
+        continue;
+      }
+
+      if (!isPlausibleMemberCode(memberCode)) {
         continue;
       }
 
       const member = await findMemberByMemberCode(supabase, memberCode);
       console.log("member検索結果", member);
       if (!member) {
-        await replyMessage(replyTokenForChannel, replyToken, "会員番号が見つかりません");
         continue;
       }
 

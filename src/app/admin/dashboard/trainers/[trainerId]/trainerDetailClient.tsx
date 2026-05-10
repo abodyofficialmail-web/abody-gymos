@@ -42,7 +42,8 @@ type ReservationRow = {
   store_name?: string;
   trainer_id: string | null;
   trainer_name?: string;
-  member_id: string;
+  member_id: string | null;
+  guest_name?: string | null;
   member_code?: string;
   start_at: string;
   end_at: string;
@@ -223,11 +224,43 @@ export function TrainerDetailClient({ trainerId }: { trainerId: string }) {
     });
   }, [shifts, draftHourly, draftPass, transportCosts, expenses, breaksByShiftId]);
 
-  const totalMinutes = displayPayroll.totalMinutes;
+  /** 体験・ゲスト予約（member_id なし）のセッション時間を時給に加算（シフト外でも発生） */
+  const trialReservationAddon = useMemo(() => {
+    let minutes = 0;
+    for (const r of reservations ?? []) {
+      if (String(r.status).toLowerCase() === "cancelled") continue;
+      if (r.member_id) continue;
+      const start = DateTime.fromISO(r.start_at);
+      const end = DateTime.fromISO(r.end_at);
+      if (!start.isValid || !end.isValid) continue;
+      const m = end.diff(start, "minutes").minutes;
+      if (m > 0) minutes += m;
+    }
+    const hr = Number.isFinite(Number(draftHourly)) ? Number(draftHourly) : 0;
+    const workYen = Math.round((minutes / 60) * hr);
+    return { minutes, workYen };
+  }, [reservations, draftHourly]);
+
+  const mergedPayroll = useMemo(() => {
+    const p = displayPayroll;
+    const add = trialReservationAddon.workYen;
+    return {
+      ...p,
+      trialSessionMinutes: trialReservationAddon.minutes,
+      trialSessionWorkYen: trialReservationAddon.workYen,
+      totalMinutes: p.totalMinutes + trialReservationAddon.minutes,
+      workYen: p.workYen + add,
+      totalYen: p.totalYen + add,
+    };
+  }, [displayPayroll, trialReservationAddon]);
+
+  const totalMinutes = mergedPayroll.totalMinutes;
   const hoursLabel =
     totalMinutes % 60 === 0
       ? `${Math.floor(totalMinutes / 60)}時間`
       : `${Math.floor(totalMinutes / 60)}時間${totalMinutes % 60}分`;
+
+  const displayPayrollTotals = mergedPayroll;
 
   async function saveSettings() {
     setSaveBusy(true);
@@ -681,18 +714,28 @@ export function TrainerDetailClient({ trainerId }: { trainerId: string }) {
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs text-slate-500">給与（{month}）</div>
-          <div className="mt-2 text-2xl font-bold text-slate-900">¥{displayPayroll.totalYen.toLocaleString("ja-JP")}</div>
+          <div className="mt-2 text-2xl font-bold text-slate-900">¥{displayPayrollTotals.totalYen.toLocaleString("ja-JP")}</div>
           <ul className="mt-3 space-y-1 text-xs text-slate-600">
             <li>
-              ・勤務：¥{displayPayroll.workYen.toLocaleString("ja-JP")}（{hoursLabel} × ¥
+              ・勤務（シフト）：¥{displayPayroll.workYen.toLocaleString("ja-JP")}
+            </li>
+            {trialReservationAddon.minutes > 0 ? (
+              <li>
+                ・体験セッション加算：¥{trialReservationAddon.workYen.toLocaleString("ja-JP")}（
+                {Math.floor(trialReservationAddon.minutes / 60)}h{trialReservationAddon.minutes % 60}m × ¥
+                {displayPayroll.hourlyRate.toLocaleString("ja-JP")}）
+              </li>
+            ) : null}
+            <li className="text-slate-800 font-semibold">
+              ・勤務合計：¥{displayPayrollTotals.workYen.toLocaleString("ja-JP")}（{hoursLabel} × ¥
               {displayPayroll.hourlyRate.toLocaleString("ja-JP")}）
             </li>
             <li>
-              ・交通費：¥{displayPayroll.transportYen.toLocaleString("ja-JP")}
+              ・交通費：¥{displayPayrollTotals.transportYen.toLocaleString("ja-JP")}
             </li>
-            <li>・経費：¥{displayPayroll.expensesYen.toLocaleString("ja-JP")}</li>
-            <li>・ボーナス：¥{displayPayroll.bonusYen.toLocaleString("ja-JP")}</li>
-            <li>・定期：¥{displayPayroll.passYen.toLocaleString("ja-JP")}</li>
+            <li>・経費：¥{displayPayrollTotals.expensesYen.toLocaleString("ja-JP")}</li>
+            <li>・ボーナス：¥{displayPayrollTotals.bonusYen.toLocaleString("ja-JP")}</li>
+            <li>・定期：¥{displayPayrollTotals.passYen.toLocaleString("ja-JP")}</li>
           </ul>
         </div>
       </div>
@@ -738,7 +781,12 @@ export function TrainerDetailClient({ trainerId }: { trainerId: string }) {
                 {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
               </div>
               <div className="text-xs text-slate-500">
-                {r.member_code ? `会員: ${r.member_code}` : `member_id: ${r.member_id}`} / {r.store_name ?? r.store_id}
+                {r.member_id
+                  ? r.member_code
+                    ? `会員: ${r.member_code}`
+                    : `member_id: ${r.member_id}`
+                  : `体験: ${String(r.guest_name ?? "").trim() || "—"}`}{" "}
+                / {r.store_name ?? r.store_id}
               </div>
             </div>
           ))}

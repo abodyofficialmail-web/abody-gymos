@@ -97,6 +97,64 @@ function parseTimeToMinutesLoose(t: string): number {
   return h * 60 + m;
 }
 
+type ReservationRowForAdmin = {
+  id: string;
+  store_id: string;
+  member_id: string | null;
+  trainer_id: string | null;
+  guest_name: string | null;
+  blocks_capacity?: boolean;
+  start_at: string;
+  end_at: string;
+  session_type: string | null;
+  status: string | null;
+};
+
+function isMissingColumnError(e: any, column: string): boolean {
+  const msg = String(e?.message ?? e ?? "");
+  return msg.includes(`column`) && msg.includes(column);
+}
+
+async function fetchReservationForAdmin(
+  supabase: SupabaseClient<Database>,
+  id: string
+): Promise<{ data: ReservationRowForAdmin | null; error: any | null }> {
+  // 新旧スキーマ差（blocks_capacity など）を吸収する
+  const qA = await (supabase as any)
+    .from("reservations")
+    .select("id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!qA?.error) return { data: qA.data ?? null, error: null };
+
+  // guest_name / blocks_capacity のどちらか（または両方）が無い環境向けフォールバック
+  if (isMissingColumnError(qA.error, "blocks_capacity") || isMissingColumnError(qA.error, "guest_name")) {
+    const qB = await (supabase as any)
+      .from("reservations")
+      .select("id, store_id, member_id, trainer_id, guest_name, start_at, end_at, session_type, status")
+      .eq("id", id)
+      .maybeSingle();
+    if (!qB?.error) {
+      return { data: { ...(qB.data ?? {}), blocks_capacity: true } as any, error: null };
+    }
+
+    // guest_name が無いDBでは qB も失敗するので、guest_name を外して再試行
+    if (isMissingColumnError(qB.error, "guest_name")) {
+      const qC = await (supabase as any)
+        .from("reservations")
+        .select("id, store_id, member_id, trainer_id, start_at, end_at, session_type, status")
+        .eq("id", id)
+        .maybeSingle();
+      if (qC?.error) return { data: null, error: qC.error };
+      return { data: { ...(qC.data ?? {}), guest_name: null, blocks_capacity: true } as any, error: null };
+    }
+
+    return { data: null, error: qB.error };
+  }
+
+  return { data: null, error: qA.error };
+}
+
 async function fetchShiftsForCapacityCheck(params: {
   supabase: SupabaseClient<Database>;
   store_id: string;
@@ -175,6 +233,40 @@ async function fetchShiftsForCapacityCheck(params: {
     .filter((r) => r.trainer_id && Number.isFinite(r.start_min) && Number.isFinite(r.end_min) && r.end_min > r.start_min);
 }
 
+async function fetchOverlappedReservationsForCapacityCheck(params: {
+  supabase: SupabaseClient<Database>;
+  store_id: string;
+  start_at: string;
+  end_at: string;
+}): Promise<{ data: Array<{ id: string; start_at: string; end_at: string }> | null; error: any | null }> {
+  const { supabase, store_id, start_at, end_at } = params;
+
+  const qA = await (supabase as any)
+    .from("reservations")
+    .select("id, start_at, end_at")
+    .eq("store_id", store_id)
+    .eq("blocks_capacity", true)
+    .lt("start_at", end_at)
+    .gt("end_at", start_at)
+    .neq("status", "cancelled");
+  if (!qA?.error) return { data: qA.data ?? [], error: null };
+
+  // blocks_capacity が無いDBでは全予約が枠を潰す前提で数える（= フィルタを外す）
+  if (isMissingColumnError(qA.error, "blocks_capacity")) {
+    const qB = await (supabase as any)
+      .from("reservations")
+      .select("id, start_at, end_at")
+      .eq("store_id", store_id)
+      .lt("start_at", end_at)
+      .gt("end_at", start_at)
+      .neq("status", "cancelled");
+    if (qB?.error) return { data: null, error: qB.error };
+    return { data: qB.data ?? [], error: null };
+  }
+
+  return { data: null, error: qA.error };
+}
+
 export async function PATCH(request: Request, ctx: { params: { reservationId: string } }) {
   try {
     const raw = await request.json().catch(() => null);
@@ -183,29 +275,61 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
 
     const supabase = createSupabaseServiceClient();
 
-    const { data: cur, error: curErr } = await (supabase as any)
-      .from("reservations")
-      .select("id, store_id, member_id, start_at, end_at, session_type, status")
-      .eq("id", ctx.params.reservationId)
-      .maybeSingle();
+    const { data: cur, error: curErr } = await fetchReservationForAdmin(supabase, ctx.params.reservationId);
     if (curErr) return jsonResponse({ error: "予約の取得に失敗しました", detail: curErr.message }, 500);
     if (!cur) return jsonResponse({ error: "予約が見つかりません" }, 404);
 
-    const { data: member, error: memberErr } = await (supabase as any)
-      .from("members")
-      .select("id, member_code, name, is_active, line_user_id")
-      .eq("id", cur.member_id)
-      .maybeSingle();
-    if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
+    let member: { id: string; member_code: string | null; name: string | null; is_active: boolean | null; line_user_id: string | null } | null =
+      null;
+    if (cur.member_id) {
+      const { data: m, error: memberErr } = await (supabase as any)
+        .from("members")
+        .select("id, member_code, name, is_active, line_user_id")
+        .eq("id", cur.member_id)
+        .maybeSingle();
+      if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
+      if (!m || !m.is_active) return jsonResponse({ error: "会員が見つかりません" }, 404);
+      member = m;
+    }
 
     if (parsed.data.action === "cancel") {
       const { data: cancelled, error: upErr } = await (supabase as any)
         .from("reservations")
         .update({ status: "cancelled", updated_at: new Date().toISOString() })
         .eq("id", ctx.params.reservationId)
-        .select("id, store_id, member_id, start_at, end_at, session_type, status")
+        .select("id, store_id, member_id, trainer_id, guest_name, start_at, end_at, session_type, status")
         .maybeSingle();
-      if (upErr) return jsonResponse({ error: "キャンセルに失敗しました", detail: upErr.message }, 500);
+      if (upErr) {
+        // guest_name が無いDB向けフォールバック
+        if (isMissingColumnError(upErr, "guest_name")) {
+          const q2 = await (supabase as any)
+            .from("reservations")
+            .update({ status: "cancelled", updated_at: new Date().toISOString() })
+            .eq("id", ctx.params.reservationId)
+            .select("id, store_id, member_id, trainer_id, start_at, end_at, session_type, status")
+            .maybeSingle();
+          if (q2?.error) return jsonResponse({ error: "キャンセルに失敗しました", detail: q2.error.message }, 500);
+          if (!q2?.data) return jsonResponse({ error: "予約が見つかりません" }, 404);
+
+          const cancelled2 = { ...(q2.data ?? {}), guest_name: null } as any;
+
+          try {
+            const lineUserId = (member as any)?.line_user_id as string | null | undefined;
+            if (lineUserId) {
+              const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", cancelled2.store_id).maybeSingle();
+              const token = tokenForStoreName(store?.name ?? "");
+              const text = messageForAdminCancel({ storeName: store?.name ?? "", startAtUtcIso: cancelled2.start_at, endAtUtcIso: cancelled2.end_at });
+              await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+            }
+          } catch (e) {
+            console.error("LINE push unexpected error", e);
+          }
+
+          return jsonResponse({ reservation: cancelled2 }, 200);
+        }
+
+        return jsonResponse({ error: "キャンセルに失敗しました", detail: upErr.message }, 500);
+      }
       if (!cancelled) return jsonResponse({ error: "予約が見つかりません" }, 404);
 
       try {
@@ -229,7 +353,8 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     const end_at = parsed.data.end_at ?? cur.end_at;
     const session_type = parsed.data.session_type ?? cur.session_type ?? "store";
 
-    // 容量チェック（自分自身の枠は除外して数える）
+    const blocksForCapacity = Boolean((cur as any).blocks_capacity ?? true);
+
     {
       const newStart = dayjs(start_at).tz("Asia/Tokyo");
       const newEnd = dayjs(end_at).tz("Asia/Tokyo");
@@ -241,28 +366,40 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
       }
 
       const shifts = await fetchShiftsForCapacityCheck({ supabase, store_id, dateYmd });
-      const availableTrainerSet = new Set<string>();
-      for (const s of shifts) {
-        if (s.is_break) continue;
-        if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
-      }
-      const capacity = availableTrainerSet.size;
-      if (capacity === 0) return jsonResponse({ error: "この時間は予約できません" }, 409);
+      const tid = (cur as any).trainer_id as string | null | undefined;
+      const isTrialReservation = !cur.member_id || Boolean(String((cur as any).guest_name ?? "").trim());
 
-      const { data: overlapped, error: ovErr } = await (supabase as any)
-        .from("reservations")
-        .select("id, start_at, end_at")
-        .eq("store_id", store_id)
-        .lt("start_at", end_at)
-        .gt("end_at", start_at)
-        .neq("status", "cancelled");
-      if (ovErr) return jsonResponse({ error: "予約状況の確認に失敗しました", detail: ovErr.message }, 500);
-      const bookedCount = (overlapped ?? []).filter((r: any) => String(r.id) !== String(cur.id)).length;
-      if (bookedCount >= capacity) return jsonResponse({ error: "この時間は予約できません" }, 409);
+      if (tid && !isTrialReservation) {
+        const trainerCovers = shifts.some(
+          (s) => s.trainer_id === tid && !s.is_break && s.start_min <= startMin && s.end_min >= endMin
+        );
+        if (!trainerCovers) {
+          return jsonResponse({ error: "この時間は担当トレーナーのシフト外です" }, 409);
+        }
+      }
+
+      if (blocksForCapacity) {
+        const availableTrainerSet = new Set<string>();
+        for (const s of shifts) {
+          if (s.is_break) continue;
+          if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
+        }
+        const capacity = availableTrainerSet.size;
+        if (capacity === 0) return jsonResponse({ error: "この時間は予約できません" }, 409);
+
+        const { data: overlapped, error: ovErr } = await fetchOverlappedReservationsForCapacityCheck({
+          supabase,
+          store_id,
+          start_at,
+          end_at,
+        });
+        if (ovErr) return jsonResponse({ error: "予約状況の確認に失敗しました", detail: ovErr.message }, 500);
+        const bookedCount = (overlapped ?? []).filter((r: any) => String(r.id) !== String(cur.id)).length;
+        if (bookedCount >= capacity) return jsonResponse({ error: "この時間は予約できません" }, 409);
+      }
     }
 
-    // 会員の重複予約チェック（自分自身は除外）
-    {
+    if (cur.member_id) {
       const { data: memberOverlaps, error } = await (supabase as any)
         .from("reservations")
         .select("id")
@@ -285,9 +422,51 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         updated_at: new Date().toISOString(),
       })
       .eq("id", ctx.params.reservationId)
-      .select("id, store_id, member_id, start_at, end_at, session_type, status")
+      .select("id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status")
       .maybeSingle();
-    if (upErr) return jsonResponse({ error: "予約変更に失敗しました", detail: upErr.message }, 500);
+    if (upErr) {
+      // blocks_capacity / guest_name が無いDB向けフォールバック
+      if (isMissingColumnError(upErr, "blocks_capacity") || isMissingColumnError(upErr, "guest_name")) {
+        const q2 = await (supabase as any)
+          .from("reservations")
+          .update({
+            store_id,
+            start_at,
+            end_at,
+            session_type,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", ctx.params.reservationId)
+          .select("id, store_id, member_id, trainer_id, start_at, end_at, session_type, status")
+          .maybeSingle();
+        if (q2?.error) return jsonResponse({ error: "予約変更に失敗しました", detail: q2.error.message }, 500);
+        if (!q2?.data) return jsonResponse({ error: "予約が見つかりません" }, 404);
+        const updated2 = { ...(q2.data ?? {}), guest_name: null, blocks_capacity: true } as any;
+
+        try {
+          const lineUserId = (member as any)?.line_user_id as string | null | undefined;
+          if (lineUserId) {
+            const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", updated2.store_id).maybeSingle();
+            const token = tokenForStoreName(store?.name ?? "");
+            const st = String(updated2.session_type ?? "store");
+            const sessionTypeNormalized: "store" | "online" = st === "online" ? "online" : "store";
+            const text = messageForAdminReschedule({
+              storeName: store?.name ?? "",
+              startAtUtcIso: updated2.start_at,
+              endAtUtcIso: updated2.end_at,
+              sessionType: sessionTypeNormalized,
+            });
+            await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+          }
+        } catch (e) {
+          console.error("LINE push unexpected error", e);
+        }
+
+        return jsonResponse({ reservation: updated2 }, 200);
+      }
+
+      return jsonResponse({ error: "予約変更に失敗しました", detail: upErr.message }, 500);
+    }
     if (!updated) return jsonResponse({ error: "予約が見つかりません" }, 404);
 
     try {
