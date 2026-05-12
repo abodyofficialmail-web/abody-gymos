@@ -93,6 +93,7 @@ SAK042｜楠田｜｜skyred0109@gmail.com
 SAK043｜森下樹｜｜1212.pooh@gmail.com
 SAK044｜安田宏子｜｜xxxpeace924@icloud.com
 SAK046｜山口｜｜
+SAK048｜林晃司｜｜hako13974268@gmail.com
 
 ON001｜今井浩美｜｜hiro35.mtkh@docomo.ne.jp
 ZAI001｜川畠絢子｜｜ao0128ao@gmail.com
