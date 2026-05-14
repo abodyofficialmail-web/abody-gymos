@@ -56,6 +56,7 @@ UEN042｜井上昌彦｜｜masahiko.inoue1129@gmail.com
 UEN043｜梅本｜｜
 UEN045｜古谷優希｜｜yuki23.kotafuru@gmail.com
 UEN047｜小谷昌吾｜｜hoseishogo@icloud.com
+UEN048｜田中晃｜｜at85029148@yahoo.co.jp
 
 SAK001｜堤｜｜pirm@yahoo.co.jp
 SAK002｜林芳男｜｜tarutokun.yh@gmail.com
