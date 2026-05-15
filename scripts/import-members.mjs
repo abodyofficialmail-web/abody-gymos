@@ -59,6 +59,7 @@ UEN047｜小谷昌吾｜｜hoseishogo@icloud.com
 UEN048｜田中晃｜｜at85029148@yahoo.co.jp
 UEN049｜末永悠帆｜｜mus.y0116@gmail.com
 UEN050｜福田翔吾｜｜shogo.f929@icloud.com
+UEN051｜田村修都｜｜t.syuto0731@gmail.com
 
 SAK001｜堤｜｜pirm@yahoo.co.jp
 SAK002｜林芳男｜｜tarutokun.yh@gmail.com
