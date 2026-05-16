@@ -21,6 +21,9 @@ EBI023｜米須なつき｜｜mekealoha.mermaid.lino.elsa.laki9@gmail.com
 EBI024｜福内皇斗｜｜outo323@icloud.com
 EBI025｜石橋憲武｜｜sunflower_himawari_taiyou@yahoo.co.jp
 EBI026｜平林沙希子｜｜s.hirabayashi1001@gmail.com
+EBI027｜佐藤光司｜｜ha.gane.090@icloud.com
+EBI028｜杉浦広俊｜｜sugi_hiro1991@yahoo.co.jp
+EBI029｜大塚理世｜｜rise10nov1997@gmail.com
 
 UEN001｜佐藤晃哉｜｜koya.sato508@gmail.com
 UEN002｜倉澤香澄｜｜k.kurasawa3215@gmail.com
