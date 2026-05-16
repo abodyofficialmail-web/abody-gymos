@@ -114,6 +114,19 @@ function isPlausibleMemberCode(code: string): boolean {
   return /[A-Z]/.test(code) && /[0-9]/.test(code);
 }
 
+/** 確認ステップの「はい」判定（表記ゆれを許容） */
+function isAffirmative(raw: string): boolean {
+  const t = raw.normalize("NFKC").trim().replace(/[！!。．.\s]+$/u, "");
+  if (!t) return false;
+  const lower = t.toLowerCase();
+  return t === "はい" || t === "ハイ" || lower === "yes" || lower === "ok" || t === "ＯＫ" || t === "OK";
+}
+
+function isNegative(raw: string): boolean {
+  const t = raw.normalize("NFKC").trim();
+  return t === "いいえ" || t === "キャンセル" || t.toLowerCase() === "no";
+}
+
 type LineSessionRow = Database["public"]["Tables"]["line_sessions"]["Row"];
 
 async function getSession(supabase: SupabaseClient<Database>, userId: string): Promise<LineSessionRow | null> {
@@ -231,12 +244,12 @@ export async function POST(request: Request) {
       // セッション取得
       const session = await getSession(supabase, userId);
 
-      // ① 確認ステップ（正しい会員番号通過後のみこのセッションに入る。案内は返さず、完了時だけ返信）
+      // ① 確認ステップ（会員番号送信後に「はい」で確定）
       if (session?.status === "confirm") {
-        const normalized = text.trim();
-        if (normalized === "はい") {
+        if (isAffirmative(text)) {
           if (!session.temp_member_id) {
             await clearSession(supabase, userId);
+            await replyMessage(replyTokenForChannel, replyToken, "セッションが切れました。もう一度会員番号を送ってください。");
             continue;
           }
 
@@ -248,10 +261,20 @@ export async function POST(request: Request) {
           if (memErr) throw memErr;
           if (!member || !member.is_active) {
             await clearSession(supabase, userId);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              "会員情報が見つかりませんでした。店舗までお問い合わせください。"
+            );
             continue;
           }
           if (member.line_user_id && member.line_user_id !== userId) {
             await clearSession(supabase, userId);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `この会員番号（${member.member_code}）は別のLINEアカウントと既に連携済みです。店舗までお問い合わせください。`
+            );
             continue;
           }
 
@@ -261,11 +284,18 @@ export async function POST(request: Request) {
           continue;
         }
 
-        if (normalized === "いいえ" || normalized === "キャンセル") {
+        if (isNegative(text)) {
           await clearSession(supabase, userId);
+          await replyMessage(replyTokenForChannel, replyToken, "連携をキャンセルしました。再度行う場合は会員番号を送ってください。");
           continue;
         }
 
+        const codeHint = session.temp_member_code ? `（会員番号: ${session.temp_member_code}）` : "";
+        await replyMessage(
+          replyTokenForChannel,
+          replyToken,
+          `連携の確認中です${codeHint}\n\n「はい」と送ると連携が完了します。\nやり直す場合は「キャンセル」と送ってください。`
+        );
         continue;
       }
 
