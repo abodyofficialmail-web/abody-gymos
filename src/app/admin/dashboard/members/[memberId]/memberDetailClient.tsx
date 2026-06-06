@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  formatSurveyDetailLines,
+  formatSurveySummary,
+  type SessionSurveyForKarte,
+} from "@/lib/sessionSurveyDisplay";
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -84,6 +89,8 @@ export function MemberDetailClient({
   const month = useMemo(() => DateTime.now().setZone(TZ).toFormat("yyyy-MM"), []);
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
+  const [surveyByDate, setSurveyByDate] = useState<Record<string, SessionSurveyForKarte>>({});
+  const [latestSurvey, setLatestSurvey] = useState<SessionSurveyForKarte | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [email, setEmail] = useState(member.email ?? "");
   const [emailSaving, setEmailSaving] = useState(false);
@@ -264,8 +271,14 @@ export function MemberDetailClient({
   }, [memberId, month]);
 
   const refreshNotes = async () => {
-    const d = await apiGet<{ notes: ClientNoteRow[] }>(`/api/client-notes?member_id=${encodeURIComponent(memberId)}`);
+    const d = await apiGet<{
+      notes: ClientNoteRow[];
+      survey_by_date?: Record<string, SessionSurveyForKarte>;
+      latest_survey?: SessionSurveyForKarte | null;
+    }>(`/api/client-notes?member_id=${encodeURIComponent(memberId)}&include_survey=1`);
     setNotes(d.notes ?? []);
+    setSurveyByDate(d.survey_by_date ?? {});
+    setLatestSurvey(d.latest_survey ?? null);
   };
 
   useEffect(() => {
@@ -1017,19 +1030,65 @@ export function MemberDetailClient({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
+
+        {latestSurvey ? (
+          <div
+            className={`rounded-xl border px-3 py-3 text-sm space-y-1 ${
+              latestSurvey.needs_followup
+                ? "border-red-200 bg-red-50"
+                : "border-rose-200 bg-rose-50/60"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-900">直近のセッション評価</span>
+              {latestSurvey.needs_followup ? (
+                <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                  要ヒアリング
+                </span>
+              ) : null}
+            </div>
+            <div className="text-xs text-slate-600">
+              {latestSurvey.session_date}
+              {[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).length > 0
+                ? `（${[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).join(" / ")}）`
+                : ""}
+            </div>
+            <div className="text-slate-800">{formatSurveySummary(latestSurvey)}</div>
+          </div>
+        ) : null}
+
         {notes === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
         {notes !== null && notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
         <div className="grid gap-2">
-          {(notes ?? []).map((n) => (
-            <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-1">
-              <div className="font-semibold">
-                {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+          {(notes ?? []).map((n) => {
+            const survey = surveyByDate[n.date];
+            return (
+              <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-2">
+                <div className="font-semibold">
+                  {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+                </div>
+                <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
+                {survey ? (
+                  <div
+                    className={`rounded-lg border-l-4 pl-3 py-2 space-y-0.5 ${
+                      survey.needs_followup
+                        ? "border-red-400 bg-red-50/80"
+                        : "border-rose-400 bg-rose-50/50"
+                    }`}
+                  >
+                    <div className="text-xs font-semibold text-rose-800">セッション評価（会員回答）</div>
+                    {formatSurveyDetailLines(survey).map((line) => (
+                      <div key={line} className="text-slate-700">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-              <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 

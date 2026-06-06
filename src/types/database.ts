@@ -51,6 +51,7 @@ export interface Database {
           phone?: string | null;
           needs_review?: boolean;
           line_user_id: string | null;
+          line_channel_key?: string | null;
           is_active: boolean;
           created_at: string;
           updated_at: string;
@@ -66,6 +67,7 @@ export interface Database {
           phone?: string | null;
           needs_review?: boolean;
           line_user_id?: string | null;
+          line_channel_key?: string | null;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -81,6 +83,7 @@ export interface Database {
           phone?: string | null;
           needs_review?: boolean;
           line_user_id?: string | null;
+          line_channel_key?: string | null;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -271,6 +274,99 @@ export interface Database {
         Row: { event_id: string; kind: "60min" | "10min"; sent_at: string };
         Insert: { event_id: string; kind: "60min" | "10min"; sent_at?: string };
         Update: { event_id?: string; kind?: "60min" | "10min"; sent_at?: string };
+        Relationships: [];
+      };
+      session_survey_invites: {
+        Row: {
+          id: string;
+          member_id: string;
+          trainer_id: string;
+          store_id: string;
+          session_date: string;
+          client_note_id: string | null;
+          line_sent_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          trainer_id: string;
+          store_id: string;
+          session_date: string;
+          client_note_id?: string | null;
+          line_sent_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          trainer_id?: string;
+          store_id?: string;
+          session_date?: string;
+          client_note_id?: string | null;
+          line_sent_at?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      session_survey_responses: {
+        Row: {
+          id: string;
+          invite_id: string;
+          member_id: string;
+          trainer_id: string;
+          store_id: string;
+          session_date: string;
+          rating: number;
+          highlights: string[];
+          intensity_feedback: string;
+          comment_general: string | null;
+          comment_improve: string | null;
+          comment_questions: string | null;
+          needs_followup: boolean;
+          followup_status: "none" | "pending" | "done";
+          followup_note: string | null;
+          followup_handled_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          invite_id: string;
+          member_id: string;
+          trainer_id: string;
+          store_id: string;
+          session_date: string;
+          rating: number;
+          highlights?: string[];
+          intensity_feedback: string;
+          comment_general?: string | null;
+          comment_improve?: string | null;
+          comment_questions?: string | null;
+          needs_followup?: boolean;
+          followup_status?: "none" | "pending" | "done";
+          followup_note?: string | null;
+          followup_handled_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          invite_id?: string;
+          member_id?: string;
+          trainer_id?: string;
+          store_id?: string;
+          session_date?: string;
+          rating?: number;
+          highlights?: string[];
+          intensity_feedback?: string;
+          comment_general?: string | null;
+          comment_improve?: string | null;
+          comment_questions?: string | null;
+          needs_followup?: boolean;
+          followup_status?: "none" | "pending" | "done";
+          followup_note?: string | null;
+          followup_handled_at?: string | null;
+          created_at?: string;
+        };
         Relationships: [];
       };
       reservations: {

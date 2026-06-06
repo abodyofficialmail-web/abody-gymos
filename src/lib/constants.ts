@@ -17,17 +17,28 @@ export const LINE_URL_RECRUIT = "https://lin.ee/cqUlxW8";
  * 業務システム（会員・トレーナー・管理・このリポジトリルートの Next アプリ）の公開オリジン。
  * 他に運用している LP / 予約サイトなどの URL はデフォルトで持たない（別サイトは `NEXT_PUBLIC_LP_URL` 等で明示）。
  *
- * 解決順: `NEXT_PUBLIC_APP_URL` → Vercel の `VERCEL_URL` → ローカル `http://localhost:3000`
+ * 解決順: `NEXT_PUBLIC_APP_URL` → 本番は固定ドメイン → Preview の `VERCEL_URL` → ローカル
+ *
+ * `VERCEL_URL`（デプロイごとの xxx.vercel.app）は Deployment Protection があり、
+ * LINE から開くと Vercel ログイン画面になるため、会員向けリンクには使わない。
  */
-function resolveAppUrl(): string {
+export function getAppUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (explicit) {
     return explicit.replace(/\/$/, "");
   }
+  if (process.env.VERCEL_ENV === "production") {
+    return "https://abody-gymos.vercel.app";
+  }
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
   }
-  return "http://localhost:3000";
+  return "http://localhost:3050";
+}
+
+/** @deprecated ビルド時に固定されうる。会員向け URL は `getAppUrl()` を使う */
+function resolveAppUrl(): string {
+  return getAppUrl();
 }
 export const APP_URL = resolveAppUrl();
 /**
@@ -44,7 +55,7 @@ export const BOOKING_PAGE_URL = `${APP_URL}/booking`;
 /** 会員向け予約・一覧など、業務システム上の絶対 URL */
 export function absoluteAppUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
-  return `${APP_URL}${p}`;
+  return `${getAppUrl()}${p}`;
 }
 /** トレーニング風景のInstagram Reel。thumbnail に public/ 内の画像パスを指定するとサムネイル表示（例: /reel-thumb-1.jpg） */
 export const INSTAGRAM_REELS: { url: string; thumbnail?: string }[] = [

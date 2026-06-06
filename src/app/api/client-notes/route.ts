@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
 import { z } from "zod";
+import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { isSessionSurveyLineEnabled } from "@/lib/sessionSurvey";
+import { fetchSessionSurveysForMember } from "@/lib/sessionSurveyForKarte";
+import { sendSessionSurveyAfterClientNote } from "@/lib/sessionSurveyLine";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -25,12 +29,6 @@ function createServiceSupabase(): SupabaseClient<Database> {
   return createClient<Database>(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-}
-
-function tokenForStoreName(storeName: string): string | null {
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 
 async function pushLineMessage(params: { to: string; text: string; token: string | null; debug?: any }) {
@@ -74,6 +72,7 @@ export async function OPTIONS() {
 const getQuerySchema = z.object({
   member_id: z.string().uuid("member_id は有効なUUIDである必要があります"),
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります").optional(),
+  include_survey: z.enum(["0", "1"]).optional(),
 });
 
 export async function GET(request: Request) {
@@ -82,6 +81,7 @@ export async function GET(request: Request) {
     const parsed = getQuerySchema.safeParse({
       member_id: url.searchParams.get("member_id") ?? undefined,
       store_id: url.searchParams.get("store_id") ?? undefined,
+      include_survey: url.searchParams.get("include_survey") ?? "1",
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
@@ -136,7 +136,12 @@ export async function GET(request: Request) {
       trainer_name: r.trainers?.display_name ?? "",
     }));
 
-    return jsonResponse({ notes }, 200);
+    const includeSurvey = parsed.data.include_survey !== "0";
+    const surveyPayload = includeSurvey
+      ? await fetchSessionSurveysForMember(supabase, member_id)
+      : { survey_by_date: {}, latest_survey: null };
+
+    return jsonResponse({ notes, ...surveyPayload }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "カルテの取得中にエラーが発生しました", detail: message }, 500);
@@ -197,7 +202,7 @@ export async function POST(request: Request) {
     try {
       const { data: member, error: mErr } = await (supabase as any)
         .from("members")
-        .select("id, line_user_id, is_active")
+        .select("id, member_code, line_user_id, line_channel_key, is_active")
         .eq("id", member_id)
         .maybeSingle();
       if (!mErr && member?.is_active && member?.line_user_id) {
@@ -208,20 +213,57 @@ export async function POST(request: Request) {
           .maybeSingle();
         if (!sErr) {
           const storeName = String(store?.name ?? "");
-          const token = tokenForStoreName(storeName);
+          const line = linePushTokenForMember({
+            lineChannelKey: normalizeLineChannelKey((member as any)?.line_channel_key),
+            memberCode: String(member.member_code ?? ""),
+            fallbackStoreName: storeName,
+          });
           const text = line_message?.trim()
             ? line_message.trim()
             : messageForClientNote({ storeName, dateYmd: date, content });
           await pushLineMessage({
             to: String(member.line_user_id),
             text,
-            token,
-            debug: { storeName, hasToken: Boolean(token) },
+            token: line.token,
+            debug: { storeName, memberCode: member.member_code, lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) },
           });
         }
       }
     } catch (e) {
       console.error("LINE push unexpected error", e);
+    }
+
+    if (isSessionSurveyLineEnabled()) {
+      try {
+        const { data: member, error: mErr } = await (supabase as any)
+          .from("members")
+          .select("id, member_code, line_user_id, line_channel_key, is_active")
+          .eq("id", member_id)
+          .maybeSingle();
+        if (!mErr && member?.is_active && member?.line_user_id) {
+          const [{ data: store }, { data: trainer }] = await Promise.all([
+            (supabase as any).from("stores").select("id, name").eq("id", store_id).maybeSingle(),
+            (supabase as any).from("trainers").select("id, display_name").eq("id", trainer_id).maybeSingle(),
+          ]);
+          const storeName = String(store?.name ?? "");
+          if (storeName) {
+            await sendSessionSurveyAfterClientNote(supabase as SupabaseClient, {
+              member_id,
+              trainer_id,
+              store_id,
+              session_date: date,
+              client_note_id: data?.id ?? null,
+              line_user_id: String(member.line_user_id),
+              member_code: String(member.member_code ?? ""),
+              line_channel_key: (member as any)?.line_channel_key ?? null,
+              store_name: storeName,
+              trainer_display_name: String(trainer?.display_name ?? ""),
+            });
+          }
+        }
+      } catch (e) {
+        console.error("session survey LINE unexpected error", e);
+      }
     }
 
     return jsonResponse({ note: data }, 200);

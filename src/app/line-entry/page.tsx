@@ -2,6 +2,11 @@
 
 import Script from "next/script";
 import { useEffect, useState } from "react";
+import { sessionSurveyPagePath } from "@/lib/sessionSurveyPaths";
+import {
+  captureSurveyParamsFromLocation,
+  toSurveyApiQuery,
+} from "@/lib/sessionSurveyParams";
 
 declare global {
   interface Window {
@@ -35,6 +40,15 @@ export default function LineEntryPage() {
   const [msg, setMsg] = useState<string>("");
 
   useEffect(() => {
+    const surveyParams = captureSurveyParamsFromLocation();
+    if (surveyParams) {
+      const q = toSurveyApiQuery(surveyParams);
+      if (q) {
+        window.location.replace(sessionSurveyPagePath(q));
+        return;
+      }
+    }
+
     const liffId = process.env.NEXT_PUBLIC_LIFF_ID;
     if (!liffId) {
       setStatus("error");

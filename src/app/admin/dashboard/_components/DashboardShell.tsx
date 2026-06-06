@@ -6,6 +6,7 @@ const DASH_NAV = [
   { href: "/admin/dashboard/shifts", label: "シフト" },
   { href: "/admin/dashboard/reservations", label: "予約" },
   { href: "/admin/dashboard/members", label: "会員" },
+  { href: "/admin/dashboard/session-surveys", label: "セッション評価" },
 ] as const;
 
 export function DashboardShell({ title, children }: { title: string; children: React.ReactNode }) {
