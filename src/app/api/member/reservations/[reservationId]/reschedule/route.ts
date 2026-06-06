@@ -7,6 +7,11 @@ import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getMemberIdFromCookie } from "../../../_cookies";
 import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import {
+  MAX_MEMBER_RESCHEDULE_COUNT,
+  getMemberRescheduleEligibility,
+  validateMemberRescheduleTarget,
+} from "@/lib/memberReschedule";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -133,30 +138,24 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     if (!cur) return json({ error: "予約が見つかりません" }, 404);
 
     const count = Number((cur as any)?.reschedule_count ?? 0);
-    if (Number.isFinite(count) && count >= 1) {
-      return json({ error: "この予約は本日これ以上変更できません（1日1回まで）" }, 409);
-    }
-
-    // 当日限定（JSTで判定）
-    const todayYmd = dayjs().tz(TZ).format("YYYY-MM-DD");
-    const bookingYmd = dayjs(cur.start_at).tz(TZ).format("YYYY-MM-DD");
-    if (todayYmd !== bookingYmd) {
-      return json({ error: "予約の変更は当日のみ可能です。前日までは一度キャンセルして再度予約してください。" }, 409);
+    const eligibility = getMemberRescheduleEligibility({
+      reservationStartAt: String(cur.start_at),
+      rescheduleCount: count,
+    });
+    if (!eligibility.ok) {
+      return json({ error: eligibility.reason }, 409);
     }
 
     const { start_at, end_at } = parsed.data;
-
-    // 同一日・同一店舗のみ（当日内の別時間へ）
-    const nextYmd = dayjs(start_at).tz(TZ).format("YYYY-MM-DD");
-    if (nextYmd !== bookingYmd) {
-      return json({ error: "同じ日付の空き時間のみ変更できます" }, 409);
-    }
-
-    // 開始前のみ（開始後は不可）
-    const nowMs = dayjs().toDate().getTime();
-    const curStartMs = dayjs(cur.start_at).toDate().getTime();
-    if (Number.isFinite(curStartMs) && nowMs > curStartMs) {
-      return json({ error: "開始時刻を過ぎた予約は変更できません" }, 409);
+    const targetCheck = validateMemberRescheduleTarget({
+      mode: eligibility.mode,
+      reservationStartAt: String(cur.start_at),
+      reservationEndAt: String(cur.end_at),
+      targetStartAt: start_at,
+      targetEndAt: end_at,
+    });
+    if (!targetCheck.ok) {
+      return json({ error: targetCheck.reason }, 409);
     }
 
     // 容量チェック（自分の予約を除外）
