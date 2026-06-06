@@ -6,6 +6,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getMemberIdFromCookie } from "../../../_cookies";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -169,13 +170,23 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         return json({ error: "start_at / end_at が不正です" }, 400);
       }
 
+      const { data: storeRow, error: storeErr } = await supabase
+        .from("stores")
+        .select("name")
+        .eq("id", cur.store_id)
+        .maybeSingle();
+      if (storeErr) return json({ error: "店舗の取得に失敗しました", detail: storeErr.message }, 500);
+
       const shifts = await fetchShiftsForCapacityCheck({ supabase, store_id: cur.store_id, dateYmd });
       const availableTrainerSet = new Set<string>();
       for (const s of shifts) {
         if (s.is_break) continue;
         if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
       }
-      const capacity = availableTrainerSet.size;
+      const capacity = effectiveBookingCapacity({
+        storeName: storeRow?.name,
+        trainerCount: availableTrainerSet.size,
+      });
       if (capacity === 0) return json({ error: "この時間は予約できません" }, 409);
 
       const { data: overlapped, error: ovErr } = await (supabase as any)

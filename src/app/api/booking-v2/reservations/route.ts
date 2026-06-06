@@ -8,6 +8,9 @@ import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
 import { sendBookingConfirmation } from "@/lib/email";
+import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -29,84 +32,6 @@ function isPastBookingCutoff(params: { zone: string; bookingYmd: string; cutoffH
     .minus({ days: 1 });
   const now = DateTime.now().setZone(zone);
   return now.toMillis() > cutoff.toMillis();
-}
-
-function lineMessageWithReservationDetails(params: {
-  storeName: string;
-  startAtUtcIso: string;
-  endAtUtcIso: string;
-  sessionType: "store" | "online";
-}): string {
-  const { storeName, startAtUtcIso, endAtUtcIso, sessionType } = params;
-  const start = DateTime.fromISO(startAtUtcIso).setZone("Asia/Tokyo");
-  const end = DateTime.fromISO(endAtUtcIso).setZone("Asia/Tokyo");
-
-  // 例: 4月23日（木）
-  const formattedDate = start.setLocale("ja").toFormat("M月d日（ccc）");
-  const formattedTime = `${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}`;
-
-  let address = "";
-  if (storeName === "恵比寿") {
-    address = `
-〒150-0022
-東京都渋谷区恵比寿南1-14-9
-アルティun 304
-
-JR恵比寿駅 徒歩5分
-日比谷線恵比寿駅 徒歩5分
-`.trim();
-  }
-  if (storeName === "上野") {
-    address = `
-〒110-0016
-東京都台東区台東4丁目31-5 オリオンビル4F
-
-JR御徒町駅 徒歩3分
-上野駅 徒歩7分
-`.trim();
-  }
-  if (storeName === "桜木町") {
-    address = `
-神奈川県横浜市中区野毛町2-59-4
-パストラル野毛マリヤ201
-
-JR桜木町駅 徒歩4分
-`.trim();
-  }
-
-  const sessionLabel = sessionType === "online" ? "オンライン" : "店舗";
-  const addressBlock =
-    sessionType === "online"
-      ? ""
-      : `
-📍住所
-${address}
-`.trim();
-
-  return `
-【ご予約確定】
-店舗：${storeName}
-日時：${formattedDate} ${formattedTime}
-
-セッション種別：${sessionLabel}
-
-${addressBlock ? `${addressBlock}\n\n` : ""}※当日でも店舗⇄オンラインの変更が可能です。
-ご希望の場合はLINEでご連絡ください。
-
-当日は動きやすい服装でお越しください！
-更衣室もございます☺️
-
-当日のトレーニング楽しみにお待ちしております！
-`.trim();
-}
-
-function tokenForStoreName(storeName: string): string | null {
-  // 店舗ごとにLINE公式アカウント（チャネル）が違う前提。
-  // 予約確定通知(push)は「連携したチャネルのアクセストークン」で送る必要があるため、
-  // ここでは店舗名でチャネルを切り替える。
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 
 async function pushLineMessage(params: { to: string; text: string; token: string | null; debug?: any }) {
@@ -498,12 +423,25 @@ export async function POST(request: Request) {
       const message = e instanceof Error ? e.message : String(e);
       return jsonResponse({ error: "サーバー設定エラー", detail: message }, 500);
     }
-    const { data: member, error: memberErr } = await supabase
+    let member: Record<string, unknown> | null = null;
+    let memberErr: { message: string } | null = null;
+    const memberFull = await supabase
       .from("members")
-      .select("id, member_code, name, email, is_active, line_user_id")
-      // email は大小区別しない一致に寄せる（DB側でユニーク制約がある想定）
+      .select("id, member_code, name, email, is_active, line_user_id, line_channel_key")
       .ilike("email", normalizedEmail)
       .maybeSingle();
+    if (memberFull.error && /line_channel_key/i.test(memberFull.error.message)) {
+      const memberSlim = await supabase
+        .from("members")
+        .select("id, member_code, name, email, is_active, line_user_id")
+        .ilike("email", normalizedEmail)
+        .maybeSingle();
+      member = memberSlim.data as Record<string, unknown> | null;
+      memberErr = memberSlim.error;
+    } else {
+      member = memberFull.data as Record<string, unknown> | null;
+      memberErr = memberFull.error;
+    }
     if (memberErr) {
       return jsonResponse(
         { error: "会員の照会に失敗しました", detail: memberErr.message },
@@ -513,6 +451,8 @@ export async function POST(request: Request) {
     if (!member || !member.is_active) {
       return jsonResponse({ error: "会員が見つかりません", detail: { email: normalizedEmail } }, 404);
     }
+    const memberId = String(member.id);
+    const memberCode = String(member.member_code ?? "");
 
     // 2026年4月の予約は一旦閉じる（UI回避・直叩き回避）
     {
@@ -544,7 +484,7 @@ export async function POST(request: Request) {
     if (!trainer_id) {
       const { data: storeRow, error: storeErr } = await supabase
         .from("stores")
-        .select("id, timezone, booking_cutoff_prev_day_time")
+        .select("id, name, timezone, booking_cutoff_prev_day_time")
         .eq("id", store_id)
         .maybeSingle();
       if (storeErr) {
@@ -619,7 +559,10 @@ export async function POST(request: Request) {
           availableTrainerSet.add(s.trainer_id);
         }
       }
-      const capacity = availableTrainerSet.size;
+      const capacity = effectiveBookingCapacity({
+        storeName: storeRow.name,
+        trainerCount: availableTrainerSet.size,
+      });
       if (capacity === 0) {
         return jsonResponse({ error: "この時間は予約できません" }, 409);
       }
@@ -680,7 +623,7 @@ export async function POST(request: Request) {
       const { count, error: dupErr } = await supabase
         .from("reservations")
         .select("id", { count: "exact", head: true })
-        .eq("member_id", member.id)
+        .eq("member_id", memberId)
         .lt("start_at", end_at)
         .gt("end_at", start_at)
         .neq("status", "cancelled");
@@ -697,7 +640,7 @@ export async function POST(request: Request) {
     console.log("③ DB前（reservations insert）");
     const insertRow: Database["public"]["Tables"]["reservations"]["Insert"] = {
       store_id,
-      member_id: member.id,
+      member_id: memberId,
       start_at,
       end_at,
       session_type,
@@ -766,12 +709,22 @@ export async function POST(request: Request) {
             endAtUtcIso: inserted.end_at,
             sessionType: sessionTypeNormalized,
           });
-          const token = tokenForStoreName(storeRow?.name ?? "");
+          const line = linePushTokenForMember({
+            lineChannelKey: normalizeLineChannelKey(member.line_channel_key),
+            memberCode,
+            fallbackStoreName: storeRow?.name ?? "",
+          });
           await pushLineMessage({
             to: lineUserId,
             text,
-            token,
-            debug: { storeName: storeRow?.name ?? "", hasToken: Boolean(token) },
+            token: line.token,
+            debug: {
+              storeName: storeRow?.name ?? "",
+              memberCode: (member as any)?.member_code ?? "",
+              lineChannelSource: line.source,
+              lineChannelKey: line.channelKey,
+              hasToken: Boolean(line.token),
+            },
           });
         }
       }

@@ -5,8 +5,11 @@ import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
+import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -43,12 +46,6 @@ const bodySchema = z
     }
   });
 
-function tokenForStoreName(storeName: string): string | null {
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
-}
-
 async function pushLineMessage(params: { to: string; text: string; token: string | null; debug?: any }) {
   const { to, text, token, debug } = params;
   if (!token) {
@@ -67,28 +64,6 @@ async function pushLineMessage(params: { to: string; text: string; token: string
     const t = await res.text().catch(() => "");
     console.error("LINE push failed", { status: res.status, body: t, debug });
   }
-}
-
-function messageForAdminCreate(params: {
-  storeName: string;
-  startAtUtcIso: string;
-  endAtUtcIso: string;
-  sessionType: "store" | "online";
-}): string {
-  const { storeName, startAtUtcIso, endAtUtcIso, sessionType } = params;
-  const start = DateTime.fromISO(startAtUtcIso).setZone("Asia/Tokyo");
-  const end = DateTime.fromISO(endAtUtcIso).setZone("Asia/Tokyo");
-  const formattedDate = start.setLocale("ja").toFormat("M月d日（ccc）");
-  const formattedTime = `${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}`;
-  const sessionLabel = sessionType === "online" ? "オンライン" : "店舗";
-  return `
-【ご予約確定】
-店舗：${storeName}
-日時：${formattedDate} ${formattedTime}
-セッション種別：${sessionLabel}
-
-当日のトレーニング楽しみにお待ちしております！
-`.trim();
 }
 
 function parseTimeToMinutesLoose(t: string): number {
@@ -252,7 +227,10 @@ export async function POST(request: Request) {
         }
         // 開催店舗にシフトが無くても、管理画面で明示した担当トレーナーは枠として数える（他店所属トレでの体験など）
         availableTrainerSet.add(tid);
-        const capacity = availableTrainerSet.size;
+        const capacity = effectiveBookingCapacity({
+          storeName: store.name,
+          trainerCount: availableTrainerSet.size,
+        });
 
         const { count: bookedCount, error: bookedErr } = await countOverlappingBlocking({
           supabase,
@@ -335,7 +313,7 @@ export async function POST(request: Request) {
     const memberIdForInsert = member_id as string;
     const { data: member, error: memberErr } = await (supabase as any)
       .from("members")
-      .select("id, member_code, name, is_active, line_user_id")
+      .select("id, member_code, name, is_active, line_user_id, line_channel_key")
       .eq("id", memberIdForInsert)
       .maybeSingle();
     if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
@@ -357,7 +335,10 @@ export async function POST(request: Request) {
         if (s.is_break) continue;
         if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
       }
-      const capacity = availableTrainerSet.size;
+      const capacity = effectiveBookingCapacity({
+        storeName: store.name,
+        trainerCount: availableTrainerSet.size,
+      });
       if (capacity === 0) return jsonResponse({ error: "この時間は予約できません" }, 409);
 
       const { count: bookedCount, error: bookedErr } = await countOverlappingBlocking({
@@ -424,16 +405,31 @@ export async function POST(request: Request) {
     try {
       const lineUserId = (member as any)?.line_user_id as string | null | undefined;
       if (lineUserId) {
-        const token = tokenForStoreName(store.name ?? "");
+        const line = linePushTokenForMember({
+          lineChannelKey: normalizeLineChannelKey((member as any)?.line_channel_key),
+          memberCode: String((member as any)?.member_code ?? ""),
+          fallbackStoreName: store.name ?? "",
+        });
         const st = (String(inserted["session_type"] ?? "") as string | null | undefined) || session_type || "store";
         const sessionTypeNormalized: "store" | "online" = st === "online" ? "online" : "store";
-        const text = messageForAdminCreate({
+        const text = lineMessageWithReservationDetails({
           storeName: store.name ?? "",
           startAtUtcIso: String(inserted["start_at"] ?? ""),
           endAtUtcIso: String(inserted["end_at"] ?? ""),
           sessionType: sessionTypeNormalized,
         });
-        await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store.name ?? "", hasToken: Boolean(token) } });
+        await pushLineMessage({
+          to: lineUserId,
+          text,
+          token: line.token,
+          debug: {
+            storeName: store.name ?? "",
+            memberCode: (member as any)?.member_code ?? "",
+            lineChannelSource: line.source,
+            lineChannelKey: line.channelKey,
+            hasToken: Boolean(line.token),
+          },
+        });
       }
     } catch (e) {
       console.error("LINE push unexpected error", e);

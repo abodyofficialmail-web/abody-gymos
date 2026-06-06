@@ -5,8 +5,10 @@ import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
+import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -23,10 +25,15 @@ const patchSchema = z.object({
   session_type: z.enum(["store", "online"]).optional(),
 });
 
-function tokenForStoreName(storeName: string): string | null {
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
+function lineTokenForMember(
+  member: { member_code: string | null; line_channel_key?: string | null } | null,
+  storeName: string
+) {
+  return linePushTokenForMember({
+    lineChannelKey: normalizeLineChannelKey(member?.line_channel_key),
+    memberCode: member?.member_code ?? "",
+    fallbackStoreName: storeName,
+  });
 }
 
 async function pushLineMessage(params: { to: string; text: string; token: string | null; debug?: any }) {
@@ -284,7 +291,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     if (cur.member_id) {
       const { data: m, error: memberErr } = await (supabase as any)
         .from("members")
-        .select("id, member_code, name, is_active, line_user_id")
+        .select("id, member_code, name, is_active, line_user_id, line_channel_key")
         .eq("id", cur.member_id)
         .maybeSingle();
       if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
@@ -317,9 +324,9 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
             const lineUserId = (member as any)?.line_user_id as string | null | undefined;
             if (lineUserId) {
               const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", cancelled2.store_id).maybeSingle();
-              const token = tokenForStoreName(store?.name ?? "");
+              const line = lineTokenForMember(member, store?.name ?? "");
               const text = messageForAdminCancel({ storeName: store?.name ?? "", startAtUtcIso: cancelled2.start_at, endAtUtcIso: cancelled2.end_at });
-              await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+              await pushLineMessage({ to: lineUserId, text, token: line.token, debug: { storeName: store?.name ?? "", memberCode: member?.member_code ?? "", lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) } });
             }
           } catch (e) {
             console.error("LINE push unexpected error", e);
@@ -336,9 +343,9 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         const lineUserId = (member as any)?.line_user_id as string | null | undefined;
         if (lineUserId) {
           const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", cancelled.store_id).maybeSingle();
-          const token = tokenForStoreName(store?.name ?? "");
+          const line = lineTokenForMember(member, store?.name ?? "");
           const text = messageForAdminCancel({ storeName: store?.name ?? "", startAtUtcIso: cancelled.start_at, endAtUtcIso: cancelled.end_at });
-          await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+          await pushLineMessage({ to: lineUserId, text, token: line.token, debug: { storeName: store?.name ?? "", memberCode: member?.member_code ?? "", lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) } });
         }
       } catch (e) {
         console.error("LINE push unexpected error", e);
@@ -365,6 +372,13 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         return jsonResponse({ error: "start_at / end_at が不正です" }, 400);
       }
 
+      const { data: storeRow, error: storeErr } = await supabase
+        .from("stores")
+        .select("name")
+        .eq("id", store_id)
+        .maybeSingle();
+      if (storeErr) return jsonResponse({ error: "店舗の取得に失敗しました", detail: storeErr.message }, 500);
+
       const shifts = await fetchShiftsForCapacityCheck({ supabase, store_id, dateYmd });
       const tid = (cur as any).trainer_id as string | null | undefined;
       const isTrialReservation = !cur.member_id || Boolean(String((cur as any).guest_name ?? "").trim());
@@ -384,7 +398,10 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           if (s.is_break) continue;
           if (s.start_min <= startMin && s.end_min >= endMin) availableTrainerSet.add(s.trainer_id);
         }
-        const capacity = availableTrainerSet.size;
+        const capacity = effectiveBookingCapacity({
+          storeName: storeRow?.name,
+          trainerCount: availableTrainerSet.size,
+        });
         if (capacity === 0) return jsonResponse({ error: "この時間は予約できません" }, 409);
 
         const { data: overlapped, error: ovErr } = await fetchOverlappedReservationsForCapacityCheck({
@@ -447,7 +464,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           const lineUserId = (member as any)?.line_user_id as string | null | undefined;
           if (lineUserId) {
             const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", updated2.store_id).maybeSingle();
-            const token = tokenForStoreName(store?.name ?? "");
+            const line = lineTokenForMember(member, store?.name ?? "");
             const st = String(updated2.session_type ?? "store");
             const sessionTypeNormalized: "store" | "online" = st === "online" ? "online" : "store";
             const text = messageForAdminReschedule({
@@ -456,7 +473,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
               endAtUtcIso: updated2.end_at,
               sessionType: sessionTypeNormalized,
             });
-            await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+            await pushLineMessage({ to: lineUserId, text, token: line.token, debug: { storeName: store?.name ?? "", memberCode: member?.member_code ?? "", lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) } });
           }
         } catch (e) {
           console.error("LINE push unexpected error", e);
@@ -473,7 +490,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
       const lineUserId = (member as any)?.line_user_id as string | null | undefined;
       if (lineUserId) {
         const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", updated.store_id).maybeSingle();
-        const token = tokenForStoreName(store?.name ?? "");
+        const line = lineTokenForMember(member, store?.name ?? "");
         const st = String(updated.session_type ?? "store");
         const sessionTypeNormalized: "store" | "online" = st === "online" ? "online" : "store";
         const text = messageForAdminReschedule({
@@ -482,7 +499,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           endAtUtcIso: updated.end_at,
           sessionType: sessionTypeNormalized,
         });
-        await pushLineMessage({ to: lineUserId, text, token, debug: { storeName: store?.name ?? "", hasToken: Boolean(token) } });
+        await pushLineMessage({ to: lineUserId, text, token: line.token, debug: { storeName: store?.name ?? "", memberCode: member?.member_code ?? "", lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) } });
       }
     } catch (e) {
       console.error("LINE push unexpected error", e);

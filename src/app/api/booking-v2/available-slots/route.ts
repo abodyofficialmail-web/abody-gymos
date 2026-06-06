@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 export async function OPTIONS() {
@@ -16,6 +17,7 @@ const querySchema = z.object({
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります"),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date は YYYY-MM-DD 形式である必要があります"),
   trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
+  ignore_cutoff: z.enum(["1", "true"]).optional(),
 });
 const SLOT_MINUTES = 30;
 function isApril2026Closed(ymd: string) {
@@ -94,11 +96,13 @@ export async function GET(request: Request) {
       store_id: url.searchParams.get("store_id"),
       date: url.searchParams.get("date"),
       trainer_id: url.searchParams.get("trainer_id") ?? undefined,
+      ignore_cutoff: url.searchParams.get("ignore_cutoff") ?? undefined,
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
-    const { store_id, date, trainer_id: filterTrainerId } = parsed.data;
+    const { store_id, date, trainer_id: filterTrainerId, ignore_cutoff } = parsed.data;
+    const shouldApplyCutoff = !ignore_cutoff;
     console.log("slots debug", { store_id, date });
     if (isApril2026Closed(date)) {
       return jsonResponse([], 200);
@@ -108,7 +112,7 @@ export async function GET(request: Request) {
     const supabase = client.supabase;
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
-      .select("id, timezone, booking_cutoff_prev_day_time")
+      .select("id, name, timezone, booking_cutoff_prev_day_time")
       .eq("id", store_id)
       .maybeSingle();
     if (storeErr) {
@@ -127,7 +131,7 @@ export async function GET(request: Request) {
       const cutoff = DateTime.fromISO(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`, { zone }).minus({
         days: 1,
       });
-      if (now.toMillis() > cutoff.toMillis()) {
+      if (shouldApplyCutoff && now.toMillis() > cutoff.toMillis()) {
         // 締切を過ぎている日はそもそも枠を表示しない
         return jsonResponse([], 200);
       }
@@ -394,7 +398,10 @@ export async function GET(request: Request) {
     const results: AvailableSlotDto[] = [];
     for (const [key, trainersSet] of freeTrainerSetBySlotKey) {
       if (filterTrainerId && !trainersSet.has(filterTrainerId)) continue;
-      const capacity = trainersSet.size;
+      const capacity = effectiveBookingCapacity({
+        storeName: storeRow.name,
+        trainerCount: trainersSet.size,
+      });
       const used = unassignedCountBySlotKey.get(key) ?? 0;
       if (capacity <= used) continue;
       const se = startEndBySlotKey.get(key);

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
@@ -96,7 +97,7 @@ export async function GET(request: Request) {
     const supabase = client.supabase;
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
-      .select("id, timezone, booking_cutoff_prev_day_time")
+      .select("id, name, timezone, booking_cutoff_prev_day_time")
       .eq("id", store_id)
       .maybeSingle();
     if (storeErr) {
@@ -351,7 +352,10 @@ export async function GET(request: Request) {
           (acc, r) => acc + (overlapsMs(r.start, r.end, slotStartMs, slotEndMs) ? 1 : 0),
           0
         );
-        const capacity = trainerSet.size;
+        const capacity = effectiveBookingCapacity({
+          storeName: storeRow.name,
+          trainerCount: trainerSet.size,
+        });
         if (capacity > used) availableSlotCount += 1;
       }
       countByDate.set(day, availableSlotCount);
