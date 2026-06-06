@@ -82,5 +82,23 @@ export function validateMemberRescheduleTarget(params: {
     }
   }
 
+  // 別日の予約を「今日」の空き枠に移すことは不可（新規当日予約とは別扱い）
+  if (params.mode === "cross_day" && targetYmd === todayYmd) {
+    return {
+      ok: false,
+      reason: "別の日の予約を、今日の空き時間に変更することはできません。予約当日になったら、同じ日の別時間に変更できます。",
+    };
+  }
+
   return { ok: true };
+}
+
+/** cross_day モードのカレンダーで選択不可な日付 */
+export function isCrossDayRescheduleDateDisabled(params: { ymd: string; todayYmd: string; slotCount: number }): boolean {
+  const { ymd, todayYmd, slotCount } = params;
+  if (!ymd) return true;
+  if (ymd < todayYmd) return true;
+  if (ymd === todayYmd) return true;
+  if (slotCount <= 0) return true;
+  return false;
 }

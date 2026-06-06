@@ -4,6 +4,7 @@ import { GymShell } from "@/components/gym/GymShell";
 import {
   MAX_MEMBER_RESCHEDULE_COUNT,
   getMemberRescheduleEligibility,
+  isCrossDayRescheduleDateDisabled,
   type MemberRescheduleEligibility,
 } from "@/lib/memberReschedule";
 import { DateTime } from "luxon";
@@ -173,8 +174,9 @@ export default function MemberPage() {
     setChangeBusy(true);
     setChangeErr(null);
     setChangeSelected(null);
+    const ignoreCutoff = changeEligibility.mode === "same_day" ? "&ignore_cutoff=1" : "";
     apiGet<Array<{ start_at: string; end_at: string }>>(
-      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(changeTarget.store_id)}&date=${encodeURIComponent(changeSelectedDate)}`
+      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(changeTarget.store_id)}&date=${encodeURIComponent(changeSelectedDate)}${ignoreCutoff}`
     )
       .then((slots) => {
         const filtered = (slots ?? []).filter(
@@ -268,26 +270,30 @@ export default function MemberPage() {
         ) : null}
 
         {changeTarget ? (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
-            <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-lg space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-bold text-slate-900">予約の変更</div>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm"
-                  onClick={() => {
-                    if (changeBusy) return;
-                    resetChangeModal();
-                  }}
-                >
-                  閉じる
-                </button>
-              </div>
-              <div className="text-sm text-slate-700">
-                {DateTime.fromISO(changeTarget.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
-                {DateTime.fromISO(changeTarget.end_at).setZone(TZ).toFormat("HH:mm")}
-              </div>
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+            <div className="mx-auto flex min-h-full max-w-lg items-end sm:items-center">
+              <div className="flex max-h-[min(90vh,720px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-lg">
+                <div className="shrink-0 space-y-2 border-b border-slate-200 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-bold text-slate-900">予約の変更</div>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm"
+                      onClick={() => {
+                        if (changeBusy) return;
+                        resetChangeModal();
+                      }}
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                  <div className="text-sm text-slate-700">
+                    {DateTime.fromISO(changeTarget.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
+                    {DateTime.fromISO(changeTarget.end_at).setZone(TZ).toFormat("HH:mm")}
+                  </div>
+                </div>
 
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
               {!changeEligibility?.ok ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   {changeEligibility?.reason ?? "この予約は変更できません"}
@@ -296,8 +302,8 @@ export default function MemberPage() {
                 <>
                   <div className="text-xs text-slate-600">
                     {changeEligibility.mode === "same_day"
-                      ? `当日の空き時間から選択できます（変更は${MAX_MEMBER_RESCHEDULE_COUNT}回まで・残り${changeEligibility.remaining}回）。`
-                      : `予約日の前日まで、別の日時に変更できます（変更は${MAX_MEMBER_RESCHEDULE_COUNT}回まで・残り${changeEligibility.remaining}回）。当日は同じ日の別時間のみ変更できます。`}
+                      ? `予約当日の空き時間から選択できます（変更は${MAX_MEMBER_RESCHEDULE_COUNT}回まで・残り${changeEligibility.remaining}回）。新規の当日予約の締切後でも、すでに予約がある方は変更できます。`
+                      : `予約日の前日まで、別の日時に変更できます（変更は${MAX_MEMBER_RESCHEDULE_COUNT}回まで・残り${changeEligibility.remaining}回）。今日の空き時間への変更はできません。予約当日になったら、同じ日の別時間に変更できます。`}
                   </div>
 
                   {changeEligibility.mode === "cross_day" ? (
@@ -340,8 +346,13 @@ export default function MemberPage() {
                             const meta = ymd ? changeDaysByDate.get(ymd) : null;
                             const status = meta?.status ?? "full";
                             const symbol = status === "available" ? "○" : status === "limited" ? "△" : "×";
-                            const isPast = ymd ? ymd < todayYmd : false;
-                            const disabled = !inMonth || !ymd || isPast || (meta?.slotCount ?? 0) === 0;
+                            const disabled =
+                              !inMonth ||
+                              isCrossDayRescheduleDateDisabled({
+                                ymd,
+                                todayYmd,
+                                slotCount: meta?.slotCount ?? 0,
+                              });
                             const selected = ymd && changeSelectedDate === ymd;
 
                             return (
@@ -450,28 +461,32 @@ export default function MemberPage() {
                   </button>
                 </>
               )}
+                </div>
+              </div>
             </div>
           </div>
         ) : null}
 
         {cancelTarget ? (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
-            <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-lg space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-bold text-slate-900">予約のキャンセル</div>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm"
-                  onClick={() => {
-                    if (cancelBusy) return;
-                    setCancelTarget(null);
-                    setCancelErr(null);
-                  }}
-                >
-                  閉じる
-                </button>
-              </div>
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+            <div className="mx-auto flex min-h-full max-w-lg items-end sm:items-center">
+              <div className="flex max-h-[min(90vh,560px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-lg">
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+                  <div className="text-sm font-bold text-slate-900">予約のキャンセル</div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm"
+                    onClick={() => {
+                      if (cancelBusy) return;
+                      setCancelTarget(null);
+                      setCancelErr(null);
+                    }}
+                  >
+                    閉じる
+                  </button>
+                </div>
 
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="text-xs font-semibold text-slate-700">店舗</div>
                 <div className="text-sm text-slate-900">{cancelTarget.store_name || cancelTarget.store_id}</div>
@@ -523,6 +538,8 @@ export default function MemberPage() {
                 >
                   {cancelBusy ? "キャンセル中…" : "キャンセルする"}
                 </button>
+              </div>
+                </div>
               </div>
             </div>
           </div>
