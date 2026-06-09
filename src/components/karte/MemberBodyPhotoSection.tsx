@@ -44,8 +44,15 @@ function PhotoSlot({
   onClearPending: (angle: BodyPhotoAngle) => void;
   disabled: boolean;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const preview = pending?.previewUrl ?? existingUrl;
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) onPick(angle, file);
+    e.target.value = "";
+  };
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 space-y-2">
@@ -59,26 +66,38 @@ function PhotoSlot({
         )}
       </div>
       <input
-        ref={inputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp"
         capture="environment"
         className="hidden"
         disabled={disabled}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onPick(angle, file);
-          e.target.value = "";
-        }}
+        onChange={handleFileChange}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        disabled={disabled}
+        onChange={handleFileChange}
       />
       <div className="flex gap-1">
         <button
           type="button"
           disabled={disabled}
-          onClick={() => inputRef.current?.click()}
+          onClick={() => cameraInputRef.current?.click()}
           className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-800 disabled:opacity-60"
         >
-          {preview ? "差し替え" : "撮影"}
+          撮影
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => fileInputRef.current?.click()}
+          className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-800 disabled:opacity-60"
+        >
+          ファイル
         </button>
         {pending ? (
           <button
@@ -244,7 +263,7 @@ export function MemberBodyPhotoSection({ memberId }: { memberId: string }) {
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-4">
       <div>
         <div className="text-sm font-bold text-slate-900">体型写真</div>
-        <div className="pt-1 text-xs text-slate-500">正面・背面・左横・右横の4枚を日付ごとに保存します</div>
+        <div className="pt-1 text-xs text-slate-500">正面・背面・左横・右横の4枚を日付ごとに保存します（撮影 or ファイル選択）</div>
       </div>
 
       {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{err}</div> : null}
