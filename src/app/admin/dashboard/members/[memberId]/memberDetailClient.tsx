@@ -1,5 +1,6 @@
 "use client";
 
+import { MemberBodyPhotoSection } from "@/components/karte/MemberBodyPhotoSection";
 import {
   formatSurveyDetailLines,
   formatSurveySummary,
@@ -614,6 +615,8 @@ export function MemberDetailClient({
           {emailMsg ? <div className="text-xs text-slate-600">{emailMsg}</div> : null}
         </div>
       </section>
+
+      <MemberBodyPhotoSection memberId={memberId} />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
         <div className="text-sm font-bold text-slate-900">本日のカルテ入力</div>

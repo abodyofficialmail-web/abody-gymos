@@ -2,6 +2,10 @@
 
 import { GymShell } from "@/components/gym/GymShell";
 import {
+  BODY_PHOTO_ANGLE_LABELS,
+  type MemberBodyPhotoSetView,
+} from "@/lib/memberBodyPhotos";
+import {
   MAX_MEMBER_RESCHEDULE_COUNT,
   getMemberRescheduleEligibility,
   isCrossDayRescheduleDateDisabled,
@@ -65,8 +69,16 @@ function sessionLabel(sessionType: string) {
   return sessionType === "online" ? "💻 オンライン" : "🏠 店舗";
 }
 
+function formatBodyPhotoDateLabel(ymd: string) {
+  const dt = DateTime.fromISO(ymd, { zone: TZ });
+  if (!dt.isValid) return ymd;
+  const dow = ["日", "月", "火", "水", "木", "金", "土"][dt.weekday % 7];
+  return `${dt.toFormat("yyyy/M/d")}（${dow}）`;
+}
+
 export default function MemberPage() {
   const [data, setData] = useState<MeResponse | null>(null);
+  const [bodyPhotos, setBodyPhotos] = useState<MemberBodyPhotoSetView[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -88,8 +100,14 @@ export default function MemberPage() {
   useEffect(() => {
     setLoading(true);
     setErr(null);
-    apiGet<MeResponse>("/api/member/me")
-      .then((d) => setData(d))
+    Promise.all([
+      apiGet<MeResponse>("/api/member/me"),
+      apiGet<{ sets: MemberBodyPhotoSetView[] }>("/api/member/body-photos").catch(() => ({ sets: [] })),
+    ])
+      .then(([me, photos]) => {
+        setData(me);
+        setBodyPhotos(photos.sets ?? []);
+      })
       .catch((e: any) => {
         const status = Number((e as any)?.status ?? 0);
         if (status === 401) {
@@ -98,6 +116,7 @@ export default function MemberPage() {
         }
         setErr(String(e?.message ?? "取得に失敗しました"));
         setData(null);
+        setBodyPhotos(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -249,6 +268,42 @@ export default function MemberPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+              <div className="text-sm font-bold text-slate-900">体型の記録</div>
+              {bodyPhotos === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+              {bodyPhotos !== null && bodyPhotos.length === 0 ? (
+                <div className="text-sm text-slate-600">まだ登録がありません。</div>
+              ) : null}
+              <div className="grid gap-3">
+                {(bodyPhotos ?? []).map((s) => {
+                  const thumbs = [
+                    { label: BODY_PHOTO_ANGLE_LABELS.front, url: s.front_url },
+                    { label: BODY_PHOTO_ANGLE_LABELS.back, url: s.back_url },
+                    { label: BODY_PHOTO_ANGLE_LABELS.side_left, url: s.side_left_url },
+                    { label: BODY_PHOTO_ANGLE_LABELS.side_right, url: s.side_right_url },
+                  ].filter((x) => x.url);
+                  if (thumbs.length === 0) return null;
+                  return (
+                    <div key={s.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3 space-y-2">
+                      <div className="text-xs font-semibold text-slate-700">{formatBodyPhotoDateLabel(s.photo_date)}</div>
+                      {s.note ? <div className="text-xs text-slate-500">{s.note}</div> : null}
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {thumbs.map((t) => (
+                          <div key={t.label} className="space-y-1">
+                            <div className="aspect-[3/4] overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={t.url!} alt={t.label} className="h-full w-full object-cover" />
+                            </div>
+                            <div className="text-center text-[10px] text-slate-500">{t.label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </section>
 

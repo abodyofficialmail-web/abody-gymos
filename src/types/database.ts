@@ -168,6 +168,48 @@ export interface Database {
         };
         Relationships: [];
       };
+      member_body_photo_sets: {
+        Row: {
+          id: string;
+          member_id: string;
+          photo_date: string;
+          front_path: string | null;
+          back_path: string | null;
+          side_left_path: string | null;
+          side_right_path: string | null;
+          uploaded_by_trainer_id: string | null;
+          note: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          photo_date: string;
+          front_path?: string | null;
+          back_path?: string | null;
+          side_left_path?: string | null;
+          side_right_path?: string | null;
+          uploaded_by_trainer_id?: string | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          photo_date?: string;
+          front_path?: string | null;
+          back_path?: string | null;
+          side_left_path?: string | null;
+          side_right_path?: string | null;
+          uploaded_by_trainer_id?: string | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       trainer_shifts: {
         Row: {
           id: string;
