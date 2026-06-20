@@ -47,3 +47,25 @@ ${addressBlock ? `${addressBlock}\n\n` : ""}※当日でも店舗⇄オンライ
 当日のトレーニング楽しみにお待ちしております！
 `.trim();
 }
+
+export function lineMessageForReschedule(params: {
+  storeName: string;
+  startAtUtcIso: string;
+  endAtUtcIso: string;
+  sessionType: "store" | "online";
+}): string {
+  const { storeName, startAtUtcIso, endAtUtcIso, sessionType } = params;
+  const start = DateTime.fromISO(startAtUtcIso).setZone(TZ);
+  const end = DateTime.fromISO(endAtUtcIso).setZone(TZ);
+  const formattedDate = start.setLocale("ja").toFormat("M月d日（ccc）");
+  const formattedTime = `${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}`;
+  const sessionLabel = sessionType === "online" ? "オンライン" : "店舗";
+  return `
+【ご予約変更】
+店舗：${storeName}
+日時：${formattedDate} ${formattedTime}
+セッション種別：${sessionLabel}
+
+よろしくお願いいたします。
+`.trim();
+}

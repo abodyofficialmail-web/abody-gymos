@@ -12,6 +12,10 @@ import {
   getMemberRescheduleEligibility,
   validateMemberRescheduleTarget,
 } from "@/lib/memberReschedule";
+import { fetchMemberForLine } from "@/lib/fetchMemberForLine";
+import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { pushLineTextAsChunks } from "@/lib/lineMessagingPush";
+import { lineMessageForReschedule } from "@/lib/lineReservationMessage";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -26,6 +30,18 @@ const bodySchema = z.object({
   start_at: z.string().min(1),
   end_at: z.string().min(1),
 });
+
+const reservationSelectFull =
+  "id, member_id, store_id, start_at, end_at, status, session_type, notes, reschedule_count";
+const reservationSelectLegacy = "id, member_id, store_id, start_at, end_at, status, session_type, notes";
+
+function isMissingRescheduleCountColumn(err: unknown): boolean {
+  const msg = String((err as { message?: string })?.message ?? "");
+  return (
+    /reschedule_count|last_rescheduled_at|does not exist|column/i.test(msg) ||
+    (/PGRST/i.test(msg) && /column/i.test(msg))
+  );
+}
 
 function parseTimeToMinutesLoose(t: string): number {
   const s = String(t ?? "").trim();
@@ -127,13 +143,30 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
 
     const supabase = createSupabaseServiceClient();
 
-    const { data: cur, error: curErr } = await (supabase as any)
-      .from("reservations")
-      .select("id, member_id, store_id, start_at, end_at, status, session_type, reschedule_count")
-      .eq("id", ctx.params.reservationId)
-      .eq("member_id", memberId)
-      .neq("status", "cancelled")
-      .maybeSingle();
+    let cur: Record<string, unknown> | null = null;
+    let curErr: { message?: string } | null = null;
+    {
+      const first = await (supabase as any)
+        .from("reservations")
+        .select(reservationSelectFull)
+        .eq("id", ctx.params.reservationId)
+        .eq("member_id", memberId)
+        .neq("status", "cancelled")
+        .maybeSingle();
+      cur = first.data ?? null;
+      curErr = first.error ?? null;
+      if (curErr && isMissingRescheduleCountColumn(curErr)) {
+        const second = await (supabase as any)
+          .from("reservations")
+          .select(reservationSelectLegacy)
+          .eq("id", ctx.params.reservationId)
+          .eq("member_id", memberId)
+          .neq("status", "cancelled")
+          .maybeSingle();
+        cur = second.data ?? null;
+        curErr = second.error ?? null;
+      }
+    }
     if (curErr) return json({ error: "予約の取得に失敗しました", detail: curErr.message }, 500);
     if (!cur) return json({ error: "予約が見つかりません" }, 404);
 
@@ -215,36 +248,81 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     }
 
     const nextCount = Number.isFinite(count) ? count + 1 : 1;
-    const { data: updated, error: upErr } = await (supabase as any)
-      .from("reservations")
-      .update({
-        start_at,
-        end_at,
-        reschedule_count: nextCount,
-        last_rescheduled_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        notes: `${String((cur as any)?.notes ?? "")}\nrescheduled_from_member_page`.trim(),
-      })
-      .eq("id", ctx.params.reservationId)
-      .eq("member_id", memberId)
-      .select("id, start_at, end_at, reschedule_count")
-      .maybeSingle();
-    if (upErr) {
-      const msg = String(upErr.message ?? "");
-      if (msg.toLowerCase().includes("reschedule_count")) {
-        return json(
-          {
-            error: "予約変更の準備ができていません（reservations.reschedule_count カラムが未追加の可能性）",
-            detail: msg,
-          },
-          500
-        );
+    const notes = `${String((cur as any)?.notes ?? "")}\nrescheduled_from_member_page`.trim();
+    const updateBase = {
+      start_at,
+      end_at,
+      updated_at: new Date().toISOString(),
+      notes,
+    };
+    const updateWithCount = {
+      ...updateBase,
+      reschedule_count: nextCount,
+      last_rescheduled_at: new Date().toISOString(),
+    };
+
+    let updated: Record<string, unknown> | null = null;
+    let upErr: { message?: string } | null = null;
+    {
+      const first = await (supabase as any)
+        .from("reservations")
+        .update(updateWithCount)
+        .eq("id", ctx.params.reservationId)
+        .eq("member_id", memberId)
+        .select("id, start_at, end_at, reschedule_count")
+        .maybeSingle();
+      updated = first.data ?? null;
+      upErr = first.error ?? null;
+      if (upErr && isMissingRescheduleCountColumn(upErr)) {
+        const second = await (supabase as any)
+          .from("reservations")
+          .update(updateBase)
+          .eq("id", ctx.params.reservationId)
+          .eq("member_id", memberId)
+          .select("id, start_at, end_at")
+          .maybeSingle();
+        updated = second.data ? { ...second.data, reschedule_count: nextCount } : null;
+        upErr = second.error ?? null;
       }
-      return json({ error: "予約変更に失敗しました", detail: upErr.message }, 500);
     }
+    if (upErr) return json({ error: "予約変更に失敗しました", detail: upErr.message }, 500);
     if (!updated) return json({ error: "予約が見つかりません" }, 404);
 
-    return json({ ok: true, reservation: updated }, 200);
+    let lineNotified = false;
+    try {
+      const { member, error: memberErr } = await fetchMemberForLine(supabase, memberId);
+      if (!memberErr && member?.line_user_id) {
+        const { data: store } = await supabase.from("stores").select("name").eq("id", cur.store_id).maybeSingle();
+        const storeName = store?.name ?? "";
+        const line = linePushTokenForMember({
+          lineChannelKey: normalizeLineChannelKey(member.line_channel_key),
+          memberCode: member.member_code,
+          fallbackStoreName: storeName,
+        });
+        const st = String((cur as any).session_type ?? "store");
+        const sessionType: "store" | "online" = st === "online" ? "online" : "store";
+        const text = lineMessageForReschedule({
+          storeName,
+          startAtUtcIso: String(updated.start_at),
+          endAtUtcIso: String(updated.end_at),
+          sessionType,
+        });
+        lineNotified = await pushLineTextAsChunks(line.token, member.line_user_id, text);
+        if (!lineNotified) {
+          console.error("LINE push failed (member reschedule)", {
+            memberId,
+            memberCode: member.member_code,
+            storeName,
+            lineChannelSource: line.source,
+            hasToken: Boolean(line.token),
+          });
+        }
+      }
+    } catch (e) {
+      console.error("LINE push unexpected error (member reschedule)", e);
+    }
+
+    return json({ ok: true, reservation: updated, line_notified: lineNotified }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json({ error: "エラーが発生しました", detail: message }, 500);

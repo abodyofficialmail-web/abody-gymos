@@ -91,6 +91,13 @@ export default function MemberPage() {
   const [changeSelected, setChangeSelected] = useState<{ start_at: string; end_at: string } | null>(null);
   const [changeBusy, setChangeBusy] = useState(false);
   const [changeErr, setChangeErr] = useState<string | null>(null);
+  const [changeSuccess, setChangeSuccess] = useState<{
+    storeName: string;
+    start_at: string;
+    end_at: string;
+    lineNotified: boolean;
+  } | null>(null);
+  const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<MeResponse["reservations"][number] | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelErr, setCancelErr] = useState<string | null>(null);
@@ -143,10 +150,24 @@ export default function MemberPage() {
     setChangeSelectedDate("");
     setChangeSlots(null);
     setChangeSelected(null);
+    setChangeSuccess(null);
+  };
+
+  const closeChangeModal = () => {
+    if (changeBusy) return;
+    if (changeSuccess) {
+      const start = DateTime.fromISO(changeSuccess.start_at).setZone(TZ);
+      const end = DateTime.fromISO(changeSuccess.end_at).setZone(TZ);
+      setChangeNotice(
+        `予約を変更しました：${changeSuccess.storeName} ${start.toFormat("M/d（ccc）")} ${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}`
+      );
+    }
+    resetChangeModal();
   };
 
   const openChange = (r: MeResponse["reservations"][number]) => {
     setChangeErr(null);
+    setChangeSuccess(null);
     setChangeSelected(null);
     setChangeSlots(null);
     setChangeDays(null);
@@ -221,6 +242,9 @@ export default function MemberPage() {
       <div className="space-y-4">
         {loading ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
         {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div> : null}
+        {changeNotice ? (
+          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">{changeNotice}</div>
+        ) : null}
 
         {data ? (
           <>
@@ -330,26 +354,53 @@ export default function MemberPage() {
               <div className="flex max-h-[min(90vh,720px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-lg">
                 <div className="shrink-0 space-y-2 border-b border-slate-200 px-5 py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-bold text-slate-900">予約の変更</div>
+                    <div className="text-sm font-bold text-slate-900">{changeSuccess ? "変更完了" : "予約の変更"}</div>
                     <button
                       type="button"
                       className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1 text-sm"
-                      onClick={() => {
-                        if (changeBusy) return;
-                        resetChangeModal();
-                      }}
+                      onClick={closeChangeModal}
                     >
                       閉じる
                     </button>
                   </div>
-                  <div className="text-sm text-slate-700">
-                    {DateTime.fromISO(changeTarget.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
-                    {DateTime.fromISO(changeTarget.end_at).setZone(TZ).toFormat("HH:mm")}
-                  </div>
+                  {!changeSuccess ? (
+                    <div className="text-sm text-slate-700">
+                      {DateTime.fromISO(changeTarget.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
+                      {DateTime.fromISO(changeTarget.end_at).setZone(TZ).toFormat("HH:mm")}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
-              {!changeEligibility?.ok ? (
+              {changeSuccess ? (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-4 space-y-3">
+                    <div className="text-base font-bold text-green-900">予約を変更しました</div>
+                    <div className="space-y-1 text-sm text-green-900">
+                      <div>店舗：{changeSuccess.storeName}</div>
+                      <div className="font-semibold">
+                        {DateTime.fromISO(changeSuccess.start_at).setZone(TZ).toFormat("M/d（ccc）")}{" "}
+                        {DateTime.fromISO(changeSuccess.start_at).setZone(TZ).toFormat("HH:mm")}〜
+                        {DateTime.fromISO(changeSuccess.end_at).setZone(TZ).toFormat("HH:mm")}
+                      </div>
+                    </div>
+                    {changeSuccess.lineNotified ? (
+                      <div className="text-xs text-green-800">変更内容をLINEにもお送りしました。</div>
+                    ) : data?.member.line_user_id ? (
+                      <div className="text-xs text-green-800">予約一覧を更新しました。LINE通知は送信できませんでした。</div>
+                    ) : (
+                      <div className="text-xs text-green-800">予約一覧を更新しました。</div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeChangeModal}
+                    className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              ) : !changeEligibility?.ok ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   {changeEligibility?.reason ?? "この予約は変更できません"}
                 </div>
@@ -500,10 +551,18 @@ export default function MemberPage() {
                       setChangeBusy(true);
                       setChangeErr(null);
                       try {
-                        await apiPatch(`/api/member/reservations/${encodeURIComponent(changeTarget.id)}/reschedule`, changeSelected);
+                        const result = await apiPatch<{ line_notified?: boolean }>(
+                          `/api/member/reservations/${encodeURIComponent(changeTarget.id)}/reschedule`,
+                          changeSelected
+                        );
                         const d = await apiGet<MeResponse>("/api/member/me");
                         setData(d);
-                        resetChangeModal();
+                        setChangeSuccess({
+                          storeName: changeTarget.store_name || changeTarget.store_id,
+                          start_at: changeSelected.start_at,
+                          end_at: changeSelected.end_at,
+                          lineNotified: Boolean(result.line_notified),
+                        });
                       } catch (e: any) {
                         setChangeErr(String(e?.message ?? "変更に失敗しました"));
                       } finally {

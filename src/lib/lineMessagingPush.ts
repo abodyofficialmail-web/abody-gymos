@@ -6,6 +6,7 @@
 export function lineChannelTokenForStoreName(storeName: string): string | null {
   if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
   if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
+  if (storeName === "新宿") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? null;
   return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 
