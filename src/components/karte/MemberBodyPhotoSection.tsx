@@ -6,6 +6,7 @@ import {
   type BodyPhotoAngle,
   type MemberBodyPhotoSetView,
 } from "@/lib/memberBodyPhotos";
+import { compressImageFile } from "@/lib/compressImageFile";
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -68,7 +69,7 @@ function PhotoSlot({
       <input
         ref={cameraInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         capture="environment"
         className="hidden"
         disabled={disabled}
@@ -77,7 +78,7 @@ function PhotoSlot({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         className="hidden"
         disabled={disabled}
         onChange={handleFileChange}
@@ -211,17 +212,31 @@ export function MemberBodyPhotoSection({ memberId }: { memberId: string }) {
     setMsg(null);
     try {
       for (const [angle, { file }] of entries) {
+        let uploadFile: File;
+        try {
+          uploadFile = await compressImageFile(file);
+        } catch (compressErr: unknown) {
+          const msg = compressErr instanceof Error ? compressErr.message : "画像の処理に失敗しました";
+          throw new Error(`${BODY_PHOTO_ANGLE_LABELS[angle]}: ${msg}`);
+        }
+
         const form = new FormData();
         form.set("photo_date", photoDate);
         form.set("angle", angle);
-        form.set("file", file);
+        form.set("file", uploadFile);
         if (note.trim()) form.set("note", note.trim());
         const res = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/body-photos`, {
           method: "POST",
           body: form,
         });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error((json as { error?: string })?.error ?? "保存に失敗しました");
+        const json = (await res.json().catch(() => ({}))) as { error?: string; detail?: string };
+        if (!res.ok) {
+          if (res.status === 413) {
+            throw new Error(`${BODY_PHOTO_ANGLE_LABELS[angle]}: 画像が大きすぎます`);
+          }
+          const detail = json.detail ? `（${json.detail}）` : "";
+          throw new Error(`${BODY_PHOTO_ANGLE_LABELS[angle]}: ${json.error ?? "保存に失敗しました"}${detail}`);
+        }
       }
       setPending((cur) => {
         for (const p of Object.values(cur)) {
@@ -331,7 +346,11 @@ export function MemberBodyPhotoSection({ memberId }: { memberId: string }) {
         {sets === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
         {sets !== null && sets.length === 0 ? <div className="text-sm text-slate-600">まだ登録がありません。</div> : null}
         <div className="grid gap-2">
-          {(sets ?? []).map((s) => (
+          {(sets ?? [])
+            .filter(
+              (s) => s.front_url || s.back_url || s.side_left_url || s.side_right_url
+            )
+            .map((s) => (
             <div key={s.id} className="rounded-xl border border-slate-200 px-3 py-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div>

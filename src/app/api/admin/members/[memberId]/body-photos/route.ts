@@ -81,7 +81,7 @@ export async function POST(request: Request, ctx: { params: { memberId: string }
       photoDate,
       angle: angleRaw,
       fileBytes,
-      contentType: file.type,
+      contentType: file.type === "image/png" || file.type === "image/webp" ? file.type : "image/jpeg",
       trainerId,
       note,
     });

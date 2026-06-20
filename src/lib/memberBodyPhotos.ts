@@ -22,7 +22,21 @@ const ANGLE_PATH_COLUMN: Record<BodyPhotoAngle, keyof MemberBodyPhotoSetRow> = {
   side_right: "side_right_path",
 };
 
-const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_MIME = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "",
+]);
+
+const ALLOWED_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
+
+function fileExtension(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i).toLowerCase() : "";
+}
 
 export type MemberBodyPhotoSetRow = Database["public"]["Tables"]["member_body_photo_sets"]["Row"];
 
@@ -51,11 +65,14 @@ export function pathColumnForAngle(angle: BodyPhotoAngle): keyof MemberBodyPhoto
 }
 
 export function validateBodyPhotoFile(file: File): string | null {
-  if (!ALLOWED_MIME.has(file.type)) {
-    return "JPEG / PNG / WebP の画像のみアップロードできます";
+  const ext = fileExtension(file.name);
+  const mimeOk = ALLOWED_MIME.has(file.type);
+  const extOk = ext !== "" && ALLOWED_EXT.has(ext);
+  if (!mimeOk && !extOk) {
+    return "JPEG / PNG / WebP / HEIC の画像のみアップロードできます";
   }
   if (file.size > BODY_PHOTO_MAX_BYTES) {
-    return "画像は5MB以下にしてください";
+    return "画像が大きすぎます（5MB以下）。別の写真をお試しください";
   }
   return null;
 }
@@ -169,7 +186,7 @@ export async function uploadBodyPhotoAngle(params: {
   const now = new Date().toISOString();
 
   const { error: uploadErr } = await supabase.storage.from(MEMBER_BODY_PHOTO_BUCKET).upload(storagePath, fileBytes, {
-    contentType,
+    contentType: contentType === "image/heic" || contentType === "image/heif" ? "image/jpeg" : contentType || "image/jpeg",
     upsert: true,
   });
   if (uploadErr) throw uploadErr;
