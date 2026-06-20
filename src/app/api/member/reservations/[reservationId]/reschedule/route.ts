@@ -43,6 +43,18 @@ function isMissingRescheduleCountColumn(err: unknown): boolean {
   );
 }
 
+type ReservationRow = {
+  id: string;
+  member_id: string;
+  store_id: string;
+  start_at: string;
+  end_at: string;
+  status: string;
+  session_type: string;
+  notes?: string | null;
+  reschedule_count?: number;
+};
+
 function parseTimeToMinutesLoose(t: string): number {
   const s = String(t ?? "").trim();
   if (!s) return NaN;
@@ -143,7 +155,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
 
     const supabase = createSupabaseServiceClient();
 
-    let cur: Record<string, unknown> | null = null;
+    let cur: ReservationRow | null = null;
     let curErr: { message?: string } | null = null;
     {
       const first = await (supabase as any)
@@ -153,7 +165,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         .eq("member_id", memberId)
         .neq("status", "cancelled")
         .maybeSingle();
-      cur = first.data ?? null;
+      cur = (first.data ?? null) as ReservationRow | null;
       curErr = first.error ?? null;
       if (curErr && isMissingRescheduleCountColumn(curErr)) {
         const second = await (supabase as any)
@@ -163,14 +175,14 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           .eq("member_id", memberId)
           .neq("status", "cancelled")
           .maybeSingle();
-        cur = second.data ?? null;
+        cur = (second.data ?? null) as ReservationRow | null;
         curErr = second.error ?? null;
       }
     }
     if (curErr) return json({ error: "予約の取得に失敗しました", detail: curErr.message }, 500);
     if (!cur) return json({ error: "予約が見つかりません" }, 404);
 
-    const count = Number((cur as any)?.reschedule_count ?? 0);
+    const count = Number(cur.reschedule_count ?? 0);
     const eligibility = getMemberRescheduleEligibility({
       reservationStartAt: String(cur.start_at),
       rescheduleCount: count,
@@ -248,7 +260,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     }
 
     const nextCount = Number.isFinite(count) ? count + 1 : 1;
-    const notes = `${String((cur as any)?.notes ?? "")}\nrescheduled_from_member_page`.trim();
+    const notes = `${String(cur.notes ?? "")}\nrescheduled_from_member_page`.trim();
     const updateBase = {
       start_at,
       end_at,
@@ -299,7 +311,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           memberCode: member.member_code,
           fallbackStoreName: storeName,
         });
-        const st = String((cur as any).session_type ?? "store");
+        const st = String(cur.session_type ?? "store");
         const sessionType: "store" | "online" = st === "online" ? "online" : "store";
         const text = lineMessageForReschedule({
           storeName,
