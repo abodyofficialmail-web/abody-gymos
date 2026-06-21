@@ -34,7 +34,7 @@ function verifyLineSignature(rawBody: string, signature: string | null, channelS
   }
 }
 
-type ChannelKey = "default" | "ueno" | "sakuragicho";
+type ChannelKey = "default" | "ueno" | "sakuragicho" | "shinjuku";
 
 function getLineChannelConfigs(): Array<{ key: ChannelKey; secret?: string; token?: string }> {
   return [
@@ -52,6 +52,11 @@ function getLineChannelConfigs(): Array<{ key: ChannelKey; secret?: string; toke
       key: "sakuragicho",
       secret: process.env.LINE_CHANNEL_SECRET_SAKURAGICHO,
       token: process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO,
+    },
+    {
+      key: "shinjuku",
+      secret: process.env.LINE_CHANNEL_SECRET_SHINJUKU,
+      token: process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU,
     },
   ];
 }
@@ -183,10 +188,19 @@ async function findMemberByLineUserId(supabase: SupabaseClient<Database>, userId
   return data;
 }
 
-async function linkLine(supabase: SupabaseClient<Database>, memberId: string, userId: string) {
+async function linkLine(
+  supabase: SupabaseClient<Database>,
+  memberId: string,
+  userId: string,
+  channelKey: ChannelKey
+) {
   const { error } = await supabase
     .from("members")
-    .update({ line_user_id: userId, updated_at: new Date().toISOString() } as any)
+    .update({
+      line_user_id: userId,
+      line_channel_key: channelKey,
+      updated_at: new Date().toISOString(),
+    } as any)
     .eq("id", memberId);
   if (error) throw error;
 }
@@ -278,7 +292,7 @@ export async function POST(request: Request) {
             continue;
           }
 
-          await linkLine(supabase, member.id, userId);
+          await linkLine(supabase, member.id, userId, channelKey);
           await clearSession(supabase, userId);
           await replyMessage(replyTokenForChannel, replyToken, "LINE連携が完了しました！");
           continue;

@@ -58,7 +58,14 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-slate-600">会員一覧</div>
+      <div className="text-sm font-semibold text-slate-900">会員一覧</div>
+
+      <Link
+        href="/admin/dashboard/members/new"
+        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3.5 text-base font-semibold text-white shadow-sm"
+      >
+        ＋ 新規会員登録
+      </Link>
 
       <div className="space-y-2">
         <input

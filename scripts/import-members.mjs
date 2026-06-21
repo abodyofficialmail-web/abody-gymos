@@ -51,7 +51,7 @@ UEN033｜秋葉潤｜｜jun.akiba0019@gmail.com
 UEN034｜白石翔｜｜ryukyu0202.ss@gmail.com
 UEN035｜原田風雅｜｜fugafuga090609@gmail.com
 UEN037｜坂田求｜｜tomtommotomu@gmail.com
-UEN038｜宮崎優子｜｜
+UEN038｜宮崎優子｜｜ruby26.hime@hotmail.co.jp
 UEN039｜高橋明久｜｜kurae6kanohara@yahoo.co.jp
 UEN040｜中園健太｜｜stitchgachooooon@yahoo.co.jp
 UEN041｜奥迫伸治｜｜radical.so@icloud.com
@@ -63,6 +63,9 @@ UEN048｜田中晃｜｜at85029148@yahoo.co.jp
 UEN049｜末永悠帆｜｜mus.y0116@gmail.com
 UEN050｜福田翔吾｜｜shogo.f929@icloud.com
 UEN051｜田村修都｜｜t.syuto0731@gmail.com
+UEN052｜崔　智穎｜｜tomoeisai@gmail.com
+UEN053｜中尾啓史｜｜hiro1210050779@gmail.com
+UEN054｜水谷友彦｜｜anazawa.story@gmail.com
 
 SAK001｜堤｜｜pirm@yahoo.co.jp
 SAK002｜林芳男｜｜tarutokun.yh@gmail.com
@@ -101,6 +104,7 @@ SAK043｜森下樹｜｜1212.pooh@gmail.com
 SAK044｜安田宏子｜｜xxxpeace924@icloud.com
 SAK046｜山口｜｜
 SAK048｜林晃司｜｜hako13974268@gmail.com
+SAK049｜藤咲彩香｜｜ayaka19951016@yahoo.co.jp
 
 ON001｜今井浩美｜｜hiro35.mtkh@docomo.ne.jp
 ZAI001｜川畠絢子｜｜ao0128ao@gmail.com
@@ -204,7 +208,7 @@ async function main() {
     const part = codes.slice(i, i + chunkRead);
     const { data, error } = await supabase
       .from("members")
-      .select("member_code, store_id, line_user_id, user_id, phone, needs_review, is_active")
+      .select("member_code, store_id, line_user_id, user_id, phone, email, needs_review, is_active")
       .in("member_code", part);
     if (error) throw error;
     for (const row of data ?? []) {
@@ -216,7 +220,8 @@ async function main() {
     const ex = existingByCode.get(r.member_code) ?? null;
     return {
       ...r,
-      // 既存値を優先（メール取込で LINE 連携が消えないようにする）
+      // 既存値を優先（取込リストの空メールで DB のメールが消えないようにする）
+      email: r.email ?? ex?.email ?? null,
       store_id: ex?.store_id ?? r.store_id,
       line_user_id: ex?.line_user_id ?? r.line_user_id ?? null,
       user_id: ex?.user_id ?? null,

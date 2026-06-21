@@ -462,7 +462,7 @@ export function ReservationsClient() {
   };
 
   const fetchSlots = async (storeId: string, dateYmd: string, trainerId?: string) => {
-    const qs = new URLSearchParams({ store_id: storeId, date: dateYmd });
+    const qs = new URLSearchParams({ store_id: storeId, date: dateYmd, ignore_cutoff: "1" });
     if (trainerId) qs.set("trainer_id", trainerId);
     const list = await apiGet<Array<{ start_at: string; end_at: string }>>(`/api/booking-v2/available-slots?${qs.toString()}`);
     return list ?? [];

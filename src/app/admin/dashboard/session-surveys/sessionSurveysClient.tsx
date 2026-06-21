@@ -33,6 +33,8 @@ type TrainerStat = {
   trainer_name: string;
   count: number;
   average_rating: number;
+  invite_count: number;
+  response_rate: number | null;
 };
 
 function intensityLabel(id: string) {
@@ -232,6 +234,7 @@ export function SessionSurveysClient() {
                 <div className="text-sm font-semibold text-slate-900">{s.trainer_name}</div>
                 <div className="mt-1 text-xs text-slate-600">
                   回答 {s.count}件 / 平均 {s.average_rating.toFixed(1)}
+                  {s.response_rate != null ? ` / 回答率 ${s.response_rate.toFixed(1)}%` : ""}
                 </div>
               </button>
             ))}

@@ -2,6 +2,8 @@ import { DashboardShell } from "../_components/DashboardShell";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { MembersClient } from "./membersClient";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminDashboardMembersPage() {
   const supabase = createSupabaseServiceClient();
   const { data: stores } = await supabase.from("stores").select("id, name").order("created_at", { ascending: true });

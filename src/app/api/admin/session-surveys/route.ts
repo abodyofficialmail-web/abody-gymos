@@ -70,8 +70,10 @@ export async function GET(request: Request) {
     }
 
     const rows = data ?? [];
-    const trainerStats = trainerStatsFromRows(rows as Array<any>);
-    const filterOptions = await loadFilterOptions(supabase);
+    const [trainerStats, filterOptions] = await Promise.all([
+      loadTrainerStats(supabase, parsed.data.store_id, parsed.data.trainer_id),
+      loadFilterOptions(supabase),
+    ]);
 
     return json({ responses: rows, trainer_stats: trainerStats, filter_options: filterOptions }, 200);
   } catch (e) {
@@ -80,24 +82,89 @@ export async function GET(request: Request) {
   }
 }
 
-function trainerStatsFromRows(rows: Array<any>) {
-  const map = new Map<string, { trainer_id: string; trainer_name: string; count: number; rating_total: number; average_rating: number }>();
-  for (const r of rows) {
+type TrainerStatRow = {
+  trainer_id: string;
+  trainer_name: string;
+  count: number;
+  average_rating: number;
+  invite_count: number;
+  response_rate: number | null;
+};
+
+async function loadTrainerStats(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  storeId?: string,
+  trainerId?: string
+): Promise<TrainerStatRow[]> {
+  let responseQuery = supabase
+    .from("session_survey_responses")
+    .select("trainer_id, rating, trainers ( id, display_name )");
+  if (storeId) responseQuery = responseQuery.eq("store_id", storeId);
+  if (trainerId) responseQuery = responseQuery.eq("trainer_id", trainerId);
+
+  let inviteQuery = supabase.from("session_survey_invites").select("trainer_id, trainers ( id, display_name )");
+  if (storeId) inviteQuery = inviteQuery.eq("store_id", storeId);
+  if (trainerId) inviteQuery = inviteQuery.eq("trainer_id", trainerId);
+
+  const [{ data: responses, error: responseError }, { data: invites, error: inviteError }] = await Promise.all([
+    responseQuery,
+    inviteQuery,
+  ]);
+
+  if (responseError) throw new Error(responseError.message);
+  if (inviteError) throw new Error(inviteError.message);
+
+  const inviteCounts = new Map<string, number>();
+  const trainerNames = new Map<string, string>();
+  for (const invite of invites ?? []) {
+    const trainer = Array.isArray(invite.trainers) ? invite.trainers[0] : invite.trainers;
+    const id = String(trainer?.id ?? invite.trainer_id ?? "unknown");
+    inviteCounts.set(id, (inviteCounts.get(id) ?? 0) + 1);
+    if (trainer?.display_name) trainerNames.set(id, String(trainer.display_name));
+  }
+
+  const map = new Map<string, { trainer_id: string; trainer_name: string; count: number; rating_total: number }>();
+  for (const r of responses ?? []) {
     const trainer = Array.isArray(r.trainers) ? r.trainers[0] : r.trainers;
     const id = String(trainer?.id ?? r.trainer_id ?? "unknown");
+    if (trainer?.display_name) trainerNames.set(id, String(trainer.display_name));
     const cur = map.get(id) ?? {
       trainer_id: id,
-      trainer_name: String(trainer?.display_name ?? "未設定"),
+      trainer_name: String(trainer?.display_name ?? trainerNames.get(id) ?? "未設定"),
       count: 0,
       rating_total: 0,
-      average_rating: 0,
     };
     cur.count += 1;
     cur.rating_total += Number(r.rating ?? 0);
-    cur.average_rating = Math.round((cur.rating_total / cur.count) * 10) / 10;
     map.set(id, cur);
   }
-  return [...map.values()].sort((a, b) => b.count - a.count || b.average_rating - a.average_rating);
+
+  for (const id of inviteCounts.keys()) {
+    if (!map.has(id)) {
+      map.set(id, {
+        trainer_id: id,
+        trainer_name: trainerNames.get(id) ?? "未設定",
+        count: 0,
+        rating_total: 0,
+      });
+    }
+  }
+
+  return [...map.values()]
+    .map((cur) => {
+      const inviteCount = inviteCounts.get(cur.trainer_id) ?? 0;
+      const responseRate =
+        inviteCount > 0 ? Math.round((cur.count / inviteCount) * 1000) / 10 : null;
+      return {
+        trainer_id: cur.trainer_id,
+        trainer_name: cur.trainer_name,
+        count: cur.count,
+        average_rating: cur.count > 0 ? Math.round((cur.rating_total / cur.count) * 10) / 10 : 0,
+        invite_count: inviteCount,
+        response_rate: responseRate,
+      };
+    })
+    .sort((a, b) => b.count - a.count || (b.response_rate ?? 0) - (a.response_rate ?? 0));
 }
 
 async function loadFilterOptions(supabase: ReturnType<typeof createSupabaseServiceClient>) {
