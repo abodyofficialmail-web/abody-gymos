@@ -34,7 +34,7 @@ function verifyLineSignature(rawBody: string, signature: string | null, channelS
   }
 }
 
-type ChannelKey = "default" | "ueno" | "sakuragicho" | "shinjuku";
+type ChannelKey = "default" | "ueno" | "sakuragicho" | "shinjuku" | "fukuoka";
 
 function getLineChannelConfigs(): Array<{ key: ChannelKey; secret?: string; token?: string }> {
   return [
@@ -57,6 +57,11 @@ function getLineChannelConfigs(): Array<{ key: ChannelKey; secret?: string; toke
       key: "shinjuku",
       secret: process.env.LINE_CHANNEL_SECRET_SHINJUKU,
       token: process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU,
+    },
+    {
+      key: "fukuoka",
+      secret: process.env.LINE_CHANNEL_SECRET_FUKUOKA,
+      token: process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA,
     },
   ];
 }
@@ -349,12 +354,6 @@ export async function POST(request: Request) {
       );
     } catch (e) {
       console.error("LINE webhook error", e);
-      // LINEへは失敗時も応答しておく（無限リトライ回避）
-      try {
-        await replyMessage(replyTokenForChannel, replyToken, "処理に失敗しました。しばらくしてからお試しください。");
-      } catch (e2) {
-        console.error("LINE reply failed", e2);
-      }
     }
   }
 
