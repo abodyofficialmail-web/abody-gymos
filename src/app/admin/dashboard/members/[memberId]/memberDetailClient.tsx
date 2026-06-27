@@ -2,6 +2,11 @@
 
 import { MemberBodyPhotoSection } from "@/components/karte/MemberBodyPhotoSection";
 import {
+  formatPreSessionSurveyDetailLines,
+  formatPreSessionSurveySummary,
+  type PreSessionSurveyForKarte,
+} from "@/lib/preSessionSurveyDisplay";
+import {
   formatSurveyDetailLines,
   formatSurveySummary,
   type SessionSurveyForKarte,
@@ -11,6 +16,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 const TZ = "Asia/Tokyo";
+
+function surveyRateBadgeClass(rate: number | null): string {
+  const base = "rounded-full px-3 py-1 text-xs font-semibold border";
+  if (rate != null && rate >= 70) return `${base} border-emerald-200 bg-emerald-50 text-emerald-800`;
+  if (rate != null && rate >= 40) return `${base} border-amber-200 bg-amber-50 text-amber-800`;
+  return `${base} border-red-200 bg-red-50 text-red-800`;
+}
 
 type ReservationRow = {
   id: string;
@@ -92,6 +104,20 @@ export function MemberDetailClient({
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
   const [surveyByDate, setSurveyByDate] = useState<Record<string, SessionSurveyForKarte>>({});
   const [latestSurvey, setLatestSurvey] = useState<SessionSurveyForKarte | null>(null);
+  const [surveyStats, setSurveyStats] = useState<{
+    invite_count: number;
+    response_count: number;
+    response_rate: number | null;
+  }>({ invite_count: 0, response_count: 0, response_rate: null });
+  const [preSessionByDate, setPreSessionByDate] = useState<Record<string, PreSessionSurveyForKarte>>({});
+  const [latestPreSession, setLatestPreSession] = useState<PreSessionSurveyForKarte | null>(null);
+  const [preSessionStats, setPreSessionStats] = useState<{
+    invite_count: number;
+    response_count: number;
+    response_rate: number | null;
+  }>({ invite_count: 0, response_count: 0, response_rate: null });
+  const [preSessionInviteByDate, setPreSessionInviteByDate] = useState<Record<string, true>>({});
+  const [inviteByDate, setInviteByDate] = useState<Record<string, true>>({});
   const [err, setErr] = useState<string | null>(null);
   const [email, setEmail] = useState(member.email ?? "");
   const [emailSaving, setEmailSaving] = useState(false);
@@ -276,10 +302,22 @@ export function MemberDetailClient({
       notes: ClientNoteRow[];
       survey_by_date?: Record<string, SessionSurveyForKarte>;
       latest_survey?: SessionSurveyForKarte | null;
+      survey_stats?: { invite_count: number; response_count: number; response_rate: number | null };
+      invite_by_date?: Record<string, true>;
+      pre_session_by_date?: Record<string, PreSessionSurveyForKarte>;
+      latest_pre_session?: PreSessionSurveyForKarte | null;
+      pre_session_stats?: { invite_count: number; response_count: number; response_rate: number | null };
+      pre_session_invite_by_date?: Record<string, true>;
     }>(`/api/client-notes?member_id=${encodeURIComponent(memberId)}&include_survey=1`);
     setNotes(d.notes ?? []);
     setSurveyByDate(d.survey_by_date ?? {});
     setLatestSurvey(d.latest_survey ?? null);
+    setSurveyStats(d.survey_stats ?? { invite_count: 0, response_count: 0, response_rate: null });
+    setInviteByDate(d.invite_by_date ?? {});
+    setPreSessionByDate(d.pre_session_by_date ?? {});
+    setLatestPreSession(d.latest_pre_session ?? null);
+    setPreSessionStats(d.pre_session_stats ?? { invite_count: 0, response_count: 0, response_rate: null });
+    setPreSessionInviteByDate(d.pre_session_invite_by_date ?? {});
   };
 
   useEffect(() => {
@@ -1034,7 +1072,38 @@ export function MemberDetailClient({
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
+          <div className="flex flex-wrap gap-2">
+            {preSessionStats.invite_count > 0 ? (
+              <div className={surveyRateBadgeClass(preSessionStats.response_rate)}>
+                セッション前ヒアリング回答率{" "}
+                {preSessionStats.response_rate != null ? `${preSessionStats.response_rate.toFixed(1)}%` : "—"}（
+                {preSessionStats.response_count}/{preSessionStats.invite_count}件）
+              </div>
+            ) : null}
+            {surveyStats.invite_count > 0 ? (
+              <div className={surveyRateBadgeClass(surveyStats.response_rate)}>
+                セッション後アンケート回答率{" "}
+                {surveyStats.response_rate != null ? `${surveyStats.response_rate.toFixed(1)}%` : "—"}（
+                {surveyStats.response_count}/{surveyStats.invite_count}件）
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {latestPreSession ? (
+          <div className="rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-3 text-sm space-y-1">
+            <div className="font-semibold text-slate-900">直近のセッション前ヒアリング</div>
+            <div className="text-xs text-slate-600">
+              {latestPreSession.session_date}
+              {[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).length > 0
+                ? `（${[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).join(" / ")}）`
+                : ""}
+            </div>
+            <div className="text-slate-800">{formatPreSessionSurveySummary(latestPreSession)}</div>
+          </div>
+        ) : null}
 
         {latestSurvey ? (
           <div
@@ -1067,12 +1136,27 @@ export function MemberDetailClient({
         <div className="grid gap-2">
           {(notes ?? []).map((n) => {
             const survey = surveyByDate[n.date];
+            const preSession = preSessionByDate[n.date];
             return (
               <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-2">
                 <div className="font-semibold">
                   {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
                 </div>
                 <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
+                {preSession ? (
+                  <div className="rounded-lg border-l-4 border-blue-400 bg-blue-50/50 pl-3 py-2 space-y-0.5">
+                    <div className="text-xs font-semibold text-blue-800">セッション前ヒアリング（会員回答）</div>
+                    {formatPreSessionSurveyDetailLines(preSession).map((line) => (
+                      <div key={line} className="text-slate-700">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                ) : preSessionInviteByDate[n.date] ? (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+                    セッション前ヒアリング未回答（リマインド送信済み）
+                  </div>
+                ) : null}
                 {survey ? (
                   <div
                     className={`rounded-lg border-l-4 pl-3 py-2 space-y-0.5 ${
@@ -1087,6 +1171,10 @@ export function MemberDetailClient({
                         {line}
                       </div>
                     ))}
+                  </div>
+                ) : inviteByDate[n.date] ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    セッションアンケート未回答（LINE送信済み）
                   </div>
                 ) : null}
               </div>

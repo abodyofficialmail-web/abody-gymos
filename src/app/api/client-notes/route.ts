@@ -3,6 +3,7 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import { isSessionSurveyLineEnabled } from "@/lib/sessionSurvey";
+import { fetchPreSessionSurveysForMember } from "@/lib/preSessionSurveyForKarte";
 import { fetchSessionSurveysForMember } from "@/lib/sessionSurveyForKarte";
 import { sendSessionSurveyAfterClientNote } from "@/lib/sessionSurveyLine";
 import type { Database } from "@/types/database";
@@ -137,11 +138,27 @@ export async function GET(request: Request) {
     }));
 
     const includeSurvey = parsed.data.include_survey !== "0";
-    const surveyPayload = includeSurvey
-      ? await fetchSessionSurveysForMember(supabase, member_id)
-      : { survey_by_date: {}, latest_survey: null };
+    const [surveyPayload, preSessionPayload] = includeSurvey
+      ? await Promise.all([
+          fetchSessionSurveysForMember(supabase, member_id),
+          fetchPreSessionSurveysForMember(supabase, member_id),
+        ])
+      : [
+          {
+            survey_by_date: {},
+            latest_survey: null,
+            survey_stats: { invite_count: 0, response_count: 0, response_rate: null },
+            invite_by_date: {},
+          },
+          {
+            pre_session_by_date: {},
+            latest_pre_session: null,
+            pre_session_stats: { invite_count: 0, response_count: 0, response_rate: null },
+            pre_session_invite_by_date: {},
+          },
+        ];
 
-    return jsonResponse({ notes, ...surveyPayload }, 200);
+    return jsonResponse({ notes, ...surveyPayload, ...preSessionPayload }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "カルテの取得中にエラーが発生しました", detail: message }, 500);
