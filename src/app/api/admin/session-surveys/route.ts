@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
+import { currentSurveyMonthKey, surveyMonthLabel, surveyMonthRange } from "@/lib/surveyMonth";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -11,6 +12,7 @@ const querySchema = z.object({
   trainer_id: z.string().uuid().optional(),
   highlight: z.string().trim().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
 });
 
 export async function GET(request: Request) {
@@ -22,8 +24,12 @@ export async function GET(request: Request) {
       trainer_id: url.searchParams.get("trainer_id") ?? undefined,
       highlight: url.searchParams.get("highlight") ?? undefined,
       limit: url.searchParams.get("limit") ?? 200,
+      month: url.searchParams.get("month") ?? undefined,
     });
     if (!parsed.success) return json({ error: "invalid_query" }, 400);
+
+    const monthKey = parsed.data.month ?? currentSurveyMonthKey();
+    const { startDate, endDate } = surveyMonthRange(monthKey);
 
     const supabase = createSupabaseServiceClient();
     let q = supabase
@@ -71,11 +77,20 @@ export async function GET(request: Request) {
 
     const rows = data ?? [];
     const [trainerStats, filterOptions] = await Promise.all([
-      loadTrainerStats(supabase, parsed.data.store_id, parsed.data.trainer_id),
+      loadTrainerStats(supabase, parsed.data.store_id, parsed.data.trainer_id, monthKey),
       loadFilterOptions(supabase),
     ]);
 
-    return json({ responses: rows, trainer_stats: trainerStats, filter_options: filterOptions }, 200);
+    return json(
+      {
+        responses: rows,
+        trainer_stats: trainerStats,
+        filter_options: filterOptions,
+        month: monthKey,
+        month_label: surveyMonthLabel(monthKey),
+      },
+      200
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json({ error: message }, 500);
@@ -94,15 +109,24 @@ type TrainerStatRow = {
 async function loadTrainerStats(
   supabase: ReturnType<typeof createSupabaseServiceClient>,
   storeId?: string,
-  trainerId?: string
+  trainerId?: string,
+  monthKey = currentSurveyMonthKey()
 ): Promise<TrainerStatRow[]> {
+  const { startDate, endDate } = surveyMonthRange(monthKey);
+
   let responseQuery = supabase
     .from("session_survey_responses")
-    .select("trainer_id, rating, trainers ( id, display_name )");
+    .select("trainer_id, rating, trainers ( id, display_name )")
+    .gte("session_date", startDate)
+    .lte("session_date", endDate);
   if (storeId) responseQuery = responseQuery.eq("store_id", storeId);
   if (trainerId) responseQuery = responseQuery.eq("trainer_id", trainerId);
 
-  let inviteQuery = supabase.from("session_survey_invites").select("trainer_id, trainers ( id, display_name )");
+  let inviteQuery = supabase
+    .from("session_survey_invites")
+    .select("trainer_id, trainers ( id, display_name )")
+    .gte("session_date", startDate)
+    .lte("session_date", endDate);
   if (storeId) inviteQuery = inviteQuery.eq("store_id", storeId);
   if (trainerId) inviteQuery = inviteQuery.eq("trainer_id", trainerId);
 

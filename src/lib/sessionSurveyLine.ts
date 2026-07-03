@@ -1,6 +1,19 @@
-import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import {
+  lineAccessTokenForChannelKey,
+  lineChannelKeyForStoreName,
+  lineMemberProfileReachable,
+  linePushTokenForMember,
+  normalizeLineChannelKey,
+  type LineChannelKey,
+} from "@/lib/lineChannel";
 import { sessionSurveyPageUrl, sessionSurveyPageUrlFromInviteToken } from "@/lib/sessionSurvey";
 import { sessionSurveySignedQuery } from "@/lib/sessionSurveySigned";
+import { fetchSessionSurveysForMember } from "@/lib/sessionSurveyForKarte";
+import {
+  formatMemberSurveyRateForLine,
+  sessionSurveyLineButtonColor,
+  type SurveyRateStats,
+} from "@/lib/surveyRateDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type SessionSurveyInviteParams = {
@@ -93,9 +106,54 @@ export async function upsertSessionSurveyInvite(
 export function buildSessionSurveyFlexMessage(params: {
   trainerDisplayName: string;
   surveyUrl: string;
+  memberStats?: SurveyRateStats | null;
 }): object {
   const name = params.trainerDisplayName.trim() || "トレーナー";
-  const intro = `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かしたいのでご回答お願いします`;
+  const intro = `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かすほか、トレーナーの評価にも反映されます。\nご回答いただくと、トレーナーから返信が届く場合もあります。`;
+  const rateText = params.memberStats ? formatMemberSurveyRateForLine(params.memberStats) : null;
+  const buttonColor = sessionSurveyLineButtonColor(
+    params.memberStats ?? { invite_count: 0, response_count: 0, response_rate: null }
+  );
+
+  const bodyContents: object[] = [
+    {
+      type: "text",
+      text: "セッション後アンケート",
+      weight: "bold",
+      size: "lg",
+      color: "#1e293b",
+    },
+    {
+      type: "text",
+      text: intro,
+      wrap: true,
+      size: "sm",
+      color: "#334155",
+    },
+  ];
+
+  if (rateText) {
+    bodyContents.push({
+      type: "text",
+      text: rateText,
+      wrap: true,
+      size: "sm",
+      weight: "bold",
+      color: buttonColor,
+    });
+  }
+
+  bodyContents.push({
+    type: "button",
+    style: "primary",
+    color: buttonColor,
+    height: "sm",
+    action: {
+      type: "uri",
+      label: "アンケートに回答する",
+      uri: params.surveyUrl,
+    },
+  });
 
   return {
     type: "flex",
@@ -107,33 +165,7 @@ export function buildSessionSurveyFlexMessage(params: {
         type: "box",
         layout: "vertical",
         spacing: "md",
-        contents: [
-          {
-            type: "text",
-            text: "セッション後アンケート",
-            weight: "bold",
-            size: "lg",
-            color: "#1e293b",
-          },
-          {
-            type: "text",
-            text: intro,
-            wrap: true,
-            size: "sm",
-            color: "#334155",
-          },
-          {
-            type: "button",
-            style: "primary",
-            color: "#e11d48",
-            height: "sm",
-            action: {
-              type: "uri",
-              label: "アンケートに回答する",
-              uri: params.surveyUrl,
-            },
-          },
-        ],
+        contents: bodyContents,
       },
     },
   };
@@ -164,21 +196,8 @@ export async function pushSessionSurveyInviteLine(params: {
   trainerDisplayName: string;
   /** invite UUID またはフル survey URL */
   inviteToken: string;
+  memberStats?: SurveyRateStats | null;
 }): Promise<boolean> {
-  const line = linePushTokenForMember({
-    lineChannelKey: normalizeLineChannelKey(params.lineChannelKey),
-    memberCode: params.memberCode,
-    fallbackStoreName: params.storeName,
-  });
-  if (!line.token) {
-    console.error("LINE token missing for session survey", {
-      storeName: params.storeName,
-      memberCode: params.memberCode,
-      lineChannelSource: line.source,
-      lineChannelKey: line.channelKey,
-    });
-    return false;
-  }
   const surveyUrl = params.inviteToken.startsWith("http")
     ? params.inviteToken
     : params.inviteToken.includes("=")
@@ -187,8 +206,45 @@ export async function pushSessionSurveyInviteLine(params: {
   const flex = buildSessionSurveyFlexMessage({
     trainerDisplayName: params.trainerDisplayName,
     surveyUrl,
+    memberStats: params.memberStats,
   });
-  return linePushMessages(line.token, params.lineUserId, [flex]);
+
+  const line = linePushTokenForMember({
+    lineChannelKey: normalizeLineChannelKey(params.lineChannelKey),
+    memberCode: params.memberCode,
+    fallbackStoreName: params.storeName,
+  });
+
+  const tried = new Set<string>();
+  const tokens: Array<{ token: string; channelKey: LineChannelKey | null }> = [];
+
+  if (line.token) tokens.push({ token: line.token, channelKey: line.channelKey });
+
+  const storeKey = lineChannelKeyForStoreName(params.storeName);
+  const storeToken = storeKey ? lineAccessTokenForChannelKey(storeKey) : null;
+  if (storeToken) tokens.push({ token: storeToken, channelKey: storeKey });
+
+  if (!normalizeLineChannelKey(params.lineChannelKey)) {
+    const defaultToken = lineAccessTokenForChannelKey("default");
+    if (defaultToken) tokens.push({ token: defaultToken, channelKey: "default" });
+  }
+
+  for (const { token, channelKey } of tokens) {
+    if (tried.has(token)) continue;
+    tried.add(token);
+    const reachable = await lineMemberProfileReachable(token, params.lineUserId);
+    if (!reachable) continue;
+    const sent = await linePushMessages(token, params.lineUserId, [flex]);
+    if (sent) return true;
+  }
+
+  console.error("LINE token missing or push failed for session survey", {
+    storeName: params.storeName,
+    memberCode: params.memberCode,
+    lineChannelSource: line.source,
+    lineChannelKey: line.channelKey,
+  });
+  return false;
 }
 
 function surveyUrlForInvite(
@@ -229,6 +285,8 @@ export async function sendSessionSurveyAfterClientNote(
     if (responded?.id) return { sent: false, invite_id: invite.id, survey_url: surveyUrl };
   }
 
+  const { survey_stats: memberStats } = await fetchSessionSurveysForMember(supabase, params.member_id);
+
   const sent = await pushSessionSurveyInviteLine({
     lineUserId: params.line_user_id,
     memberCode: params.member_code,
@@ -236,6 +294,7 @@ export async function sendSessionSurveyAfterClientNote(
     storeName: params.store_name,
     trainerDisplayName: params.trainer_display_name,
     inviteToken: surveyUrl,
+    memberStats,
   });
 
   if (sent && invite?.id) {

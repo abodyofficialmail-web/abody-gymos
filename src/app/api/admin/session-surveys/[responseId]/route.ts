@@ -91,7 +91,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ responseId
       memberCode: String(member?.member_code ?? ""),
       fallbackStoreName: String(store?.name ?? ""),
     });
-    const ok = await pushLineTextAsChunks(line.token, lineUserId, text);
+    const ok = (await pushLineTextAsChunks(line.token, lineUserId, text)).ok;
     if (!ok) {
       return json(
         {

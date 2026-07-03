@@ -319,9 +319,24 @@ export async function POST(request: Request) {
       }
 
       // ② 会員番号入力（trim + uppercase の完全一致で検索）
-      // 連携済みの人が通常トークを送った場合は無反応（リプライしない）
       const linkedMember = await findMemberByLineUserId(supabase, userId);
       if (linkedMember) {
+        const memberCode = normalizeMemberCodeInput(text);
+        if (memberCode && isPlausibleMemberCode(memberCode)) {
+          if (linkedMember.member_code.toUpperCase() === memberCode) {
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `会員番号 ${linkedMember.member_code} は既にこのLINEと連携済みです。`
+            );
+          } else {
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `このLINEアカウントは既に会員番号 ${linkedMember.member_code} と連携済みです。\n別の会員番号（${memberCode}）で連携する場合は店舗までお問い合わせください。`
+            );
+          }
+        }
         continue;
       }
       const memberCode = normalizeMemberCodeInput(text);
@@ -334,8 +349,13 @@ export async function POST(request: Request) {
       }
 
       const member = await findMemberByMemberCode(supabase, memberCode);
-      console.log("member検索結果", member);
+      console.log("member検索結果", { memberCode, found: !!member, channelKey });
       if (!member) {
+        await replyMessage(
+          replyTokenForChannel,
+          replyToken,
+          `会員番号 ${memberCode} が見つかりませんでした。番号をご確認のうえ、もう一度お送りください。`
+        );
         continue;
       }
 
@@ -353,7 +373,7 @@ export async function POST(request: Request) {
         `この会員でよろしいですか？\n${nameLine}\n会員番号:${member.member_code}\n\n「はい」で確定します`
       );
     } catch (e) {
-      console.error("LINE webhook error", e);
+      console.error("LINE webhook error", { channelKey, userId, text, error: e });
     }
   }
 

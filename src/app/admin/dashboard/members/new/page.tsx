@@ -8,6 +8,7 @@ function storeSortRank(storeName: string): number {
   if (storeName === "上野") return 2;
   if (storeName === "桜木町") return 3;
   if (storeName === "新宿") return 4;
+  if (storeName === "福岡") return 5;
   return 99;
 }
 

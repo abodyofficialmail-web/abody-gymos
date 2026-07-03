@@ -64,6 +64,7 @@ function tokenForStoreName(storeName) {
   if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
   if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
   if (storeName === "新宿") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? null;
+  if (storeName === "福岡") return process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA ?? null;
   return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 
@@ -140,6 +141,7 @@ async function main() {
     "LINE_CHANNEL_ACCESS_TOKEN_UENO",
     "LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO",
     "LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU",
+    "LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA",
     "SUPABASE_SERVICE_ROLE_KEY",
     "NEXT_PUBLIC_SUPABASE_URL",
     "TRAINER_GATE_SECRET",

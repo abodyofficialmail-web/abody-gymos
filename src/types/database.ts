@@ -53,6 +53,9 @@ export interface Database {
           line_user_id: string | null;
           line_channel_key?: string | null;
           is_active: boolean;
+          membership_status?: "active" | "hiatus" | "withdrawn";
+          withdrawn_at?: string | null;
+          withdrawn_trainer_id?: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -69,6 +72,9 @@ export interface Database {
           line_user_id?: string | null;
           line_channel_key?: string | null;
           is_active?: boolean;
+          membership_status?: "active" | "hiatus" | "withdrawn";
+          withdrawn_at?: string | null;
+          withdrawn_trainer_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -85,6 +91,9 @@ export interface Database {
           line_user_id?: string | null;
           line_channel_key?: string | null;
           is_active?: boolean;
+          membership_status?: "active" | "hiatus" | "withdrawn";
+          withdrawn_at?: string | null;
+          withdrawn_trainer_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -407,6 +416,54 @@ export interface Database {
           followup_status?: "none" | "pending" | "done";
           followup_note?: string | null;
           followup_handled_at?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      pre_session_survey_responses: {
+        Row: {
+          id: string;
+          reservation_id: string;
+          member_id: string;
+          trainer_id: string | null;
+          store_id: string;
+          session_start_at: string;
+          condition_score: number;
+          meal_status: "eaten" | "not_eaten" | "light_only";
+          intensity_preference: "light" | "moderate" | "hard";
+          request_focus: string | null;
+          concern: string | null;
+          free_comment: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          reservation_id: string;
+          member_id: string;
+          trainer_id?: string | null;
+          store_id: string;
+          session_start_at: string;
+          condition_score: number;
+          meal_status: "eaten" | "not_eaten" | "light_only";
+          intensity_preference: "light" | "moderate" | "hard";
+          request_focus?: string | null;
+          concern?: string | null;
+          free_comment?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          reservation_id?: string;
+          member_id?: string;
+          trainer_id?: string | null;
+          store_id?: string;
+          session_start_at?: string;
+          condition_score?: number;
+          meal_status?: "eaten" | "not_eaten" | "light_only";
+          intensity_preference?: "light" | "moderate" | "hard";
+          request_focus?: string | null;
+          concern?: string | null;
+          free_comment?: string | null;
           created_at?: string;
         };
         Relationships: [];

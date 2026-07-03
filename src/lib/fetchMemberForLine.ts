@@ -13,7 +13,7 @@ export type MemberLineFields = {
 
 function normalizeChannelKey(raw: unknown): LineChannelKey | null {
   const k = String(raw ?? "");
-  if (k === "default" || k === "ueno" || k === "sakuragicho" || k === "shinjuku") return k;
+  if (k === "default" || k === "ueno" || k === "sakuragicho" || k === "shinjuku" || k === "fukuoka") return k;
   return null;
 }
 

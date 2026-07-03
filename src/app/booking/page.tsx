@@ -33,7 +33,7 @@ function formatJstTime(startAtUtc: string) {
 }
 
 type AccentTheme = {
-  name: "ueno" | "ebisu" | "sakuragicho" | "unknown";
+  name: "ueno" | "ebisu" | "sakuragicho" | "fukuoka" | "unknown";
   label: string;
   accent: string; // hex
   accentSoft: string; // hex
@@ -76,6 +76,18 @@ function themeForStoreName(storeName: string): AccentTheme {
       accentSoft: "#FFFBEB",
       accentBorder: "#FDE68A",
       ok: "#CA8A04",
+      warn: "#D97706",
+      muted: "#6B7280",
+    };
+  }
+  if (storeName === "福岡") {
+    return {
+      name: "fukuoka",
+      label: "福岡",
+      accent: "#DC2626",
+      accentSoft: "#FEF2F2",
+      accentBorder: "#FECACA",
+      ok: "#DC2626",
       warn: "#D97706",
       muted: "#6B7280",
     };

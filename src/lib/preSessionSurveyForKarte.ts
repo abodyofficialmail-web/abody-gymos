@@ -1,4 +1,6 @@
 import { DateTime } from "luxon";
+import { currentSurveyMonthKey, isIsoInSurveyMonth } from "@/lib/surveyMonth";
+import { calcSurveyResponseRate } from "@/lib/surveyRateDisplay";
 import type { PreSessionSurveyForKarte } from "@/lib/preSessionSurveyDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -142,10 +144,22 @@ export async function fetchPreSessionSurveysForMember(
       (a, b) => new Date(b.session_start_at).getTime() - new Date(a.session_start_at).getTime()
     )[0] ?? null;
 
-  const invite_count = invitedReservationIds.size;
-  const response_count = (data ?? []).length;
-  const response_rate =
-    invite_count > 0 ? Math.round((response_count / invite_count) * 1000) / 10 : null;
+  const statsMonth = currentSurveyMonthKey();
+  const monthlyInvitedIds = new Set<string>();
+  for (const reservation of (reservations ?? []) as ReservationRow[]) {
+    if (!isIsoInSurveyMonth(reservation.start_at, statsMonth)) continue;
+    monthlyInvitedIds.add(reservation.id);
+  }
+  for (const row of (data ?? []) as unknown as ResponseRow[]) {
+    if (!isIsoInSurveyMonth(row.session_start_at, statsMonth)) continue;
+    monthlyInvitedIds.add(row.reservation_id);
+  }
+
+  const invite_count = monthlyInvitedIds.size;
+  const response_count = (data ?? []).filter((row) =>
+    isIsoInSurveyMonth((row as ResponseRow).session_start_at, statsMonth)
+  ).length;
+  const response_rate = calcSurveyResponseRate(invite_count, response_count);
 
   return {
     pre_session_by_date,

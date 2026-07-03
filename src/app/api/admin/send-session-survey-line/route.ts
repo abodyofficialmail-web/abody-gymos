@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     for (const memberCode of memberCodes) {
       const { data: member, error: mErr } = await supabase
         .from("members")
-        .select("id, member_code, line_user_id, is_active")
+        .select("id, member_code, line_user_id, line_channel_key, is_active")
         .eq("member_code", memberCode)
         .maybeSingle();
       if (mErr || !member?.is_active || !member.line_user_id) {
@@ -88,6 +88,7 @@ export async function POST(req: Request) {
         client_note_id: note?.id ?? null,
         line_user_id: String(member.line_user_id),
         member_code: String(member.member_code ?? memberCode),
+        line_channel_key: (member as { line_channel_key?: string | null }).line_channel_key ?? null,
         store_name: storeName,
         trainer_display_name: trainerName,
       });

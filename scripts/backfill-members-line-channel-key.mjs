@@ -39,8 +39,9 @@ function inferChannelKey(memberCode) {
   const code = String(memberCode ?? "").trim().toUpperCase();
   if (code.startsWith("SAK")) return "sakuragicho";
   if (code.startsWith("UEN")) return "ueno";
-  if (code.startsWith("SHJ")) return "shinjuku";
-  if (code.startsWith("EBI")) return "default";
+  if (code.startsWith("SHI") || code.startsWith("SHJ")) return "shinjuku";
+  if (code.startsWith("FUK")) return "fukuoka";
+  if (code.startsWith("EBI") || code.startsWith("ON") || code.startsWith("ZAI")) return "default";
   return "default";
 }
 

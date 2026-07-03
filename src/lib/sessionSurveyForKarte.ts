@@ -1,5 +1,20 @@
+import { currentSurveyMonthKey, isYmdInSurveyMonth } from "@/lib/surveyMonth";
+import { calcSurveyResponseRate } from "@/lib/surveyRateDisplay";
 import type { SessionSurveyForKarte } from "@/lib/sessionSurveyDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+export type MemberSessionSurveyStats = {
+  invite_count: number;
+  response_count: number;
+  response_rate: number | null;
+};
+
+export type MemberSessionSurveyData = {
+  survey_by_date: Record<string, SessionSurveyForKarte>;
+  latest_survey: SessionSurveyForKarte | null;
+  survey_stats: MemberSessionSurveyStats;
+  invite_by_date: Record<string, true>;
+};
 
 type SurveyRow = {
   id: string;
@@ -26,42 +41,68 @@ function pickName(
   return typeof v === "string" ? v.trim() : "";
 }
 
+function isSurveyTableMissing(error: { code?: string; message?: string } | null): boolean {
+  const msg = String(error?.message ?? "");
+  return msg.includes("session_survey") || error?.code === "PGRST205";
+}
+
+function emptyMemberSessionSurveyData(): MemberSessionSurveyData {
+  return {
+    survey_by_date: {},
+    latest_survey: null,
+    survey_stats: { invite_count: 0, response_count: 0, response_rate: null },
+    invite_by_date: {},
+  };
+}
+
 export async function fetchSessionSurveysForMember(
   supabase: SupabaseClient,
   memberId: string
-): Promise<{ survey_by_date: Record<string, SessionSurveyForKarte>; latest_survey: SessionSurveyForKarte | null }> {
-  const empty = { survey_by_date: {}, latest_survey: null };
-
-  const { data, error } = await supabase
-    .from("session_survey_responses")
-    .select(
+): Promise<MemberSessionSurveyData> {
+  const [responsesResult, invitesResult] = await Promise.all([
+    supabase
+      .from("session_survey_responses")
+      .select(
+        `
+        id,
+        session_date,
+        rating,
+        highlights,
+        intensity_feedback,
+        comment_general,
+        comment_improve,
+        comment_questions,
+        needs_followup,
+        created_at,
+        trainers ( display_name ),
+        stores ( name )
       `
-      id,
-      session_date,
-      rating,
-      highlights,
-      intensity_feedback,
-      comment_general,
-      comment_improve,
-      comment_questions,
-      needs_followup,
-      created_at,
-      trainers ( display_name ),
-      stores ( name )
-    `
-    )
-    .eq("member_id", memberId)
-    .order("session_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(100);
+      )
+      .eq("member_id", memberId)
+      .order("session_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(100),
+    supabase.from("session_survey_invites").select("session_date").eq("member_id", memberId),
+  ]);
 
+  const { data, error } = responsesResult;
   if (error) {
-    const msg = String(error.message ?? "");
-    if (msg.includes("session_survey") || error.code === "PGRST205") {
-      return empty;
+    if (isSurveyTableMissing(error)) {
+      return emptyMemberSessionSurveyData();
     }
     console.error("session_survey_responses fetch failed", error);
-    return empty;
+    return emptyMemberSessionSurveyData();
+  }
+
+  const { data: invites, error: inviteError } = invitesResult;
+  if (inviteError && !isSurveyTableMissing(inviteError)) {
+    console.error("session_survey_invites fetch failed", inviteError);
+  }
+
+  const invite_by_date: Record<string, true> = {};
+  for (const invite of invites ?? []) {
+    const date = String(invite.session_date ?? "").trim();
+    if (date) invite_by_date[date] = true;
   }
 
   const survey_by_date: Record<string, SessionSurveyForKarte> = {};
@@ -71,11 +112,24 @@ export async function fetchSessionSurveysForMember(
     survey_by_date[date] = mapRow(row);
   }
 
-  const latest_survey = Object.values(survey_by_date).sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  )[0] ?? null;
+  const latest_survey =
+    Object.values(survey_by_date).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )[0] ?? null;
 
-  return { survey_by_date, latest_survey };
+  const statsMonth = currentSurveyMonthKey();
+  const monthlyInviteDates = Object.keys(invite_by_date).filter((d) => isYmdInSurveyMonth(d, statsMonth));
+  const monthlyResponseDates = Object.keys(survey_by_date).filter((d) => isYmdInSurveyMonth(d, statsMonth));
+  const invite_count = monthlyInviteDates.length;
+  const response_count = monthlyResponseDates.length;
+  const response_rate = calcSurveyResponseRate(invite_count, response_count);
+
+  return {
+    survey_by_date,
+    latest_survey,
+    survey_stats: { invite_count, response_count, response_rate },
+    invite_by_date,
+  };
 }
 
 function mapRow(row: SurveyRow): SessionSurveyForKarte {

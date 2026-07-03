@@ -7,6 +7,7 @@ export const STORE_MEMBER_CODE_PREFIX: Record<string, string> = {
   上野: "UEN",
   桜木町: "SAK",
   新宿: "SHI",
+  福岡: "FUK",
 };
 
 export function memberCodePrefixForStoreName(storeName: string): string | null {
@@ -152,6 +153,7 @@ export async function registerMember(
       email,
       store_id: store.id,
       is_active: true,
+      membership_status: "active" as const,
       line_user_id: null,
     })
     .select("id, member_code, name, email, store_id")

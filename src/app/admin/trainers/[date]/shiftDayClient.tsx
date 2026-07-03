@@ -103,7 +103,7 @@ function trainerColor(name: string): string {
     ひろむ: "#111827",
     だいき: "#F59E0B",
     せいや: "#2563EB",
-    しょうどう: "#DC2626",
+    こうへい: "#DC2626",
     ゆうと: "#7C3AED",
     りょう: "#F97316",
   };

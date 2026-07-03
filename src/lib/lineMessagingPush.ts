@@ -3,12 +3,16 @@
  * トークンは店舗名で既存の予約通知と同じ環境変数を参照する。
  */
 
-export function lineChannelTokenForStoreName(storeName: string): string | null {
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  if (storeName === "新宿") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? null;
-  return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
-}
+import {
+  lineAccessTokenForChannelKey,
+  lineChannelKeyForStoreName,
+  lineChannelTokenForStoreName,
+  lineMemberProfileReachable,
+  linePushTokenForMember,
+  type LineChannelKey,
+} from "@/lib/lineChannel";
+
+export { lineChannelTokenForStoreName } from "@/lib/lineChannel";
 
 /** メッセージは最大約5000文字。余裕を見て分割する。 */
 const LINE_TEXT_SAFE_MAX = 4800;
@@ -61,10 +65,112 @@ export async function pushLineTextChunks(params: {
   return out;
 }
 
-/** @returns すべて成功なら true */
-export async function pushLineTextAsChunks(token: string | null, toUserId: string, text: string): Promise<boolean> {
-  if (!token || !toUserId) return false;
+export type LineTextPushResult = {
+  ok: boolean;
+  status?: number;
+  body?: string;
+};
+
+/** @returns すべて成功なら ok: true */
+export async function pushLineTextAsChunks(token: string | null, toUserId: string, text: string): Promise<LineTextPushResult> {
+  if (!token || !toUserId) return { ok: false, body: "missing token or user id" };
   const chunks = chunkLinePushText(text);
   const results = await pushLineTextChunks({ token, toUserId, chunks });
-  return results.length > 0 && results.every((r) => r.ok);
+  if (results.length === 0) return { ok: false, body: "no chunks" };
+  const last = results[results.length - 1];
+  return {
+    ok: results.every((r) => r.ok),
+    status: last?.status,
+    body: last?.body,
+  };
+}
+
+export type LinePushForMemberResult = {
+  ok: boolean;
+  channelKey: LineChannelKey | null;
+  source: "explicit" | "store_fallback" | "member_code" | "store_fallback_retry" | "missing";
+  status?: number;
+  body?: string;
+};
+
+/** 会員の連携チャネルで push。失敗時はセッション店舗の公式LINEトークンでも再試行する */
+export async function pushLineTextForMember(params: {
+  toUserId: string;
+  text: string;
+  memberCode?: string | null;
+  lineChannelKey?: LineChannelKey | null;
+  storeName?: string | null;
+}): Promise<LinePushForMemberResult> {
+  const { toUserId, text, memberCode, lineChannelKey, storeName } = params;
+  if (!toUserId) return { ok: false, channelKey: null, source: "missing", body: "missing line user id" };
+  if (!text.trim()) return { ok: false, channelKey: null, source: "missing", body: "empty message" };
+
+  const primary = linePushTokenForMember({
+    lineChannelKey: lineChannelKey ?? null,
+    memberCode: memberCode ?? null,
+    fallbackStoreName: storeName ?? null,
+  });
+
+  const tried = new Set<string>();
+  const candidates: Array<{
+    token: string;
+    channelKey: LineChannelKey | null;
+    source: LinePushForMemberResult["source"];
+  }> = [];
+
+  if (primary.token) {
+    candidates.push({
+      token: primary.token,
+      channelKey: primary.channelKey ?? lineChannelKeyForStoreName(storeName ?? null),
+      source: primary.source,
+    });
+  }
+
+  const storeToken = storeName ? lineChannelTokenForStoreName(storeName) : null;
+  if (storeToken) {
+    candidates.push({
+      token: storeToken,
+      channelKey: lineChannelKeyForStoreName(storeName ?? null),
+      source: "store_fallback_retry",
+    });
+  }
+
+  // 連携チャネル未設定のときだけ恵比寿公式を試す（店舗専用LINEと混同しない）
+  if (!lineChannelKey) {
+    const defaultToken = lineAccessTokenForChannelKey("default");
+    if (defaultToken) {
+      candidates.push({
+        token: defaultToken,
+        channelKey: "default",
+        source: "store_fallback_retry",
+      });
+    }
+  }
+
+  let lastError: { status?: number; body?: string } = {};
+
+  for (const candidate of candidates) {
+    if (tried.has(candidate.token)) continue;
+    tried.add(candidate.token);
+
+    const reachable = await lineMemberProfileReachable(candidate.token, toUserId);
+    if (!reachable) {
+      lastError = { body: `profile not reachable on channel ${candidate.channelKey ?? "unknown"}` };
+      continue;
+    }
+
+    const result = await pushLineTextAsChunks(candidate.token, toUserId, text);
+    if (result.ok) {
+      return { ok: true, channelKey: candidate.channelKey, source: candidate.source };
+    }
+    lastError = { status: result.status, body: result.body };
+  }
+
+  return {
+    ok: false,
+    channelKey: primary.channelKey,
+    source: primary.source,
+    status: lastError.status,
+    body: lastError.body,
+  };
 }

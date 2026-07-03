@@ -34,7 +34,7 @@ function loadEnvFile(name, { overwrite = false } = {}) {
   }
 }
 
-loadEnvFile(".env.vercel.production", { overwrite: true });
+loadEnvFile(".env.local");
 loadEnvFile(".env.production.local");
 
 function parseArgs(argv) {
@@ -54,6 +54,7 @@ function tokenForChannel(channel) {
   if (channel === "ueno") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
   if (channel === "sakuragicho") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
   if (channel === "shinjuku") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? null;
+  if (channel === "fukuoka") return process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA ?? null;
   return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 

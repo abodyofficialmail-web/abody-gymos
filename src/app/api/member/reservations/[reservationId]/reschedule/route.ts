@@ -319,7 +319,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           endAtUtcIso: String(updated.end_at),
           sessionType,
         });
-        lineNotified = await pushLineTextAsChunks(line.token, member.line_user_id, text);
+        lineNotified = (await pushLineTextAsChunks(line.token, member.line_user_id, text)).ok;
         if (!lineNotified) {
           console.error("LINE push failed (member reschedule)", {
             memberId,

@@ -11,10 +11,24 @@ import { lineMessageWithReservationDetails } from "./lib/lineReservationMessage.
 
 const TZ = "Asia/Tokyo";
 
-function tokenForStoreName(storeName) {
-  if (storeName === "上野") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
-  if (storeName === "桜木町") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
-  if (storeName === "新宿") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? null;
+function inferChannelKey(memberCode, lineChannelKey) {
+  if (lineChannelKey && ["default", "ueno", "sakuragicho", "shinjuku", "fukuoka"].includes(lineChannelKey)) {
+    return lineChannelKey;
+  }
+  const code = String(memberCode ?? "").trim().toUpperCase();
+  if (code.startsWith("SAK")) return "sakuragicho";
+  if (code.startsWith("UEN")) return "ueno";
+  if (code.startsWith("SHI") || code.startsWith("SHJ")) return "shinjuku";
+  if (code.startsWith("FUK")) return "fukuoka";
+  return "default";
+}
+
+function tokenForMember(member, storeName) {
+  const key = inferChannelKey(member.member_code, member.line_channel_key);
+  if (key === "ueno") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO ?? null;
+  if (key === "sakuragicho") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO ?? null;
+  if (key === "shinjuku") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU ?? process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
+  if (key === "fukuoka") return process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA ?? null;
   return process.env.LINE_CHANNEL_ACCESS_TOKEN ?? null;
 }
 
@@ -60,7 +74,7 @@ async function main() {
   for (const memberCode of codes) {
     const { data: member, error: mErr } = await supabase
       .from("members")
-      .select("id, member_code, name, line_user_id")
+      .select("id, member_code, name, line_user_id, line_channel_key")
       .eq("member_code", memberCode)
       .maybeSingle();
     if (mErr) throw mErr;
@@ -85,7 +99,7 @@ async function main() {
 
     for (const r of reservations) {
       const storeName = r.stores?.name ?? "恵比寿";
-      const token = tokenForStoreName(storeName);
+      const token = tokenForMember(member, storeName);
       const sessionType = r.session_type === "online" ? "online" : "store";
       const text = lineMessageWithReservationDetails({
         storeName,

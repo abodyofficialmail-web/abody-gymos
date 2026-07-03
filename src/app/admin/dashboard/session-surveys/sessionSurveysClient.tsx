@@ -53,6 +53,7 @@ export function SessionSurveysClient() {
   const [rows, setRows] = useState<Row[]>([]);
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ stores: [], trainers: [] });
   const [trainerStats, setTrainerStats] = useState<TrainerStat[]>([]);
+  const [statsMonthLabel, setStatsMonthLabel] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [replyTarget, setReplyTarget] = useState<Row | null>(null);
@@ -74,10 +75,12 @@ export function SessionSurveysClient() {
         responses: Row[];
         filter_options?: FilterOptions;
         trainer_stats?: TrainerStat[];
+        month_label?: string;
       };
       setRows(data.responses ?? []);
       setFilterOptions(data.filter_options ?? { stores: [], trainers: [] });
       setTrainerStats(data.trainer_stats ?? []);
+      setStatsMonthLabel(data.month_label ?? "");
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "取得に失敗");
     } finally {
@@ -222,7 +225,9 @@ export function SessionSurveysClient() {
 
       {trainerStats.length > 0 ? (
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-sm font-bold text-slate-900">トレーナー別集計</div>
+          <div className="text-sm font-bold text-slate-900">
+            トレーナー別集計{statsMonthLabel ? `（${statsMonthLabel}）` : "（今月）"}
+          </div>
           <div className="mt-3 grid gap-2 md:grid-cols-3">
             {trainerStats.map((s) => (
               <button

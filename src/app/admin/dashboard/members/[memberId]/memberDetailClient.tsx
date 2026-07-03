@@ -11,8 +11,18 @@ import {
   formatSurveySummary,
   type SessionSurveyForKarte,
 } from "@/lib/sessionSurveyDisplay";
+import {
+  formatWithdrawnAt,
+  MEMBERSHIP_STATUS_OPTIONS,
+  membershipStatusBadgeClass,
+  membershipStatusButtonClass,
+  membershipStatusLabel,
+  resolveMembershipStatus,
+  type MembershipStatus,
+} from "@/lib/memberMembershipStatus";
 import { DateTime } from "luxon";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 const TZ = "Asia/Tokyo";
@@ -96,10 +106,28 @@ export function MemberDetailClient({
     name: string;
     email: string | null;
     is_active: boolean;
+    membership_status?: MembershipStatus | null;
+    withdrawn_at?: string | null;
+    withdrawn_trainer_id?: string | null;
+    withdrawn_trainer_name?: string | null;
     line_user_id: string | null;
+    line_channel_key?: string | null;
+    line_channel_label?: string | null;
   };
 }) {
+  const router = useRouter();
   const month = useMemo(() => DateTime.now().setZone(TZ).toFormat("yyyy-MM"), []);
+  const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
+  const [membershipStatus, setMembershipStatus] = useState<MembershipStatus>(() =>
+    resolveMembershipStatus(member.membership_status, member.is_active)
+  );
+  const [withdrawnAt, setWithdrawnAt] = useState(member.withdrawn_at ?? todayYmd);
+  const [withdrawnTrainerId, setWithdrawnTrainerId] = useState(member.withdrawn_trainer_id ?? "");
+  const [withdrawnTrainerName, setWithdrawnTrainerName] = useState(member.withdrawn_trainer_name ?? "");
+  const [withdrawFormOpen, setWithdrawFormOpen] = useState(false);
+  const [withdrawTrainers, setWithdrawTrainers] = useState<TrainerRow[]>([]);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
   const [surveyByDate, setSurveyByDate] = useState<Record<string, SessionSurveyForKarte>>({});
@@ -124,7 +152,6 @@ export function MemberDetailClient({
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
 
   // 本日のカルテ入力
-  const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
   const [stores, setStores] = useState<StoreRow[] | null>(null);
   const [trainers, setTrainers] = useState<TrainerRow[] | null>(null);
   /** 確認画面: 当日シフトに入っているトレーナー（優先表示） */
@@ -174,6 +201,21 @@ export function MemberDetailClient({
         // 取得失敗は致命ではない（手入力で救える）
       });
   }, [memberId]);
+
+  useEffect(() => {
+    fetch("/api/trainers", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data: { trainers?: { id: string; name: string; store_name?: string }[] }) => {
+        const list = (data.trainers ?? [])
+          .map((t) => ({
+            id: t.id,
+            display_name: [t.name, t.store_name].filter(Boolean).join(" / ") || t.name,
+          }))
+          .sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
+        setWithdrawTrainers(list);
+      })
+      .catch(() => setWithdrawTrainers([]));
+  }, []);
 
   useEffect(() => {
     apiGet<{ stores: StoreRow[] }>("/api/booking-v2/stores")
@@ -558,6 +600,97 @@ export function MemberDetailClient({
     return lines.join("\n");
   };
 
+  const saveMembershipStatus = async (next: MembershipStatus) => {
+    if (next === "withdrawn") {
+      setWithdrawFormOpen(true);
+      setStatusMsg(null);
+      if (!withdrawnAt) setWithdrawnAt(todayYmd);
+      return;
+    }
+    if (next === membershipStatus || statusSaving) return;
+
+    setStatusSaving(true);
+    setStatusMsg(null);
+    setWithdrawFormOpen(false);
+    const prev = membershipStatus;
+    setMembershipStatus(next);
+    try {
+      const res = await apiPatch<{
+        member: {
+          membership_status?: MembershipStatus;
+          is_active?: boolean;
+          withdrawn_at?: string | null;
+          withdrawn_trainer_id?: string | null;
+          withdrawn_trainer_name?: string | null;
+        };
+      }>(`/api/admin/members/${encodeURIComponent(memberId)}`, { membership_status: next });
+      const saved = resolveMembershipStatus(res.member?.membership_status, res.member?.is_active ?? next === "active");
+      setMembershipStatus(saved);
+      setWithdrawnAt(res.member?.withdrawn_at ?? todayYmd);
+      setWithdrawnTrainerId(res.member?.withdrawn_trainer_id ?? "");
+      setWithdrawnTrainerName(res.member?.withdrawn_trainer_name ?? "");
+      setStatusMsg(`${membershipStatusLabel(saved)}に更新しました`);
+      router.refresh();
+    } catch (e: any) {
+      setMembershipStatus(prev);
+      setStatusMsg(String(e?.message ?? "更新に失敗しました"));
+    } finally {
+      setStatusSaving(false);
+    }
+  };
+
+  const confirmWithdrawal = async () => {
+    if (!withdrawnAt.trim()) {
+      setStatusMsg("退会日を入力してください");
+      return;
+    }
+    if (!withdrawnTrainerId) {
+      setStatusMsg("退会時担当トレーナーを選択してください");
+      return;
+    }
+    if (statusSaving) return;
+
+    setStatusSaving(true);
+    setStatusMsg(null);
+    const prevStatus = membershipStatus;
+    const prevAt = member.withdrawn_at ?? todayYmd;
+    const prevTrainerId = member.withdrawn_trainer_id ?? "";
+    const prevTrainerName = member.withdrawn_trainer_name ?? "";
+
+    setMembershipStatus("withdrawn");
+    try {
+      const res = await apiPatch<{
+        member: {
+          membership_status?: MembershipStatus;
+          is_active?: boolean;
+          withdrawn_at?: string | null;
+          withdrawn_trainer_id?: string | null;
+          withdrawn_trainer_name?: string | null;
+        };
+      }>(`/api/admin/members/${encodeURIComponent(memberId)}`, {
+        membership_status: "withdrawn",
+        withdrawn_at: withdrawnAt,
+        withdrawn_trainer_id: withdrawnTrainerId,
+      });
+      const saved = resolveMembershipStatus(res.member?.membership_status, false);
+      setMembershipStatus(saved);
+      setWithdrawnAt(res.member?.withdrawn_at ?? withdrawnAt);
+      setWithdrawnTrainerId(res.member?.withdrawn_trainer_id ?? withdrawnTrainerId);
+      setWithdrawnTrainerName(res.member?.withdrawn_trainer_name ?? "");
+      setWithdrawFormOpen(false);
+      setStatusMsg("退会処理を保存しました");
+      router.refresh();
+    } catch (e: any) {
+      setMembershipStatus(prevStatus);
+      setWithdrawnAt(prevAt);
+      setWithdrawnTrainerId(prevTrainerId);
+      setWithdrawnTrainerName(prevTrainerName);
+      setStatusMsg(String(e?.message ?? "更新に失敗しました"));
+    } finally {
+      setStatusSaving(false);
+    }
+  };
+
   const saveTodayNote = async () => {
     setNoteMsg(null);
     if (!storeId) return setNoteMsg("店舗を選択してください");
@@ -568,7 +701,12 @@ export function MemberDetailClient({
 
     setNoteSaving(true);
     try {
-      await apiPost("/api/client-notes", {
+      const res = await apiPost<{
+        line?: {
+          karte?: { sent: boolean; channel?: string | null; source?: string };
+          survey?: { sent: boolean };
+        };
+      }>("/api/client-notes", {
         member_id: memberId,
         store_id: storeId,
         trainer_id: trainerId,
@@ -577,7 +715,20 @@ export function MemberDetailClient({
         line_message: buildLineMessage(),
       });
       await refreshNotes();
-      setNoteMsg("保存しました（LINE連携済みの会員には送信されます）");
+      const karteLine = res.line?.karte;
+      const surveyLine = res.line?.survey;
+      if (!member.line_user_id) {
+        setNoteMsg("保存しました（LINE未連携のため送信されません）");
+      } else if (karteLine?.sent === false) {
+        setNoteMsg("カルテは保存しましたが、LINE送信に失敗しました。会員のLINE連携チャネルをご確認ください。");
+      } else if (karteLine?.sent) {
+        const channel = karteLine.channel ? `（${karteLine.channel}）` : "";
+        const surveyNote =
+          surveyLine?.sent === false ? " アンケートのLINE送信はスキップまたは失敗しました。" : "";
+        setNoteMsg(`保存しました。LINEでカルテ${surveyLine?.sent ? "とアンケート" : ""}を送信しました${channel}。${surveyNote}`);
+      } else {
+        setNoteMsg("保存しました");
+      }
     } catch (e: any) {
       setNoteMsg(String(e?.message ?? "保存に失敗しました"));
     } finally {
@@ -587,7 +738,7 @@ export function MemberDetailClient({
 
   return (
     <div className="space-y-4">
-      <Link href="/admin/dashboard/members" className="text-sm text-slate-600 underline">
+      <Link href="/admin/dashboard/members" prefetch={false} className="text-sm text-slate-600 underline">
         ← 一覧へ
       </Link>
 
@@ -599,7 +750,17 @@ export function MemberDetailClient({
           <div>
             <div className="text-base font-bold text-slate-900">{member.member_code || member.id}</div>
             <div className="pt-1 text-sm text-slate-700">{member.name || ""}</div>
-            <div className="pt-1 text-xs text-slate-500">{member.is_active ? "有効" : "無効"}</div>
+            <div className="pt-2">
+              <span className={membershipStatusBadgeClass(membershipStatus)}>
+                {membershipStatusLabel(membershipStatus)}
+              </span>
+            </div>
+            {membershipStatus === "withdrawn" && !withdrawFormOpen ? (
+              <div className="pt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
+                <div>退会日: {formatWithdrawnAt(withdrawnAt)}</div>
+                <div>退会時担当: {withdrawnTrainerName || "—"}</div>
+              </div>
+            ) : null}
             <div className="pt-1 text-[11px] text-slate-400 break-all">ID: {member.id}</div>
             {email.trim() ? (
               <div className="pt-1 text-[11px] text-slate-500 break-all">Email: {email.trim()}</div>
@@ -607,13 +768,121 @@ export function MemberDetailClient({
               <div className="pt-1 text-[11px] text-slate-400">Email: 未登録</div>
             )}
           </div>
-          <div
-            className={[
-              "rounded-full px-3 py-1 text-xs font-semibold border",
-              member.line_user_id ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600",
-            ].join(" ")}
-          >
-            {member.line_user_id ? "LINE連携済み" : "LINE未連携"}
+          <div className="text-right space-y-1">
+            <div
+              className={[
+                "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
+                member.line_user_id ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600",
+              ].join(" ")}
+            >
+              {member.line_user_id ? "LINE連携済み" : "LINE未連携"}
+            </div>
+            {member.line_user_id && member.line_channel_label ? (
+              <div className="text-[11px] text-slate-500">送信先: {member.line_channel_label}</div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="pt-2 space-y-2 border-t border-slate-100">
+          <div className="text-xs font-semibold text-slate-700">会員ステータス</div>
+          <div className="flex flex-wrap gap-2">
+            {MEMBERSHIP_STATUS_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={statusSaving}
+                onClick={() => void saveMembershipStatus(opt.id)}
+                className={membershipStatusButtonClass(
+                  opt.id,
+                  opt.id === "withdrawn" ? membershipStatus === "withdrawn" || withdrawFormOpen : membershipStatus === opt.id
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {withdrawFormOpen ? (
+            <div className="rounded-xl border border-slate-300 bg-slate-50 p-3 space-y-3">
+              <div className="text-xs font-semibold text-slate-800">退会情報</div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-slate-700">退会日</label>
+                <input
+                  type="date"
+                  value={withdrawnAt}
+                  onChange={(e) => {
+                    setWithdrawnAt(e.target.value);
+                    setStatusMsg(null);
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-slate-700">退会時担当トレーナー</label>
+                <select
+                  value={withdrawnTrainerId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setWithdrawnTrainerId(id);
+                    const name = withdrawTrainers.find((t) => t.id === id)?.display_name ?? "";
+                    setWithdrawnTrainerName(name);
+                    setStatusMsg(null);
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">選択してください</option>
+                  {withdrawTrainers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={statusSaving}
+                  onClick={() => void confirmWithdrawal()}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {statusSaving ? "保存中…" : "退会を確定"}
+                </button>
+                <button
+                  type="button"
+                  disabled={statusSaving}
+                  onClick={() => {
+                    setWithdrawFormOpen(false);
+                    setStatusMsg(null);
+                    if (membershipStatus !== "withdrawn") {
+                      setWithdrawnAt(member.withdrawn_at ?? todayYmd);
+                      setWithdrawnTrainerId(member.withdrawn_trainer_id ?? "");
+                      setWithdrawnTrainerName(member.withdrawn_trainer_name ?? "");
+                    }
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800"
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {membershipStatus === "withdrawn" && !withdrawFormOpen ? (
+            <button
+              type="button"
+              disabled={statusSaving}
+              onClick={() => {
+                setWithdrawFormOpen(true);
+                setStatusMsg(null);
+              }}
+              className="text-xs font-semibold text-slate-600 underline"
+            >
+              退会情報を編集
+            </button>
+          ) : null}
+          {statusMsg ? <div className="text-xs text-slate-600">{statusMsg}</div> : null}
+          <div className="text-[11px] text-slate-500 leading-relaxed">
+            休会・退会にすると予約・ログインができなくなります。カルテの閲覧・入力は引き続き可能です。
           </div>
         </div>
 
@@ -658,6 +927,25 @@ export function MemberDetailClient({
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
         <div className="text-sm font-bold text-slate-900">本日のカルテ入力</div>
+
+        {preSessionStats.invite_count > 0 || surveyStats.invite_count > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {preSessionStats.invite_count > 0 ? (
+              <div className={surveyRateBadgeClass(preSessionStats.response_rate)}>
+                今月のセッション前ヒアリング回答率{" "}
+                {preSessionStats.response_rate != null ? `${preSessionStats.response_rate.toFixed(1)}%` : "—"}（
+                {preSessionStats.response_count}/{preSessionStats.invite_count}件）
+              </div>
+            ) : null}
+            {surveyStats.invite_count > 0 ? (
+              <div className={surveyRateBadgeClass(surveyStats.response_rate)}>
+                今月のセッション後アンケート回答率{" "}
+                {surveyStats.response_rate != null ? `${surveyStats.response_rate.toFixed(1)}%` : "—"}（
+                {surveyStats.response_count}/{surveyStats.invite_count}件）
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {karteStep === "idle" ? (
           <div className="pt-2">
@@ -1072,25 +1360,7 @@ export function MemberDetailClient({
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
-          <div className="flex flex-wrap gap-2">
-            {preSessionStats.invite_count > 0 ? (
-              <div className={surveyRateBadgeClass(preSessionStats.response_rate)}>
-                セッション前ヒアリング回答率{" "}
-                {preSessionStats.response_rate != null ? `${preSessionStats.response_rate.toFixed(1)}%` : "—"}（
-                {preSessionStats.response_count}/{preSessionStats.invite_count}件）
-              </div>
-            ) : null}
-            {surveyStats.invite_count > 0 ? (
-              <div className={surveyRateBadgeClass(surveyStats.response_rate)}>
-                セッション後アンケート回答率{" "}
-                {surveyStats.response_rate != null ? `${surveyStats.response_rate.toFixed(1)}%` : "—"}（
-                {surveyStats.response_count}/{surveyStats.invite_count}件）
-              </div>
-            ) : null}
-          </div>
-        </div>
+        <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
 
         {latestPreSession ? (
           <div className="rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-3 text-sm space-y-1">

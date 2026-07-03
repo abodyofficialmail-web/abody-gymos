@@ -1,6 +1,18 @@
 "use client";
 
 import { DateTime } from "luxon";
+import {
+  membershipStatusBadgeClass,
+  membershipStatusLabel,
+  resolveMembershipStatus,
+  type MembershipStatus,
+} from "@/lib/memberMembershipStatus";
+import {
+  formatSurveyRateShort,
+  surveyRateBadgeClass,
+  postSessionSurveySortValue,
+  type SurveyRateStats,
+} from "@/lib/surveyRateDisplay";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
@@ -15,11 +27,23 @@ type MemberRow = {
   email?: string | null;
   line_user_id: string | null;
   is_active: boolean;
+  membership_status?: MembershipStatus | null;
   store_id?: string | null;
   store_name?: string | null;
 };
 
 type BookingFilter = "all" | "low" | "zero";
+type SortMode = "default" | "response_rate" | "booking_count";
+
+type MemberSurveyStats = {
+  pre_session: SurveyRateStats;
+  post_session: SurveyRateStats;
+};
+
+const emptySurveyStats = (): MemberSurveyStats => ({
+  pre_session: { invite_count: 0, response_count: 0, response_rate: null },
+  post_session: { invite_count: 0, response_count: 0, response_rate: null },
+});
 
 function storeSortRank(storeName: string): number {
   if (storeName === "恵比寿") return 1;
@@ -41,26 +65,40 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
   const { stores, members } = props;
   const month = useMemo(() => DateTime.now().setZone(TZ).toFormat("yyyy-MM"), []);
   const monthLabel = useMemo(() => DateTime.now().setZone(TZ).setLocale("ja").toFormat("M月"), []);
+  const lastMonthLabel = useMemo(
+    () => DateTime.now().setZone(TZ).minus({ months: 1 }).setLocale("ja").toFormat("M月"),
+    []
+  );
 
   const [selectedStoreId, setSelectedStoreId] = useState<string>("all");
   const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
+  const [sortMode, setSortMode] = useState<SortMode>("default");
   const [q, setQ] = useState("");
   const [bookingCounts, setBookingCounts] = useState<Record<string, number>>({});
+  const [lastMonthBookingCounts, setLastMonthBookingCounts] = useState<Record<string, number>>({});
+  const [surveyStats, setSurveyStats] = useState<Record<string, MemberSurveyStats>>({});
   const [countsLoading, setCountsLoading] = useState(true);
+  const [surveyLoading, setSurveyLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setCountsLoading(true);
-    const qs = new URLSearchParams({ month });
+    const qs = new URLSearchParams({ month, include_previous: "1" });
     if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
 
     fetch(`/api/admin/member-booking-counts?${qs.toString()}`, { cache: "no-store" })
       .then((res) => res.json())
-      .then((json: { counts?: Record<string, number> }) => {
-        if (!cancelled) setBookingCounts(json.counts ?? {});
+      .then((json: { counts?: Record<string, number>; last_month_counts?: Record<string, number> }) => {
+        if (!cancelled) {
+          setBookingCounts(json.counts ?? {});
+          setLastMonthBookingCounts(json.last_month_counts ?? {});
+        }
       })
       .catch(() => {
-        if (!cancelled) setBookingCounts({});
+        if (!cancelled) {
+          setBookingCounts({});
+          setLastMonthBookingCounts({});
+        }
       })
       .finally(() => {
         if (!cancelled) setCountsLoading(false);
@@ -71,7 +109,36 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
     };
   }, [month, selectedStoreId]);
 
-  const activeMembers = useMemo(() => (members ?? []).filter((m) => m.is_active), [members]);
+  useEffect(() => {
+    let cancelled = false;
+    setSurveyLoading(true);
+    const qs = new URLSearchParams();
+    if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
+
+    fetch(`/api/admin/member-survey-stats?${qs.toString()}`, { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json: { stats?: Record<string, MemberSurveyStats> }) => {
+        if (!cancelled) setSurveyStats(json.stats ?? {});
+      })
+      .catch(() => {
+        if (!cancelled) setSurveyStats({});
+      })
+      .finally(() => {
+        if (!cancelled) setSurveyLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStoreId]);
+
+  const activeMembers = useMemo(
+    () =>
+      (members ?? []).filter(
+        (m) => resolveMembershipStatus(m.membership_status, m.is_active) === "active"
+      ),
+    [members]
+  );
 
   const lowBookingSummary = useMemo(() => {
     let low = 0;
@@ -100,14 +167,32 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
       });
     }
     if (bookingFilter === "low") {
-      list = list.filter((m) => m.is_active && (bookingCounts[m.id] ?? 0) <= LOW_BOOKING_MAX);
+      list = list.filter(
+        (m) =>
+          resolveMembershipStatus(m.membership_status, m.is_active) === "active" &&
+          (bookingCounts[m.id] ?? 0) <= LOW_BOOKING_MAX
+      );
     } else if (bookingFilter === "zero") {
-      list = list.filter((m) => m.is_active && (bookingCounts[m.id] ?? 0) === 0);
+      list = list.filter(
+        (m) =>
+          resolveMembershipStatus(m.membership_status, m.is_active) === "active" &&
+          (bookingCounts[m.id] ?? 0) === 0
+      );
     }
 
     const nameByStoreId = new Map((stores ?? []).map((s) => [s.id, s.name]));
     const sorted = [...list].sort((a, b) => {
-      if (bookingFilter !== "all") {
+      if (sortMode === "booking_count") {
+        const aCount = bookingCounts[a.id] ?? 0;
+        const bCount = bookingCounts[b.id] ?? 0;
+        if (aCount !== bCount) return aCount - bCount;
+      } else if (sortMode === "response_rate") {
+        const aStats = surveyStats[a.id] ?? emptySurveyStats();
+        const bStats = surveyStats[b.id] ?? emptySurveyStats();
+        const aRate = postSessionSurveySortValue(aStats.post_session);
+        const bRate = postSessionSurveySortValue(bStats.post_session);
+        if (aRate !== bRate) return aRate - bRate;
+      } else if (bookingFilter !== "all") {
         const aCount = bookingCounts[a.id] ?? 0;
         const bCount = bookingCounts[b.id] ?? 0;
         if (aCount !== bCount) return aCount - bCount;
@@ -121,7 +206,7 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
       return String(a.member_code ?? "").localeCompare(String(b.member_code ?? ""), "ja");
     });
     return sorted;
-  }, [members, q, selectedStoreId, stores, bookingFilter, bookingCounts]);
+  }, [members, q, selectedStoreId, stores, bookingFilter, bookingCounts, sortMode, surveyStats]);
 
   return (
     <div className="space-y-3">
@@ -219,6 +304,32 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
             );
           })}
         </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(
+            [
+              ["default", "標準"],
+              ["response_rate", "アンケート回答率低い順"],
+              ["booking_count", "予約少ない順"],
+            ] as const
+          ).map(([id, label]) => {
+            const active = sortMode === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setSortMode(id)}
+                className={[
+                  "shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors",
+                  active ? "text-slate-900" : "bg-white text-slate-700 hover:bg-slate-50",
+                ].join(" ")}
+                style={active ? { borderColor: "#CBD5E1", background: "#F8FAFC", boxShadow: "inset 0 0 0 1px #CBD5E1" } : { borderColor: "#E5E7EB" }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="text-xs text-slate-500">
@@ -228,6 +339,11 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
       <div className="grid gap-2">
         {filtered.map((m) => {
           const bookingCount = bookingCounts[m.id] ?? 0;
+          const lastMonthBookingCount = lastMonthBookingCounts[m.id] ?? 0;
+          const status = resolveMembershipStatus(m.membership_status, m.is_active);
+          const stats = surveyStats[m.id] ?? emptySurveyStats();
+          const preLabel = formatSurveyRateShort("ヒアリング", stats.pre_session);
+          const postLabel = formatSurveyRateShort("アンケート", stats.post_session);
           return (
             <Link
               key={m.id}
@@ -240,10 +356,15 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
                   <div className="pt-1 text-sm text-slate-700">{m.name ?? ""}</div>
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  {!countsLoading && m.is_active ? (
-                    <span className={bookingCountBadgeClass(bookingCount)}>
-                      {monthLabel} {bookingCount}件
-                    </span>
+                  {!countsLoading ? (
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={bookingCountBadgeClass(lastMonthBookingCount)}>
+                        先月 {lastMonthBookingCount}件
+                      </span>
+                      <span className={bookingCountBadgeClass(bookingCount)}>
+                        今月 {bookingCount}件
+                      </span>
+                    </div>
                   ) : null}
                   <span
                     className={[
@@ -259,11 +380,22 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
               </div>
 
               <div className="pt-1 flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-slate-500">{m.is_active ? "有効" : "無効"}</span>
+                <span className={membershipStatusBadgeClass(status)}>{membershipStatusLabel(status)}</span>
                 {m.store_name ? (
                   <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-700">{m.store_name}</span>
                 ) : null}
               </div>
+
+              {!surveyLoading && (preLabel || postLabel) ? (
+                <div className="pt-2 flex flex-wrap gap-1.5">
+                  {preLabel ? (
+                    <span className={surveyRateBadgeClass(stats.pre_session.response_rate)}>{preLabel}</span>
+                  ) : null}
+                  {postLabel ? (
+                    <span className={surveyRateBadgeClass(stats.post_session.response_rate)}>{postLabel}</span>
+                  ) : null}
+                </div>
+              ) : null}
             </Link>
           );
         })}

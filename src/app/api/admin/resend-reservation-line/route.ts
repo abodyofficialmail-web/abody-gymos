@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
-import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { lineAccessTokenForChannelKey, linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
 
 const TZ = "Asia/Tokyo";
@@ -148,15 +148,17 @@ export async function POST(req: Request) {
   }
 }
 
-/** GET: トークン疎通確認（bot profile） */
+/** GET: トークン疎通確認（bot profile）。?channel=shinjuku 等 */
 export async function GET(req: Request) {
   try {
     if (!isAuthorized(req)) {
       return jsonResponse({ error: "unauthorized" }, 401);
     }
-    const token = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";
+    const url = new URL(req.url);
+    const channel = normalizeLineChannelKey(url.searchParams.get("channel") ?? "default") ?? "default";
+    const token = lineAccessTokenForChannelKey(channel) ?? "";
     if (!token) {
-      return jsonResponse({ ok: false, error: "LINE_CHANNEL_ACCESS_TOKEN missing" }, 500);
+      return jsonResponse({ ok: false, error: "token_missing", channel }, 500);
     }
     const res = await fetch("https://api.line.me/v2/bot/info", {
       headers: { Authorization: `Bearer ${token}` },
@@ -165,6 +167,7 @@ export async function GET(req: Request) {
     return jsonResponse(
       {
         ok: res.ok,
+        channel,
         status: res.status,
         token_length: token.length,
         body,

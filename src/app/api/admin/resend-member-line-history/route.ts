@@ -2,10 +2,11 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
-import { lineAccessTokenForChannelKey, linePushTokenForMember, type LineChannelKey } from "@/lib/lineChannel";
+import { lineAccessTokenForChannelKey, inferLineChannelKeyFromMemberCode, type LineChannelKey } from "@/lib/lineChannel";
+import { karteLineMessageFromNote } from "@/lib/karteLineMessage";
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
-import { pushLineTextAsChunks } from "@/lib/lineMessagingPush";
-import { pushSessionSurveyInviteLine } from "@/lib/sessionSurveyLine";
+import { pushLineTextForMember } from "@/lib/lineMessagingPush";
+import { pushSessionSurveyInviteLine, sendSessionSurveyAfterClientNote } from "@/lib/sessionSurveyLine";
 import { sessionSurveyPageUrlFromInviteToken } from "@/lib/sessionSurvey";
 
 const TZ = "Asia/Tokyo";
@@ -23,27 +24,17 @@ function mustCronAuth(req: Request): boolean {
   return false;
 }
 
-function messageForClientNote(params: { storeName: string; dateYmd: string; content: string }): string {
-  const date = DateTime.fromISO(params.dateYmd, { zone: TZ });
-  const dateLabel = date.isValid ? date.setLocale("ja").toFormat("M月d日（ccc）") : params.dateYmd;
-  return `
-【カルテを共有しました】
-店舗：${params.storeName}
-日付：${dateLabel}
-
-${String(params.content ?? "").trim()}
-`.trim();
-}
-
 const dateYmd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const bodySchema = z.object({
   member_code: z.string().min(1),
-  line_channel_key: z.enum(["default", "ueno", "sakuragicho", "shinjuku"]).optional(),
+  line_channel_key: z.enum(["default", "ueno", "sakuragicho", "shinjuku", "fukuoka"]).optional(),
   june: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  reservations_from: dateYmd.optional(),
   include_karte: z.boolean().optional().default(true),
   include_reservations: z.boolean().optional().default(true),
   include_session_surveys: z.boolean().optional().default(false),
+  create_missing_session_surveys: z.boolean().optional().default(false),
   karte_dates: z.array(dateYmd).optional(),
   session_dates: z.array(dateYmd).optional(),
   dry_run: z.boolean().optional().default(false),
@@ -65,7 +56,8 @@ export async function POST(req: Request) {
     }
 
     const code = parsed.data.member_code.trim().toUpperCase();
-    const channelKey: LineChannelKey = parsed.data.line_channel_key ?? "default";
+    const channelKey: LineChannelKey =
+      parsed.data.line_channel_key ?? inferLineChannelKeyFromMemberCode(code) ?? "default";
     const token = lineAccessTokenForChannelKey(channelKey);
     if (!parsed.data.dry_run && !token) {
       return jsonResponse({ error: "missing_token", channel: channelKey }, 500);
@@ -118,18 +110,11 @@ export async function POST(req: Request) {
       }
     }
 
-    const pushToken =
-      token ??
-      linePushTokenForMember({
-        lineChannelKey: channelKey,
-        memberCode: member.member_code,
-        fallbackStoreName: null,
-      }).token;
-
-    const results: { karte: unknown[]; reservations: unknown[]; session_surveys: unknown[] } = {
+    const results: { karte: unknown[]; reservations: unknown[]; session_surveys: unknown[]; missing_surveys: unknown[] } = {
       karte: [],
       reservations: [],
       session_surveys: [],
+      missing_surveys: [],
     };
 
     const karteDateFilter = parsed.data.karte_dates?.length ? new Set(parsed.data.karte_dates) : null;
@@ -149,13 +134,32 @@ export async function POST(req: Request) {
 
       for (const n of notes ?? []) {
         const storeName = String(n.stores?.name ?? "");
-        const text = messageForClientNote({ storeName, dateYmd: n.date, content: n.content });
+        const text = karteLineMessageFromNote({
+          memberName: member.name,
+          memberCode: member.member_code,
+          storeName,
+          dateYmd: n.date,
+          content: n.content,
+        });
         if (parsed.data.dry_run) {
           results.karte.push({ date: n.date, store: storeName, dry_run: true });
           continue;
         }
-        const ok = await pushLineTextAsChunks(pushToken!, member.line_user_id, text);
-        results.karte.push({ date: n.date, store: storeName, ok });
+        const out = await pushLineTextForMember({
+          toUserId: member.line_user_id,
+          text,
+          memberCode: member.member_code,
+          lineChannelKey: channelKey,
+          storeName,
+        });
+        results.karte.push({
+          date: n.date,
+          store: storeName,
+          ok: out.ok,
+          channel: out.channelKey,
+          source: out.source,
+          error: out.ok ? undefined : out.body,
+        });
       }
     }
 
@@ -171,6 +175,10 @@ export async function POST(req: Request) {
         const j = parsed.data.june;
         const end = DateTime.fromISO(`${j}-01`, { zone: TZ }).endOf("month").toISO();
         q = q.gte("start_at", `${j}-01T00:00:00+09:00`).lte("start_at", end);
+      }
+      if (parsed.data.reservations_from) {
+        const from = parsed.data.reservations_from;
+        q = q.gte("start_at", `${from}T00:00:00+09:00`);
       }
 
       const { data: rows, error: rErr } = await q;
@@ -189,8 +197,20 @@ export async function POST(req: Request) {
           results.reservations.push({ start_at: r.start_at, store: storeName, session_type: sessionType, dry_run: true });
           continue;
         }
-        const ok = await pushLineTextAsChunks(pushToken!, member.line_user_id, text);
-        results.reservations.push({ start_at: r.start_at, store: storeName, session_type: sessionType, ok });
+        const out = await pushLineTextForMember({
+          toUserId: member.line_user_id,
+          text,
+          memberCode: member.member_code,
+          lineChannelKey: channelKey,
+          storeName,
+        });
+        results.reservations.push({
+          start_at: r.start_at,
+          store: storeName,
+          session_type: sessionType,
+          ok: out.ok,
+          error: out.ok ? undefined : out.body,
+        });
       }
     }
 
@@ -232,6 +252,61 @@ export async function POST(req: Request) {
             .eq("id", inv.id);
         }
         results.session_surveys.push({ session_date: sessionDate, store: storeName, ok: sent });
+      }
+    }
+
+    if (parsed.data.create_missing_session_surveys) {
+      let notesQuery = (supabase as any)
+        .from("client_notes")
+        .select("id, date, store_id, trainer_id, stores(name), trainers(display_name)")
+        .eq("member_id", member.id)
+        .order("date", { ascending: true });
+      if (sessionDateFilter) {
+        notesQuery = notesQuery.in("date", [...sessionDateFilter]);
+      }
+      const { data: notes, error: nErr } = await notesQuery;
+      if (nErr) return jsonResponse({ error: nErr.message }, 500);
+
+      for (const n of notes ?? []) {
+        const sessionDate = String(n.date ?? "");
+        const { data: existingInvite } = await (supabase as any)
+          .from("session_survey_invites")
+          .select("id")
+          .eq("member_id", member.id)
+          .eq("session_date", sessionDate)
+          .maybeSingle();
+        if (existingInvite?.id) continue;
+
+        const storeName = String(n.stores?.name ?? "");
+        const trainerDisplayName = String(n.trainers?.display_name ?? "");
+        if (!storeName || !n.trainer_id) {
+          results.missing_surveys.push({ session_date: sessionDate, skipped: true, reason: "missing_store_or_trainer" });
+          continue;
+        }
+
+        if (parsed.data.dry_run) {
+          results.missing_surveys.push({ session_date: sessionDate, store: storeName, dry_run: true });
+          continue;
+        }
+
+        const out = await sendSessionSurveyAfterClientNote(supabase, {
+          member_id: member.id,
+          trainer_id: String(n.trainer_id),
+          store_id: String(n.store_id),
+          session_date: sessionDate,
+          client_note_id: String(n.id),
+          line_user_id: member.line_user_id,
+          member_code: member.member_code,
+          line_channel_key: channelKey,
+          store_name: storeName,
+          trainer_display_name: trainerDisplayName,
+        });
+        results.missing_surveys.push({
+          session_date: sessionDate,
+          store: storeName,
+          ok: out.sent,
+          invite_id: out.invite_id,
+        });
       }
     }
 

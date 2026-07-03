@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { lineChannelLabel, normalizeLineChannelKey, type LineChannelKey } from "@/lib/lineChannel";
+import { pushLineTextForMember } from "@/lib/lineMessagingPush";
 import { isSessionSurveyLineEnabled } from "@/lib/sessionSurvey";
 import { fetchPreSessionSurveysForMember } from "@/lib/preSessionSurveyForKarte";
 import { fetchSessionSurveysForMember } from "@/lib/sessionSurveyForKarte";
@@ -32,24 +33,25 @@ function createServiceSupabase(): SupabaseClient<Database> {
   });
 }
 
-async function pushLineMessage(params: { to: string; text: string; token: string | null; debug?: any }) {
-  const { to, text, token, debug } = params;
-  if (!token) {
-    console.error("LINE access token is not set", debug ?? {});
-    return;
-  }
-  const res = await fetch("https://api.line.me/v2/bot/message/push", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ to, messages: [{ type: "text", text }] }),
+async function pushLineMessage(params: {
+  to: string;
+  text: string;
+  memberCode?: string | null;
+  lineChannelKey?: LineChannelKey | null;
+  storeName?: string | null;
+  debug?: Record<string, unknown>;
+}) {
+  const result = await pushLineTextForMember({
+    toUserId: params.to,
+    text: params.text,
+    memberCode: params.memberCode,
+    lineChannelKey: params.lineChannelKey,
+    storeName: params.storeName,
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    console.error("LINE push failed", { status: res.status, body: t, debug });
+  if (!result.ok) {
+    console.error("LINE push failed", { ...params.debug, ...result });
   }
+  return result;
 }
 
 function messageForClientNote(params: { storeName: string; dateYmd: string; content: string }): string {
@@ -216,6 +218,11 @@ export async function POST(request: Request) {
     }
 
     // 保存後に会員へLINE送信（line_user_id がある場合のみ）
+    let lineDelivery: {
+      karte?: { sent: boolean; channel?: string | null; source?: string; error?: string };
+      survey?: { sent: boolean; invite_id?: string; mode?: string };
+    } = {};
+
     try {
       const { data: member, error: mErr } = await (supabase as any)
         .from("members")
@@ -230,21 +237,28 @@ export async function POST(request: Request) {
           .maybeSingle();
         if (!sErr) {
           const storeName = String(store?.name ?? "");
-          const line = linePushTokenForMember({
-            lineChannelKey: normalizeLineChannelKey((member as any)?.line_channel_key),
-            memberCode: String(member.member_code ?? ""),
-            fallbackStoreName: storeName,
-          });
           const text = line_message?.trim()
             ? line_message.trim()
             : messageForClientNote({ storeName, dateYmd: date, content });
-          await pushLineMessage({
+          const karteResult = await pushLineMessage({
             to: String(member.line_user_id),
             text,
-            token: line.token,
-            debug: { storeName, memberCode: member.member_code, lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) },
+            memberCode: String(member.member_code ?? ""),
+            lineChannelKey: normalizeLineChannelKey((member as any)?.line_channel_key),
+            storeName,
+            debug: { storeName, memberCode: member.member_code },
           });
+          lineDelivery.karte = {
+            sent: karteResult.ok,
+            channel: lineChannelLabel(karteResult.channelKey),
+            source: karteResult.source,
+            error: karteResult.ok ? undefined : karteResult.body,
+          };
         }
+      } else if (member && !member.line_user_id) {
+        lineDelivery.karte = { sent: false, channel: null, source: "no_line_user_id" };
+      } else if (member && !member.is_active) {
+        lineDelivery.karte = { sent: false, channel: null, source: "member_inactive" };
       }
     } catch (e) {
       console.error("LINE push unexpected error", e);
@@ -264,7 +278,7 @@ export async function POST(request: Request) {
           ]);
           const storeName = String(store?.name ?? "");
           if (storeName) {
-            await sendSessionSurveyAfterClientNote(supabase as SupabaseClient, {
+            const surveyOut = await sendSessionSurveyAfterClientNote(supabase as SupabaseClient, {
               member_id,
               trainer_id,
               store_id,
@@ -276,6 +290,11 @@ export async function POST(request: Request) {
               store_name: storeName,
               trainer_display_name: String(trainer?.display_name ?? ""),
             });
+            lineDelivery.survey = {
+              sent: surveyOut.sent,
+              invite_id: surveyOut.invite_id,
+              mode: surveyOut.mode,
+            };
           }
         }
       } catch (e) {
@@ -283,7 +302,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return jsonResponse({ note: data }, 200);
+    return jsonResponse({ note: data, line: lineDelivery }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "カルテの保存中にエラーが発生しました", detail: message }, 500);
