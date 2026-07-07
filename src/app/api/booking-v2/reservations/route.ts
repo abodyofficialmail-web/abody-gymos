@@ -425,22 +425,37 @@ export async function POST(request: Request) {
     }
     let member: Record<string, unknown> | null = null;
     let memberErr: { message: string } | null = null;
-    const memberFull = await supabase
-      .from("members")
-      .select("id, member_code, name, email, is_active, line_user_id, line_channel_key")
-      .ilike("email", normalizedEmail)
-      .maybeSingle();
-    if (memberFull.error && /line_channel_key/i.test(memberFull.error.message)) {
-      const memberSlim = await supabase
+    // メールアドレスは店舗を跨いで重複し得るため、まずは store_id で絞って照会する
+    // maybeSingle は複数ヒット時にエラーになるため、常に複数取得→こちらで選別する
+    const memberSelectFull =
+      "id, member_code, name, email, store_id, is_active, line_user_id, line_channel_key";
+    const memberSelectSlim = "id, member_code, name, email, store_id, is_active, line_user_id";
+    async function fetchMembersByEmail(selectStr: string) {
+      const r = await (supabase as any)
         .from("members")
-        .select("id, member_code, name, email, is_active, line_user_id")
+        .select(selectStr)
         .ilike("email", normalizedEmail)
-        .maybeSingle();
-      member = memberSlim.data as Record<string, unknown> | null;
-      memberErr = memberSlim.error;
+        .limit(10);
+      return r as { data: any[] | null; error: any | null };
+    }
+    const memberFullList = await fetchMembersByEmail(memberSelectFull);
+    if (memberFullList.error && /line_channel_key/i.test(memberFullList.error.message ?? "")) {
+      const memberSlimList = await fetchMembersByEmail(memberSelectSlim);
+      memberErr = memberSlimList.error;
+      const rows = memberSlimList.data ?? [];
+      member =
+        (rows.find((m) => m?.is_active && String(m?.store_id ?? "") === store_id) ??
+          rows.find((m) => m?.is_active) ??
+          rows[0] ??
+          null) as Record<string, unknown> | null;
     } else {
-      member = memberFull.data as Record<string, unknown> | null;
-      memberErr = memberFull.error;
+      memberErr = memberFullList.error;
+      const rows = memberFullList.data ?? [];
+      member =
+        (rows.find((m) => m?.is_active && String(m?.store_id ?? "") === store_id) ??
+          rows.find((m) => m?.is_active) ??
+          rows[0] ??
+          null) as Record<string, unknown> | null;
     }
     if (memberErr) {
       return jsonResponse(
@@ -448,6 +463,7 @@ export async function POST(request: Request) {
         500
       );
     }
+    // 他店舗利用を許可（所属店舗と予約店舗は一致しなくてよい）。有効会員であることのみ必須。
     if (!member || !member.is_active) {
       return jsonResponse({ error: "会員が見つかりません", detail: { email: normalizedEmail } }, 404);
     }
