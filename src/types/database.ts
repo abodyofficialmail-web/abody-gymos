@@ -53,6 +53,7 @@ export interface Database {
           line_user_id: string | null;
           line_channel_key?: string | null;
           is_active: boolean;
+          reservation_reminder_line_enabled?: boolean;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
@@ -72,6 +73,7 @@ export interface Database {
           line_user_id?: string | null;
           line_channel_key?: string | null;
           is_active?: boolean;
+          reservation_reminder_line_enabled?: boolean;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
@@ -91,6 +93,7 @@ export interface Database {
           line_user_id?: string | null;
           line_channel_key?: string | null;
           is_active?: boolean;
+          reservation_reminder_line_enabled?: boolean;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
@@ -325,6 +328,30 @@ export interface Database {
         Row: { event_id: string; kind: "60min" | "10min"; sent_at: string };
         Insert: { event_id: string; kind: "60min" | "10min"; sent_at?: string };
         Update: { event_id?: string; kind?: "60min" | "10min"; sent_at?: string };
+        Relationships: [];
+      };
+      reservation_line_reminder_dispatches: {
+        Row: {
+          id: string;
+          reservation_id: string;
+          kind: "60m_reminder" | "60m_pre_session_survey";
+          sent_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          reservation_id: string;
+          kind: "60m_reminder" | "60m_pre_session_survey";
+          sent_at?: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          reservation_id?: string;
+          kind?: "60m_reminder" | "60m_pre_session_survey";
+          sent_at?: string;
+          created_at?: string;
+        };
         Relationships: [];
       };
       session_survey_invites: {

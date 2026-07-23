@@ -19,7 +19,14 @@ const TZ = "Asia/Tokyo";
 type AvailableDay = { date: string; slotCount: number; status: "available" | "limited" | "full" };
 
 type MeResponse = {
-  member: { id: string; member_code: string; name: string; email: string | null; line_user_id: string | null };
+  member: {
+    id: string;
+    member_code: string;
+    name: string;
+    email: string | null;
+    line_user_id: string | null;
+    reservation_reminder_line_enabled?: boolean;
+  };
   reservations: Array<{
     id: string;
     start_at: string;
@@ -101,8 +108,11 @@ export default function MemberPage() {
   const [cancelTarget, setCancelTarget] = useState<MeResponse["reservations"][number] | null>(null);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelErr, setCancelErr] = useState<string | null>(null);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const [reminderErr, setReminderErr] = useState<string | null>(null);
 
   const title = useMemo(() => (data?.member?.name ? `マイページ（${data.member.name}）` : "マイページ"), [data?.member?.name]);
+  const reminderEnabled = data?.member?.reservation_reminder_line_enabled !== false;
 
   useEffect(() => {
     setLoading(true);
@@ -255,6 +265,64 @@ export default function MemberPage() {
               </div>
               <div className="text-xs text-slate-500 break-all">Email: {data.member.email ?? "未登録"}</div>
               <div className="text-xs text-slate-500">{data.member.line_user_id ? "LINE連携済み" : "LINE未連携"}</div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <div className="text-sm font-bold text-slate-900">予約リマインドLINE</div>
+                  <p className="text-xs leading-relaxed text-slate-600">
+                    セッション開始60分前にLINEでお知らせします（セッション前ヒアリングも含みます）。
+                  </p>
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    OFFにしても、予約の確定・変更・キャンセルやカルテ共有などの通知は届きます。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={reminderEnabled}
+                  disabled={reminderBusy}
+                  onClick={async () => {
+                    if (!data) return;
+                    const next = !reminderEnabled;
+                    setReminderBusy(true);
+                    setReminderErr(null);
+                    try {
+                      await apiPatch<{ member: { reservation_reminder_line_enabled: boolean } }>("/api/member/me", {
+                        reservation_reminder_line_enabled: next,
+                      });
+                      setData({
+                        ...data,
+                        member: { ...data.member, reservation_reminder_line_enabled: next },
+                      });
+                    } catch (e: any) {
+                      setReminderErr(String(e?.message ?? "設定の更新に失敗しました"));
+                    } finally {
+                      setReminderBusy(false);
+                    }
+                  }}
+                  className={[
+                    "relative mt-0.5 h-8 w-14 shrink-0 rounded-full transition-colors disabled:opacity-60",
+                    reminderEnabled ? "bg-slate-900" : "bg-slate-300",
+                  ].join(" ")}
+                >
+                  <span
+                    className={[
+                      "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-transform",
+                      reminderEnabled ? "left-7" : "left-1",
+                    ].join(" ")}
+                  />
+                  <span className="sr-only">{reminderEnabled ? "ON" : "OFF"}</span>
+                </button>
+              </div>
+              <div className="text-xs font-semibold text-slate-700">
+                現在: {reminderEnabled ? "ON（送信する）" : "OFF（送らない）"}
+                {reminderBusy ? " …更新中" : ""}
+              </div>
+              {reminderErr ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{reminderErr}</div>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">

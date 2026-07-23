@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { getMemberIdFromCookie } from "../_cookies";
 
@@ -8,6 +9,15 @@ function json(body: any, status = 200) {
 
 const TZ = "Asia/Tokyo";
 
+function isMissingReminderColumn(err: { message?: string } | null | undefined): boolean {
+  const msg = String(err?.message ?? "");
+  return /reservation_reminder_line_enabled/i.test(msg) && (/does not exist|column/i.test(msg) || /PGRST/i.test(msg));
+}
+
+const patchSchema = z.object({
+  reservation_reminder_line_enabled: z.boolean(),
+});
+
 export async function GET() {
   try {
     const memberId = getMemberIdFromCookie();
@@ -15,11 +25,20 @@ export async function GET() {
 
     const supabase = createSupabaseServiceClient();
 
-    const { data: member, error: mErr } = await (supabase as any)
+    const selectWithReminder =
+      "id, member_code, name, email, line_user_id, is_active, reservation_reminder_line_enabled";
+    const selectLegacy = "id, member_code, name, email, line_user_id, is_active";
+
+    let { data: member, error: mErr } = await (supabase as any)
       .from("members")
-      .select("id, member_code, name, email, line_user_id, is_active")
+      .select(selectWithReminder)
       .eq("id", memberId)
       .maybeSingle();
+    if (mErr && isMissingReminderColumn(mErr)) {
+      const second = await (supabase as any).from("members").select(selectLegacy).eq("id", memberId).maybeSingle();
+      member = second.data;
+      mErr = second.error;
+    }
     if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
     if (!member || !member.is_active) return json({ error: "未ログイン" }, 401);
 
@@ -113,6 +132,11 @@ export async function GET() {
       }
     }
 
+    const reminderEnabled =
+      typeof (member as any).reservation_reminder_line_enabled === "boolean"
+        ? Boolean((member as any).reservation_reminder_line_enabled)
+        : true;
+
     return json(
       {
         member: {
@@ -121,6 +145,7 @@ export async function GET() {
           name: member.name ?? "",
           email: (member as any).email ?? null,
           line_user_id: member.line_user_id ?? null,
+          reservation_reminder_line_enabled: reminderEnabled,
         },
         reservations: (reservations ?? []).map((r: any) => ({
           id: r.id,
@@ -152,3 +177,59 @@ export async function GET() {
   }
 }
 
+export async function PATCH(req: Request) {
+  try {
+    const memberId = getMemberIdFromCookie();
+    if (!memberId) return json({ error: "未ログイン" }, 401);
+
+    const raw = await req.json().catch(() => ({}));
+    const parsed = patchSchema.safeParse(raw);
+    if (!parsed.success) return json({ error: "invalid_body", detail: parsed.error.flatten() }, 400);
+
+    const supabase = createSupabaseServiceClient();
+
+    const { data: member, error: mErr } = await (supabase as any)
+      .from("members")
+      .select("id, is_active")
+      .eq("id", memberId)
+      .maybeSingle();
+    if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
+    if (!member || !member.is_active) return json({ error: "未ログイン" }, 401);
+
+    const { data: updated, error: uErr } = await (supabase as any)
+      .from("members")
+      .update({ reservation_reminder_line_enabled: parsed.data.reservation_reminder_line_enabled })
+      .eq("id", memberId)
+      .select("id, reservation_reminder_line_enabled")
+      .maybeSingle();
+
+    if (uErr) {
+      if (isMissingReminderColumn(uErr)) {
+        return json(
+          {
+            error: "設定の保存準備ができていません。しばらくしてからお試しください。",
+            detail: uErr.message,
+          },
+          503
+        );
+      }
+      return json({ error: "設定の更新に失敗しました", detail: uErr.message }, 500);
+    }
+
+    return json(
+      {
+        ok: true,
+        member: {
+          id: updated?.id ?? memberId,
+          reservation_reminder_line_enabled: Boolean(
+            updated?.reservation_reminder_line_enabled ?? parsed.data.reservation_reminder_line_enabled
+          ),
+        },
+      },
+      200
+    );
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return json({ error: "エラーが発生しました", detail: message }, 500);
+  }
+}

@@ -15,6 +15,10 @@
     {
       "path": "/api/admin/daily-all-stores-line-report?target=today",
       "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/reservation-line-reminders",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

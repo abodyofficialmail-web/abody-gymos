@@ -72,6 +72,18 @@ async function pushFlex(token: string, toUserId: string, message: ReturnType<typ
   return { ok: res.ok, status: res.status, body };
 }
 
+export async function pushPreSessionReminderMessages(params: {
+  token: string;
+  lineUserId: string;
+  reminderText: string;
+  surveyUrl: string;
+}): Promise<{ textOk: boolean; flexOk: boolean; flexDetail?: string }> {
+  const textOk = (await pushLineTextAsChunks(params.token, params.lineUserId, params.reminderText)).ok;
+  if (!textOk) return { textOk: false, flexOk: false };
+  const flexRes = await pushFlex(params.token, params.lineUserId, buildPreSessionSurveyFlex(params.surveyUrl));
+  return { textOk: true, flexOk: flexRes.ok, flexDetail: flexRes.ok ? undefined : flexRes.body };
+}
+
 export async function sendPreSessionReminderTest(
   supabase: SupabaseClient,
   params: { memberCode: string; appUrl: string }
