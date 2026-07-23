@@ -76,6 +76,12 @@ function themeForStoreName(storeName: string): StoreTheme {
   if (storeName === "桜木町") {
     return { accent: "#CA8A04", accentSoft: "#FFFBEB", accentBorder: "#FDE68A" };
   }
+  if (storeName === "新宿") {
+    return { accent: "#DC2626", accentSoft: "#FEF2F2", accentBorder: "#FECACA" };
+  }
+  if (storeName === "福岡") {
+    return { accent: "#06B6D4", accentSoft: "#ECFEFF", accentBorder: "#A5F3FC" };
+  }
   return { accent: "#111827", accentSoft: "#F3F4F6", accentBorder: "#E5E7EB" };
 }
 
@@ -88,10 +94,12 @@ function sessionTypeBadge(sessionType: string | null | undefined) {
 function reservationAccent(stores: Store[] | null, r: ReservationRow): { border: string; soft: string } {
   const sessionType = String(r.session_type ?? "store");
   if (sessionType === "online") return { border: "#A855F7", soft: "#FAF5FF" }; // purple
-  // 店舗セッションは店舗色（上野=緑、恵比寿=青、桜木町=黄）
+  // 店舗セッションは店舗色（上野=緑、恵比寿=青、桜木町=黄、新宿=赤、福岡=水色）
   const storeName = (stores ?? []).find((s) => s.id === r.store_id)?.name ?? r.store_name ?? "";
   if (storeName === "上野") return { border: "#16A34A", soft: "#ECFDF5" };
   if (storeName === "桜木町") return { border: "#CA8A04", soft: "#FFFBEB" };
+  if (storeName === "新宿") return { border: "#DC2626", soft: "#FEF2F2" };
+  if (storeName === "福岡") return { border: "#06B6D4", soft: "#ECFEFF" };
   return { border: "#2563EB", soft: "#EFF6FF" }; // 恵比寿など
 }
 
@@ -144,11 +152,11 @@ async function apiPatch<T>(path: string, body: any): Promise<T> {
   return json as T;
 }
 
-export function ReservationsClient() {
+export function ReservationsClient({ initialStores = [] }: { initialStores?: Store[] }) {
   const [month, setMonth] = useState(() => DateTime.now().setZone(TZ).startOf("month"));
   const monthKey = useMemo(() => month.toFormat("yyyy-MM"), [month]);
 
-  const [stores, setStores] = useState<Store[] | null>(null);
+  const [stores] = useState<Store[]>(initialStores);
   /** 空文字 = 未選択（店舗選択後にのみ月次取得する） */
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
 
@@ -216,7 +224,7 @@ export function ReservationsClient() {
   );
 
   const selectedStoreName = useMemo(() => {
-    return (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "";
+    return stores.find((s) => s.id === selectedStoreId)?.name ?? "";
   }, [stores, selectedStoreId]);
 
   const theme = useMemo(() => {
@@ -261,7 +269,7 @@ export function ReservationsClient() {
   };
 
   const loadDayShiftsForSelectedDate = useCallback(async () => {
-    if (!selectedYmd || !stores || stores.length === 0 || !selectedStoreId) {
+    if (!selectedYmd || stores.length === 0 || !selectedStoreId) {
       setDayShiftsByStore(null);
       return;
     }
@@ -286,13 +294,6 @@ export function ReservationsClient() {
   useEffect(() => {
     void loadDayShiftsForSelectedDate();
   }, [loadDayShiftsForSelectedDate]);
-
-  useEffect(() => {
-    setErr(null);
-    apiGet<{ stores: Store[] }>("/api/booking-v2/stores")
-      .then((d) => setStores(d.stores ?? []))
-      .catch((e: any) => setErr(String(e?.message ?? "店舗の取得に失敗しました")));
-  }, []);
 
   useEffect(() => {
     setErr(null);
@@ -347,7 +348,7 @@ export function ReservationsClient() {
 
   // 休憩追加: 初期値（店舗/日付）
   useEffect(() => {
-    if (!stores || stores.length === 0) return;
+    if (stores.length === 0) return;
     const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!breakStoreId) setBreakStoreId(defaultStoreId);
   }, [stores, selectedStoreId, breakStoreId]);
@@ -358,7 +359,7 @@ export function ReservationsClient() {
   }, [selectedYmd, todayYmd, breakDateYmd]);
 
   useEffect(() => {
-    if (!stores || stores.length === 0) return;
+    if (stores.length === 0) return;
     const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!trialStoreId && trialOpen) setTrialStoreId(defaultStoreId);
   }, [stores, selectedStoreId, trialStoreId, trialOpen]);
@@ -448,7 +449,7 @@ export function ReservationsClient() {
 
   // 追加: 初期値のセット
   useEffect(() => {
-    if (!stores || stores.length === 0) return;
+    if (stores.length === 0) return;
     const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!addStoreId) setAddStoreId(defaultStoreId);
     if (!editStoreId && editTarget) setEditStoreId(editTarget.store_id);
@@ -497,7 +498,7 @@ export function ReservationsClient() {
     setTrialSessionType("store");
     setTrialStartTime("10:00");
     setTrialEndTime("10:30");
-    const sid = selectedStoreId || (stores ?? []).find(Boolean)?.id || "";
+    const sid = selectedStoreId || stores.find(Boolean)?.id || "";
     setTrialStoreId(sid);
     setTrialDateYmd(selectedYmd ?? todayYmd);
   };
@@ -835,8 +836,8 @@ export function ReservationsClient() {
         </div>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {(stores ?? []).map((s) => {
+      <div className="grid gap-2 sm:max-w-xs">
+        {stores.map((s) => {
           const active = s.id === selectedStoreId;
           const t = themeForStoreName(s.name);
           return (
@@ -848,7 +849,7 @@ export function ReservationsClient() {
                 setSelectedYmd(null);
               }}
               className={[
-                "shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors",
+                "w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors",
                 active ? "text-slate-900" : "bg-white text-slate-700 hover:bg-slate-50",
               ].join(" ")}
               style={
@@ -861,9 +862,9 @@ export function ReservationsClient() {
             </button>
           );
         })}
-        {stores === null ? <div className="text-sm text-slate-600">店舗読み込み中…</div> : null}
-        {stores !== null && stores.length > 0 && !selectedStoreId ? (
-          <div className="flex items-center text-sm font-semibold text-slate-600">← 店舗を選択してください</div>
+        {stores.length === 0 ? <div className="text-sm text-slate-600">店舗がありません</div> : null}
+        {stores.length > 0 && !selectedStoreId ? (
+          <div className="text-sm font-semibold text-slate-600">上から店舗を選択してください</div>
         ) : null}
       </div>
 
