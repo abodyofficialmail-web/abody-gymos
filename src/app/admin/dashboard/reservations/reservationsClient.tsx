@@ -79,11 +79,6 @@ function themeForStoreName(storeName: string): StoreTheme {
   return { accent: "#111827", accentSoft: "#F3F4F6", accentBorder: "#E5E7EB" };
 }
 
-function themeForStoreId(stores: Store[] | null, storeId: string): StoreTheme {
-  const name = (stores ?? []).find((s) => s.id === storeId)?.name ?? "";
-  return themeForStoreName(name);
-}
-
 function sessionTypeBadge(sessionType: string | null | undefined) {
   const t = String(sessionType ?? "store");
   if (t === "online") return "💻 オンライン";
@@ -154,13 +149,15 @@ export function ReservationsClient() {
   const monthKey = useMemo(() => month.toFormat("yyyy-MM"), [month]);
 
   const [stores, setStores] = useState<Store[] | null>(null);
-  // "all" = 全店舗を1枚のカレンダーに重ね表示
-  const [selectedStoreId, setSelectedStoreId] = useState<string>("all");
+  /** 空文字 = 未選択（店舗選択後にのみ月次取得する） */
+  const [selectedStoreId, setSelectedStoreId] = useState<string>("");
 
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const [selectedYmd, setSelectedYmd] = useState<string | null>(null);
+  /** 日付詳細用: 未割当予約のトレーナー候補（日付タップ時のみ取得） */
+  const [dayCandidatesById, setDayCandidatesById] = useState<Map<string, string[]> | null>(null);
 
   const [busy, setBusy] = useState(false);
 
@@ -219,31 +216,56 @@ export function ReservationsClient() {
   );
 
   const selectedStoreName = useMemo(() => {
-    if (selectedStoreId === "all") return "全店舗";
     return (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "";
   }, [stores, selectedStoreId]);
 
   const theme = useMemo(() => {
-    if (selectedStoreId === "all") return themeForStoreName("");
+    if (!selectedStoreId) return themeForStoreName("");
     return themeForStoreName(selectedStoreName);
   }, [selectedStoreId, selectedStoreName]);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
 
   const refreshRows = async () => {
+    if (!selectedStoreId) {
+      setRows([]);
+      return;
+    }
     const qs = new URLSearchParams();
     qs.set("month", monthKey);
-    if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
+    qs.set("store_id", selectedStoreId);
+    // カレンダー用は候補計算スキップ
+    qs.set("include_candidates", "0");
     const d = await apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${qs.toString()}`);
     setRows(d.reservations ?? []);
+
+    // 日付詳細を開いている場合は候補も取り直す
+    if (selectedYmd) {
+      const dayQs = new URLSearchParams();
+      dayQs.set("store_id", selectedStoreId);
+      dayQs.set("date", selectedYmd);
+      dayQs.set("include_candidates", "1");
+      try {
+        const day = await apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${dayQs.toString()}`);
+        const m = new Map<string, string[]>();
+        for (const r of day.reservations ?? []) {
+          if (r.trainer_candidates && r.trainer_candidates.length > 0) {
+            m.set(r.id, r.trainer_candidates);
+          }
+        }
+        setDayCandidatesById(m);
+      } catch {
+        // 候補は補助表示のため失敗しても一覧は維持
+      }
+    }
   };
 
   const loadDayShiftsForSelectedDate = useCallback(async () => {
-    if (!selectedYmd || !stores || stores.length === 0) {
+    if (!selectedYmd || !stores || stores.length === 0 || !selectedStoreId) {
       setDayShiftsByStore(null);
       return;
     }
-    const storeIds = selectedStoreId === "all" ? stores.map((s) => s.id) : [selectedStoreId];
+    const storeIds = [selectedStoreId];
     setDayShiftsByStore(null);
     try {
       const blocks = await Promise.all(
@@ -275,9 +297,15 @@ export function ReservationsClient() {
   useEffect(() => {
     setErr(null);
     setRows(null);
+    setDayCandidatesById(null);
+    if (!selectedStoreId) {
+      setRows([]);
+      return;
+    }
     const qs = new URLSearchParams();
     qs.set("month", monthKey);
-    if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
+    qs.set("store_id", selectedStoreId);
+    qs.set("include_candidates", "0");
     apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${qs.toString()}`)
       .then((d) => setRows(d.reservations ?? []))
       .catch((e: any) => {
@@ -286,10 +314,41 @@ export function ReservationsClient() {
       });
   }, [monthKey, selectedStoreId]);
 
+  // 日付詳細を開いたときだけトレーナー候補を取得（月次一覧の N+1 を避ける）
+  useEffect(() => {
+    if (!selectedYmd || !selectedStoreId) {
+      setDayCandidatesById(null);
+      return;
+    }
+    let cancelled = false;
+    setDayCandidatesById(null);
+    const qs = new URLSearchParams();
+    qs.set("store_id", selectedStoreId);
+    qs.set("date", selectedYmd);
+    qs.set("include_candidates", "1");
+    apiGet<{ reservations: ReservationRow[] }>(`/api/booking-v2/reservations?${qs.toString()}`)
+      .then((d) => {
+        if (cancelled) return;
+        const m = new Map<string, string[]>();
+        for (const r of d.reservations ?? []) {
+          if (r.trainer_candidates && r.trainer_candidates.length > 0) {
+            m.set(r.id, r.trainer_candidates);
+          }
+        }
+        setDayCandidatesById(m);
+      })
+      .catch(() => {
+        if (!cancelled) setDayCandidatesById(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedYmd, selectedStoreId]);
+
   // 休憩追加: 初期値（店舗/日付）
   useEffect(() => {
     if (!stores || stores.length === 0) return;
-    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!breakStoreId) setBreakStoreId(defaultStoreId);
   }, [stores, selectedStoreId, breakStoreId]);
 
@@ -300,7 +359,7 @@ export function ReservationsClient() {
 
   useEffect(() => {
     if (!stores || stores.length === 0) return;
-    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!trialStoreId && trialOpen) setTrialStoreId(defaultStoreId);
   }, [stores, selectedStoreId, trialStoreId, trialOpen]);
 
@@ -390,7 +449,7 @@ export function ReservationsClient() {
   // 追加: 初期値のセット
   useEffect(() => {
     if (!stores || stores.length === 0) return;
-    const defaultStoreId = selectedStoreId !== "all" ? selectedStoreId : stores[0]?.id ?? "";
+    const defaultStoreId = selectedStoreId || stores[0]?.id || "";
     if (!addStoreId) setAddStoreId(defaultStoreId);
     if (!editStoreId && editTarget) setEditStoreId(editTarget.store_id);
   }, [stores, selectedStoreId, addStoreId, editStoreId, editTarget]);
@@ -438,10 +497,7 @@ export function ReservationsClient() {
     setTrialSessionType("store");
     setTrialStartTime("10:00");
     setTrialEndTime("10:30");
-    const sid =
-      selectedStoreId !== "all" && selectedStoreId
-        ? selectedStoreId
-        : (stores ?? []).find(Boolean)?.id ?? "";
+    const sid = selectedStoreId || (stores ?? []).find(Boolean)?.id || "";
     setTrialStoreId(sid);
     setTrialDateYmd(selectedYmd ?? todayYmd);
   };
@@ -780,28 +836,6 @@ export function ReservationsClient() {
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
-        <button
-          type="button"
-          onClick={() => {
-            setSelectedStoreId("all");
-            setSelectedYmd(null);
-          }}
-          className={[
-            "shrink-0 rounded-full border px-4 py-2 text-sm font-semibold transition-colors",
-            selectedStoreId === "all" ? "text-slate-900" : "bg-white text-slate-700 hover:bg-slate-50",
-          ].join(" ")}
-          style={
-            selectedStoreId === "all"
-              ? {
-                  borderColor: "#CBD5E1",
-                  background: "#F8FAFC",
-                  boxShadow: "inset 0 0 0 1px #CBD5E1",
-                }
-              : { borderColor: "#E5E7EB" }
-          }
-        >
-          全店舗
-        </button>
         {(stores ?? []).map((s) => {
           const active = s.id === selectedStoreId;
           const t = themeForStoreName(s.name);
@@ -828,10 +862,19 @@ export function ReservationsClient() {
           );
         })}
         {stores === null ? <div className="text-sm text-slate-600">店舗読み込み中…</div> : null}
+        {stores !== null && stores.length > 0 && !selectedStoreId ? (
+          <div className="flex items-center text-sm font-semibold text-slate-600">← 店舗を選択してください</div>
+        ) : null}
       </div>
 
       {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div> : null}
 
+      {!selectedStoreId ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+          店舗を選択すると、その店舗の予約カレンダーが表示されます。
+        </div>
+      ) : (
+      <>
       <section
         className="rounded-2xl border bg-white p-4 shadow-sm"
         style={{ borderColor: theme.accentBorder, background: theme.accentSoft }}
@@ -862,13 +905,6 @@ export function ReservationsClient() {
               const meta = ymd ? countsByYmd.get(ymd) : undefined;
               const selected = ymd && selectedYmd === ymd;
               const isPast = ymd ? ymd < todayYmd : false;
-              const topStores =
-                meta && selectedStoreId === "all"
-                  ? Array.from(meta.byStore.entries())
-                      .map(([storeId, v]) => ({ storeId, ...v }))
-                      .sort((a, b) => b.total - a.total)
-                      .slice(0, 3)
-                  : [];
 
               return (
                 <button
@@ -896,44 +932,16 @@ export function ReservationsClient() {
                       <div className="text-sm font-semibold text-slate-900">{dayNum}</div>
                       <div className="flex items-center justify-between gap-1 pt-1">
                         <div className="flex items-center gap-1">
-                          {selectedStoreId === "all" ? (
-                            <>
-                              {topStores.map((x) => {
-                                const t = themeForStoreId(stores, x.storeId).accent;
-                                return (
-                                  <span
-                                    key={x.storeId}
-                                    className="inline-block h-2 w-2 rounded-full"
-                                    style={{ background: t, opacity: x.total > 0 ? 1 : 0.15 }}
-                                    title="店舗別件数（色=店舗）"
-                                  />
-                                );
-                              })}
-                              <span
-                                className="inline-block h-2 w-2 rounded-full"
-                                style={{ background: "#22C55E", opacity: (meta?.store ?? 0) > 0 ? 1 : 0.15 }}
-                                title="店舗セッション合計"
-                              />
-                              <span
-                                className="inline-block h-2 w-2 rounded-full"
-                                style={{ background: "#A855F7", opacity: (meta?.online ?? 0) > 0 ? 1 : 0.15 }}
-                                title="オンライン合計"
-                              />
-                            </>
-                          ) : (
-                            <>
-                              <span
-                                className="inline-block h-2 w-2 rounded-full"
-                                style={{ background: "#22C55E", opacity: (meta?.store ?? 0) > 0 ? 1 : 0.15 }}
-                                title="店舗"
-                              />
-                              <span
-                                className="inline-block h-2 w-2 rounded-full"
-                                style={{ background: "#A855F7", opacity: (meta?.online ?? 0) > 0 ? 1 : 0.15 }}
-                                title="オンライン"
-                              />
-                            </>
-                          )}
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ background: "#22C55E", opacity: (meta?.store ?? 0) > 0 ? 1 : 0.15 }}
+                            title="店舗"
+                          />
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ background: "#A855F7", opacity: (meta?.online ?? 0) > 0 ? 1 : 0.15 }}
+                            title="オンライン"
+                          />
                         </div>
                         <div className="text-[11px] font-semibold text-slate-600">{meta?.total ? meta.total : ""}</div>
                       </div>
@@ -948,11 +956,6 @@ export function ReservationsClient() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-600">
-          {selectedStoreId === "all" ? (
-            <div className="text-slate-600">
-              先頭の色ドットは「その日に予約がある店舗（上位3店舗）」です（色は店舗ごと）。
-            </div>
-          ) : null}
           <div className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#22C55E" }} />
             店舗セッション件数
@@ -977,8 +980,7 @@ export function ReservationsClient() {
                 type="button"
                 onClick={openBreak}
                 className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                disabled={busy || selectedStoreId === "all"}
-                title={selectedStoreId === "all" ? "休憩追加は店舗を選択してから実行してください" : ""}
+                disabled={busy || !selectedStoreId}
               >
                 ＋ 休憩追加
               </button>
@@ -986,8 +988,7 @@ export function ReservationsClient() {
                 type="button"
                 onClick={openTrial}
                 className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-950 hover:bg-amber-100"
-                disabled={busy || selectedStoreId === "all"}
-                title={selectedStoreId === "all" ? "体験予約は店舗を選択してから実行してください" : ""}
+                disabled={busy || !selectedStoreId}
               >
                 ＋ 体験予約
               </button>
@@ -1023,17 +1024,16 @@ export function ReservationsClient() {
                       {b.start_time}〜{b.end_time}
                     </div>
                     <div className="mt-1 text-xs font-semibold text-amber-950">☕ トレーナー休憩</div>
-                    <div className="mt-1 text-xs text-amber-900">
-                      {selectedStoreId === "all" ? `${b.trainer_name} · ${b.store_name}` : b.trainer_name}
-                    </div>
+                    <div className="mt-1 text-xs text-amber-900">{b.trainer_name}</div>
                   </div>
                 );
               }
               const r = entry.r;
               const sa = reservationAccent(stores, r);
+              const candidates = r.trainer_candidates ?? dayCandidatesById?.get(r.id);
               const trainerText =
                 r.trainer_name ||
-                (r.trainer_candidates && r.trainer_candidates.length > 0 ? `候補: ${r.trainer_candidates.join(" / ")}` : "-");
+                (candidates && candidates.length > 0 ? `候補: ${candidates.join(" / ")}` : "-");
               return (
                 <div
                   key={r.id}
@@ -1104,6 +1104,8 @@ export function ReservationsClient() {
             })}
           </div>
         </section>
+      )}
+      </>
       )}
 
       {/* 予約追加モーダル */}

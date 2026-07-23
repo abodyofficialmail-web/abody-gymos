@@ -211,6 +211,16 @@ const getQuerySchema = z.object({
   member_id: z.string().uuid("member_id は有効なUUIDである必要があります").optional(),
   store_id: z.string().uuid("store_id は有効なUUIDである必要があります").optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/u, "month は YYYY-MM 形式である必要があります").optional(),
+  /** 単日フィルタ（YYYY-MM-DD）。指定時は month より優先 */
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, "date は YYYY-MM-DD 形式である必要があります").optional(),
+  /**
+   * 未割当予約のトレーナー候補を付与するか。
+   * 既定は false（カレンダー月次一覧の N+1 を避ける）。日付詳細など必要なときだけ true。
+   */
+  include_candidates: z
+    .union([z.literal("0"), z.literal("1"), z.literal("true"), z.literal("false")])
+    .optional()
+    .transform((v) => v === "1" || v === "true"),
 });
 
 /** reservations はスカラーのみ取得し、店舗・トレーナー・会員名は別クエリで付与（PostgREST の embed 関係エラーを避ける） */
@@ -306,11 +316,13 @@ export async function GET(request: Request) {
       member_id: url.searchParams.get("member_id") ?? undefined,
       store_id: url.searchParams.get("store_id") ?? undefined,
       month: url.searchParams.get("month") ?? undefined,
+      date: url.searchParams.get("date") ?? undefined,
+      include_candidates: url.searchParams.get("include_candidates") ?? undefined,
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
-    const { trainer_id, member_id, store_id, month } = parsed.data;
+    const { trainer_id, member_id, store_id, month, date, include_candidates: includeCandidates } = parsed.data;
     let supabase: SupabaseClient<Database>;
     try {
       supabase = createServiceSupabase();
@@ -318,9 +330,17 @@ export async function GET(request: Request) {
       const message = e instanceof Error ? e.message : String(e);
       return jsonResponse({ error: "サーバー設定エラー", detail: message }, 500);
     }
-    const monthKey = month ?? DateTime.now().setZone("Asia/Tokyo").toFormat("yyyy-MM");
-    const start = DateTime.fromISO(`${monthKey}-01`, { zone: "Asia/Tokyo" }).startOf("month");
-    const end = start.plus({ months: 1 });
+    const zone = "Asia/Tokyo";
+    let start: DateTime;
+    let end: DateTime;
+    if (date) {
+      start = DateTime.fromISO(date, { zone }).startOf("day");
+      end = start.plus({ days: 1 });
+    } else {
+      const monthKey = month ?? DateTime.now().setZone(zone).toFormat("yyyy-MM");
+      start = DateTime.fromISO(`${monthKey}-01`, { zone }).startOf("month");
+      end = start.plus({ months: 1 });
+    }
 
     const selectFlatExtended =
       "id, start_at, end_at, session_type, trainer_id, member_id, guest_name, blocks_capacity, store_id, status, created_at";
@@ -376,6 +396,11 @@ export async function GET(request: Request) {
       created_at: string;
     }>;
     const enrichedBase = await enrichReservationRowsFromScalars(supabase, rows);
+
+    // カレンダー月次などでは候補計算をスキップ（未割当1件ごとのシフト N+1 を避ける）
+    if (!includeCandidates) {
+      return jsonResponse({ reservations: enrichedBase }, 200);
+    }
 
     const enriched = await Promise.all(
       enrichedBase.map(async (r) => {
