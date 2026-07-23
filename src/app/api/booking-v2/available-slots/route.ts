@@ -18,6 +18,8 @@ const querySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date は YYYY-MM-DD 形式である必要があります"),
   trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
   ignore_cutoff: z.enum(["1", "true"]).optional(),
+  /** 管理サマリ等: 過去開始の空き枠も含める（会員予約UIでは使わない） */
+  include_past: z.enum(["1", "true"]).optional(),
 });
 const SLOT_MINUTES = 30;
 function isApril2026Closed(ymd: string) {
@@ -97,12 +99,14 @@ export async function GET(request: Request) {
       date: url.searchParams.get("date"),
       trainer_id: url.searchParams.get("trainer_id") ?? undefined,
       ignore_cutoff: url.searchParams.get("ignore_cutoff") ?? undefined,
+      include_past: url.searchParams.get("include_past") ?? undefined,
     });
     if (!parsed.success) {
       return jsonResponse({ error: "クエリが不正です", detail: parsed.error.flatten() }, 400);
     }
-    const { store_id, date, trainer_id: filterTrainerId, ignore_cutoff } = parsed.data;
+    const { store_id, date, trainer_id: filterTrainerId, ignore_cutoff, include_past } = parsed.data;
     const shouldApplyCutoff = !ignore_cutoff;
+    const shouldIncludePast = Boolean(include_past);
     console.log("slots debug", { store_id, date });
     if (isApril2026Closed(date)) {
       return jsonResponse([], 200);
@@ -359,7 +363,7 @@ export async function GET(request: Request) {
         }
         const slotStartMs = DateTime.fromISO(startAt).toMillis();
         const slotEndMs = DateTime.fromISO(endAt).toMillis();
-        if (slotStartMs <= nowMs) continue;
+        if (!shouldIncludePast && slotStartMs <= nowMs) continue;
         const isBusy = busy.some((p) => overlapsMs(p.start, p.end, slotStartMs, slotEndMs));
         if (isBusy) continue;
         const isBlockedByEvent = evRanges.some((r) => m < r.end_min && m + SLOT_MINUTES > r.start_min);

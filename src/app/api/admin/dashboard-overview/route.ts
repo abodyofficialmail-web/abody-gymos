@@ -40,6 +40,8 @@ async function fetchAvailableSlotsCount(params: { origin: string; storeId: strin
   url.searchParams.set("store_id", storeId);
   url.searchParams.set("date", dateYmd);
   url.searchParams.set("ignore_cutoff", "1");
+  // 当日サマリ用: 時刻経過で消えないよう過去の空き枠も含める
+  url.searchParams.set("include_past", "1");
   const res = await fetch(url.toString(), { cache: "no-store" });
   const j = await res.json().catch(() => []);
   if (!res.ok) return 0;
