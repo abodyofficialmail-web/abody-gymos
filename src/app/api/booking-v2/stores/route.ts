@@ -27,7 +27,17 @@ export async function GET() {
     if (error) {
       return jsonResponse({ error: "店舗一覧の取得に失敗しました", detail: error.message }, 500);
     }
-    return jsonResponse({ stores: (data ?? []).map((s) => ({ id: s.id, name: s.name })) }, 200);
+    return new Response(JSON.stringify({ stores: (data ?? []).map((s) => ({ id: s.id, name: s.name })) }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        // 店舗一覧はほぼ不変。コールドスタート後の再訪問を軽くする
+        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+      },
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse(
