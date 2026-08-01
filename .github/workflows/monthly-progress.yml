@@ -66,8 +66,10 @@ jobs:
       - name: Install deps
         run: |
           set -euo pipefail
-          npm install --no-package-lock --no-save @supabase/supabase-js@2.103.0 luxon@3.4.4
-          node -e "require('@supabase/supabase-js'); require('luxon'); console.log('deps ok')"
+          # package.json の peer 依存と衝突しないよう legacy-peer-deps を使う
+          npm install --no-package-lock --no-save --legacy-peer-deps \
+            @supabase/supabase-js@2.105.3 luxon@3.4.4 ws@8.18.0
+          node -e "require('@supabase/supabase-js'); require('luxon'); require('ws'); console.log('deps ok', process.version)"
 
       - name: Resolve phase
         id: meta

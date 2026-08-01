@@ -25,6 +25,17 @@ const GEN = path.join(ROOT, "scripts", "generate-monthly-progress-report.mjs");
 const EXCLUDE_CODES = new Set(["EBI020"]);
 const TZ = "Asia/Tokyo";
 
+async function createSb(url, key) {
+  const opts = { auth: { persistSession: false } };
+  try {
+    const ws = (await import("ws")).default;
+    opts.realtime = { transport: ws };
+  } catch {
+    // Node 22+ はネイティブ WebSocket で足りる
+  }
+  return createClient(url, key, opts);
+}
+
 function loadEnv() {
   for (const name of [".env.local.bak-before-vercel-run", ".env.local.tmp-off", ".env.local"]) {
     const p = path.join(ROOT, name);
@@ -199,7 +210,7 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("Supabase env missing");
-  const sb = createClient(url, key, { auth: { persistSession: false } });
+  const sb = await createSb(url, key);
 
   const eligible = await listEligible(sb);
   const outDir = path.join(ROOT, "tmp", "monthly-progress-reports");
