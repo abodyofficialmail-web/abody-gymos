@@ -65,7 +65,8 @@ jobs:
         id: chrome
 
       - name: Install deps
-        run: npm ci --omit=dev
+        # スクリプト実行に必要な最小依存のみ（lock不整合で npm ci が落ちないようにする）
+        run: npm install --no-package-lock --no-save @supabase/supabase-js@^2.103.0 luxon@^3.4.4
 
       - name: Resolve phase
         id: meta
