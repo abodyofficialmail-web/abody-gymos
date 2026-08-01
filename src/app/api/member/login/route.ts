@@ -19,7 +19,7 @@ export async function POST(request: Request) {
 
     const member_code = parsed.data.member_code.trim().toUpperCase();
     const email = parsed.data.email.trim();
-    if (!/^[A-Z]{3}\d{3}$/u.test(member_code)) return json({ error: "会員番号の形式が不正です" }, 400);
+    if (!/^[A-Z]{2,3}\d{3}$/u.test(member_code)) return json({ error: "会員番号の形式が不正です" }, 400);
 
     const supabase = createSupabaseServiceClient();
     const { data: member, error } = await (supabase as any)
