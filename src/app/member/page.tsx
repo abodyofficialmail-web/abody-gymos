@@ -83,11 +83,45 @@ function formatBodyPhotoDateLabel(ymd: string) {
   return `${dt.toFormat("yyyy/M/d")}（${dow}）`;
 }
 
+type MemberTab = "reservations" | "karte" | "photos" | "reports";
+
+type MonthlyProgressReportItem = {
+  yearMonth: string;
+  yearMonthLabel: string;
+  visitCount: number;
+  abodyScore: number;
+  overallGrade: string;
+  generatedAt: string;
+  lineSentAt: string | null;
+  pdfUrl: string | null;
+  pageUrls: string[];
+};
+
+const MEMBER_TABS: Array<{ id: MemberTab; label: string }> = [
+  { id: "reservations", label: "予約一覧" },
+  { id: "karte", label: "カルテ" },
+  { id: "photos", label: "写真記録" },
+  { id: "reports", label: "成長レポート" },
+];
+
+function bodyPhotoThumbs(set: MemberBodyPhotoSetView) {
+  return [
+    { angle: "front" as const, label: BODY_PHOTO_ANGLE_LABELS.front, url: set.front_url },
+    { angle: "back" as const, label: BODY_PHOTO_ANGLE_LABELS.back, url: set.back_url },
+    { angle: "side_left" as const, label: BODY_PHOTO_ANGLE_LABELS.side_left, url: set.side_left_url },
+    { angle: "side_right" as const, label: BODY_PHOTO_ANGLE_LABELS.side_right, url: set.side_right_url },
+  ];
+}
+
 export default function MemberPage() {
   const [data, setData] = useState<MeResponse | null>(null);
   const [bodyPhotos, setBodyPhotos] = useState<MemberBodyPhotoSetView[] | null>(null);
+  const [progressReports, setProgressReports] = useState<MonthlyProgressReportItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<MemberTab>("reservations");
+  const [beforePhotoSetId, setBeforePhotoSetId] = useState<string | null>(null);
+  const [selectedReportYm, setSelectedReportYm] = useState<string | null>(null);
 
   const [changeTarget, setChangeTarget] = useState<MeResponse["reservations"][number] | null>(null);
   const [changeEligibility, setChangeEligibility] = useState<MemberRescheduleEligibility | null>(null);
@@ -114,16 +148,39 @@ export default function MemberPage() {
   const title = useMemo(() => (data?.member?.name ? `マイページ（${data.member.name}）` : "マイページ"), [data?.member?.name]);
   const reminderEnabled = data?.member?.reservation_reminder_line_enabled !== false;
 
+  // APIは新しい順。右=最新、左=比較用（デフォルトは最古）
+  const latestPhotoSet = useMemo(() => (bodyPhotos && bodyPhotos.length > 0 ? bodyPhotos[0] : null), [bodyPhotos]);
+  const olderPhotoSets = useMemo(() => (bodyPhotos && bodyPhotos.length > 1 ? bodyPhotos.slice(1) : []), [bodyPhotos]);
+  const beforePhotoSet = useMemo(() => {
+    if (olderPhotoSets.length === 0) return null;
+    return olderPhotoSets.find((s) => s.id === beforePhotoSetId) ?? olderPhotoSets[olderPhotoSets.length - 1];
+  }, [olderPhotoSets, beforePhotoSetId]);
+
+  const selectedReport = useMemo(() => {
+    if (!progressReports?.length) return null;
+    return progressReports.find((r) => r.yearMonth === selectedReportYm) ?? progressReports[0];
+  }, [progressReports, selectedReportYm]);
+
   useEffect(() => {
     setLoading(true);
     setErr(null);
     Promise.all([
       apiGet<MeResponse>("/api/member/me"),
       apiGet<{ sets: MemberBodyPhotoSetView[] }>("/api/member/body-photos").catch(() => ({ sets: [] })),
+      apiGet<{ reports: MonthlyProgressReportItem[] }>("/api/member/monthly-progress-reports").catch(() => ({
+        reports: [],
+      })),
     ])
-      .then(([me, photos]) => {
+      .then(([me, photos, reportsRes]) => {
         setData(me);
-        setBodyPhotos(photos.sets ?? []);
+        const sets = photos.sets ?? [];
+        setBodyPhotos(sets);
+        // デフォルトの比較元は最古のセット
+        if (sets.length > 1) setBeforePhotoSetId(sets[sets.length - 1].id);
+        else setBeforePhotoSetId(null);
+        const reports = reportsRes.reports ?? [];
+        setProgressReports(reports);
+        setSelectedReportYm(reports[0]?.yearMonth ?? null);
       })
       .catch((e: any) => {
         const status = Number((e as any)?.status ?? 0);
@@ -134,6 +191,7 @@ export default function MemberPage() {
         setErr(String(e?.message ?? "取得に失敗しました"));
         setData(null);
         setBodyPhotos(null);
+        setProgressReports(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -325,94 +383,248 @@ export default function MemberPage() {
               ) : null}
             </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-              <div className="text-sm font-bold text-slate-900">予約一覧（今月〜翌月）</div>
-              {data.reservations.length === 0 ? <div className="text-sm text-slate-600">予約がありません。</div> : null}
-              <div className="grid gap-2">
-                {data.reservations.map((r) => (
-                  <div key={r.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <div className="text-sm font-bold text-slate-900">
-                      {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
-                      {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-600">{sessionLabel(r.session_type)}</div>
-                    <div className="mt-1 text-xs text-slate-500">店舗: {r.store_name || r.store_id}</div>
-                    <div className="mt-1 text-xs text-slate-500">トレーナー: {r.trainer_name || (r.trainer_id ?? "-")}</div>
+            <div className="flex gap-1 rounded-2xl border border-slate-200 bg-slate-100 p-1">
+              {MEMBER_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveTab(t.id)}
+                  className={[
+                    "flex-1 rounded-xl px-1.5 py-2.5 text-[11px] font-semibold transition-colors sm:text-sm sm:px-2",
+                    activeTab === t.id
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-600 hover:text-slate-900",
+                  ].join(" ")}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
 
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                        onClick={() => openChange(r)}
-                      >
-                        変更
-                      </button>
-                      <button
-                        type="button"
-                        className="flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100"
-                        onClick={() => {
-                          setCancelErr(null);
-                          setCancelTarget(r);
-                        }}
-                      >
-                        キャンセル
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+            {activeTab === "reservations" ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                <div className="text-sm font-bold text-slate-900">予約一覧（今月〜翌月）</div>
+                {data.reservations.length === 0 ? <div className="text-sm text-slate-600">予約がありません。</div> : null}
+                <div className="grid gap-2">
+                  {data.reservations.map((r) => (
+                    <div key={r.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-sm font-bold text-slate-900">
+                        {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
+                        {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">{sessionLabel(r.session_type)}</div>
+                      <div className="mt-1 text-xs text-slate-500">店舗: {r.store_name || r.store_id}</div>
+                      <div className="mt-1 text-xs text-slate-500">トレーナー: {r.trainer_name || (r.trainer_id ?? "-")}</div>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-              <div className="text-sm font-bold text-slate-900">体型の記録</div>
-              {bodyPhotos === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-              {bodyPhotos !== null && bodyPhotos.length === 0 ? (
-                <div className="text-sm text-slate-600">まだ登録がありません。</div>
-              ) : null}
-              <div className="grid gap-3">
-                {(bodyPhotos ?? []).map((s) => {
-                  const thumbs = [
-                    { label: BODY_PHOTO_ANGLE_LABELS.front, url: s.front_url },
-                    { label: BODY_PHOTO_ANGLE_LABELS.back, url: s.back_url },
-                    { label: BODY_PHOTO_ANGLE_LABELS.side_left, url: s.side_left_url },
-                    { label: BODY_PHOTO_ANGLE_LABELS.side_right, url: s.side_right_url },
-                  ].filter((x) => x.url);
-                  if (thumbs.length === 0) return null;
-                  return (
-                    <div key={s.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3 space-y-2">
-                      <div className="text-xs font-semibold text-slate-700">{formatBodyPhotoDateLabel(s.photo_date)}</div>
-                      {s.note ? <div className="text-xs text-slate-500">{s.note}</div> : null}
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        {thumbs.map((t) => (
-                          <div key={t.label} className="space-y-1">
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                          onClick={() => openChange(r)}
+                        >
+                          変更
+                        </button>
+                        <button
+                          type="button"
+                          className="flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100"
+                          onClick={() => {
+                            setCancelErr(null);
+                            setCancelTarget(r);
+                          }}
+                        >
+                          キャンセル
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {activeTab === "karte" ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                <div className="text-sm font-bold text-slate-900">カルテ（最新30件）</div>
+                {data.notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
+                <div className="grid gap-2">
+                  {data.notes.map((n) => (
+                    <div key={n.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                      <div className="text-xs font-semibold text-slate-700">
+                        {n.date} / {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+                      </div>
+                      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{n.content}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {activeTab === "photos" ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-slate-900">写真記録（ビフォーアフター）</div>
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    左に過去、右に最新の写真を縦に並べて比較できます。
+                  </p>
+                </div>
+
+                {bodyPhotos === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+                {bodyPhotos !== null && bodyPhotos.length === 0 ? (
+                  <div className="text-sm text-slate-600">まだ登録がありません。</div>
+                ) : null}
+
+                {latestPhotoSet ? (
+                  <div className="space-y-3">
+                    {olderPhotoSets.length > 1 ? (
+                      <label className="block text-xs font-semibold text-slate-700">
+                        比較する過去の日付
+                        <select
+                          value={beforePhotoSet?.id ?? ""}
+                          onChange={(e) => setBeforePhotoSetId(e.target.value || null)}
+                          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-900"
+                        >
+                          {[...olderPhotoSets].reverse().map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {formatBodyPhotoDateLabel(s.photo_date)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="min-w-0 space-y-2">
+                        <div className="rounded-lg bg-slate-50 px-2 py-1.5 text-center">
+                          <div className="text-[10px] font-semibold text-slate-500">ビフォー</div>
+                          <div className="text-[11px] font-semibold text-slate-800">
+                            {beforePhotoSet
+                              ? formatBodyPhotoDateLabel(beforePhotoSet.photo_date)
+                              : "—"}
+                          </div>
+                        </div>
+                        {beforePhotoSet ? (
+                          bodyPhotoThumbs(beforePhotoSet).map((t) => (
+                            <div key={`before-${t.angle}`} className="space-y-1">
+                              <div className="aspect-[3/4] overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                                {t.url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={t.url} alt={`ビフォー ${t.label}`} className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center text-[10px] text-slate-400">未登録</div>
+                                )}
+                              </div>
+                              <div className="text-center text-[10px] text-slate-500">{t.label}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-slate-200 px-3 py-8 text-center text-xs text-slate-500">
+                            比較用の過去写真がまだありません
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="min-w-0 space-y-2">
+                        <div className="rounded-lg bg-slate-900 px-2 py-1.5 text-center">
+                          <div className="text-[10px] font-semibold text-slate-300">アフター（最新）</div>
+                          <div className="text-[11px] font-semibold text-white">
+                            {formatBodyPhotoDateLabel(latestPhotoSet.photo_date)}
+                          </div>
+                        </div>
+                        {bodyPhotoThumbs(latestPhotoSet).map((t) => (
+                          <div key={`after-${t.angle}`} className="space-y-1">
                             <div className="aspect-[3/4] overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={t.url!} alt={t.label} className="h-full w-full object-cover" />
+                              {t.url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={t.url} alt={`アフター ${t.label}`} className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-[10px] text-slate-400">未登録</div>
+                              )}
                             </div>
                             <div className="text-center text-[10px] text-slate-500">{t.label}</div>
                           </div>
                         ))}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-              <div className="text-sm font-bold text-slate-900">カルテ（最新30件）</div>
-              {data.notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
-              <div className="grid gap-2">
-                {data.notes.map((n) => (
-                  <div key={n.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                    <div className="text-xs font-semibold text-slate-700">
-                      {n.date} / {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
-                    </div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{n.content}</div>
+                    {beforePhotoSet?.note || latestPhotoSet.note ? (
+                      <div className="space-y-1 text-xs text-slate-500">
+                        {beforePhotoSet?.note ? <div>ビフォーメモ: {beforePhotoSet.note}</div> : null}
+                        {latestPhotoSet.note ? <div>最新メモ: {latestPhotoSet.note}</div> : null}
+                      </div>
+                    ) : null}
                   </div>
-                ))}
-              </div>
-            </section>
+                ) : null}
+              </section>
+            ) : null}
+
+            {activeTab === "reports" ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-slate-900">成長レポート</div>
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    月次の成長レポートです。PDFや各ページ画像をいつでも確認できます。
+                  </p>
+                </div>
+
+                {progressReports === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+                {progressReports !== null && progressReports.length === 0 ? (
+                  <div className="text-sm text-slate-600">まだレポートがありません。</div>
+                ) : null}
+
+                {selectedReport ? (
+                  <div className="space-y-3">
+                    {progressReports && progressReports.length > 1 ? (
+                      <label className="block text-xs font-semibold text-slate-700">
+                        対象月
+                        <select
+                          value={selectedReport.yearMonth}
+                          onChange={(e) => setSelectedReportYm(e.target.value || null)}
+                          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-900"
+                        >
+                          {progressReports.map((r) => (
+                            <option key={r.yearMonth} value={r.yearMonth}>
+                              {r.yearMonthLabel}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <div className="text-sm font-semibold text-slate-800">{selectedReport.yearMonthLabel}</div>
+                    )}
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+                      <div>
+                        来店 {selectedReport.visitCount}回 / Score {selectedReport.abodyScore}
+                        {selectedReport.overallGrade ? `（${selectedReport.overallGrade}）` : ""}
+                      </div>
+                    </div>
+
+                    {selectedReport.pdfUrl ? (
+                      <a
+                        href={selectedReport.pdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+                      >
+                        PDFを開く
+                      </a>
+                    ) : null}
+
+                    <div className="grid gap-3">
+                      {selectedReport.pageUrls.map((url, i) => (
+                        <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="block">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={`成長レポート ${i + 1}ページ`}
+                            className="w-full rounded-xl border border-slate-200 bg-white"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
           </>
         ) : null}
 
