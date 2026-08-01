@@ -6,14 +6,9 @@ name: Monthly Progress (month-end)
 # 必要な Secrets:
 #   NEXT_PUBLIC_SUPABASE_URL
 #   SUPABASE_SERVICE_ROLE_KEY
-#
-# 手動実行:
-#   Actions → Monthly Progress → Run workflow
-#   phase=persist|send / month=YYYY-MM / force=true
 
 on:
   schedule:
-    # 毎日候補日。スクリプト側で「月末以外はスキップ」
     - cron: "0 5 28-31 * *" # 14:00 JST → persist
     - cron: "0 11 28-31 * *" # 20:00 JST → send
   workflow_dispatch:
@@ -52,21 +47,27 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: npm
+          node-version: "22"
 
       - name: Setup Python / Pillow
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install pillow
+        run: python3 -m pip install --user pillow
 
       - name: Install Google Chrome
-        uses: browser-actions/setup-chrome@v1
         id: chrome
+        run: |
+          set -euo pipefail
+          wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/chrome.deb
+          CHROME_BIN="$(command -v google-chrome-stable || command -v google-chrome)"
+          echo "chrome-path=$CHROME_BIN" >> "$GITHUB_OUTPUT"
+          "$CHROME_BIN" --version
 
       - name: Install deps
-        # スクリプト実行に必要な最小依存のみ（lock不整合で npm ci が落ちないようにする）
-        run: npm install --no-package-lock --no-save @supabase/supabase-js@^2.103.0 luxon@^3.4.4
+        run: |
+          set -euo pipefail
+          npm install --no-package-lock --no-save @supabase/supabase-js@2.103.0 luxon@3.4.4
+          node -e "require('@supabase/supabase-js'); require('luxon'); console.log('deps ok')"
 
       - name: Resolve phase
         id: meta
@@ -83,6 +84,21 @@ jobs:
           echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
           echo "Resolved phase=$PHASE hour_utc=$HOUR_UTC"
 
+      - name: Preflight
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          echo "chrome=$CHROME_PATH"
+          test -x "$CHROME_PATH"
+          test -n "${NEXT_PUBLIC_SUPABASE_URL:-}" || { echo "missing NEXT_PUBLIC_SUPABASE_URL"; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "missing SUPABASE_SERVICE_ROLE_KEY"; exit 1; }
+          echo "supabase_url_len=${#NEXT_PUBLIC_SUPABASE_URL}"
+          echo "service_role_len=${#SUPABASE_SERVICE_ROLE_KEY}"
+          echo "url_prefix=${NEXT_PUBLIC_SUPABASE_URL:0:30}"
+
       - name: Run month-end job
         env:
           CI: "true"
@@ -91,6 +107,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
+          # Secrets の改行混入を除去
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+
           ARGS=(--audience=active-line --confirm-send --phase=${{ steps.meta.outputs.phase }})
           if [ -n "${{ github.event.inputs.month }}" ]; then
             ARGS+=(--month=${{ github.event.inputs.month }})

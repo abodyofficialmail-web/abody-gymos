@@ -49,7 +49,13 @@ function resolveChromePath() {
 const CHROME = resolveChromePath();
 const CHROME_EXTRA_ARGS =
   process.env.CI || process.platform === "linux"
-    ? ["--no-sandbox", "--disable-dev-shm-usage", "--disable-software-rasterizer"]
+    ? [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-software-rasterizer",
+        "--allow-file-access-from-files",
+        "--font-render-hinting=none",
+      ]
     : [];
 
 function arg(name, fallback = null) {
@@ -930,7 +936,8 @@ function pngToJpeg(pngPath, jpgPath, outW, outH, quality = MYPAGE_JPEG_QUALITY) 
   const py = `
 from PIL import Image
 im = Image.open(${JSON.stringify(pngPath)}).convert("RGB")
-im = im.resize((${Number(outW)}, ${Number(outH)}), Image.Resampling.LANCZOS)
+resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+im = im.resize((${Number(outW)}, ${Number(outH)}), resample)
 im.save(${JSON.stringify(jpgPath)}, "JPEG", quality=${Number(quality)}, optimize=True)
 `;
   const r = spawnSync("python3", ["-c", py], { encoding: "utf8" });
