@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  【非推奨・バックアップ用】Mac LaunchAgent
+
+  本番の自動実行は GitHub Actions:
+    .github/workflows/monthly-progress.yml
+  （Mac電源OFFでも動く）
+
+  この LaunchAgent を使うと二重送信のリスクがあるので、通常は unload しておく。
+
+  無効化:
+    launchctl bootout gui/$(id -u)/com.abody.monthly-progress 2>/dev/null
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.abody.monthly-progress</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/kazuhiko/Downloads/abody-gymos</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/node</string>
+      <string>/Users/kazuhiko/Downloads/abody-gymos/scripts/run-monthly-progress-month-end.mjs</string>
+      <string>--audience=active-line</string>
+      <string>--confirm-send</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+      <dict>
+        <key>Hour</key>
+        <integer>14</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+      </dict>
+      <dict>
+        <key>Hour</key>
+        <integer>20</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+      </dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/kazuhiko/Downloads/abody-gymos/tmp/monthly-progress-reports/_launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kazuhiko/Downloads/abody-gymos/tmp/monthly-progress-reports/_launchd-stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Background</string>
+  </dict>
+</plist>

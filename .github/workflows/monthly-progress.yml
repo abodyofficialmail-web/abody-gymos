@@ -1,0 +1,101 @@
+name: Monthly Progress (month-end)
+
+# Mac不要: GitHub Actions 上で月末に生成→送信
+# 14:00 JST = 05:00 UTC / 20:00 JST = 11:00 UTC
+#
+# 必要な Secrets:
+#   NEXT_PUBLIC_SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#
+# 手動実行:
+#   Actions → Monthly Progress → Run workflow
+#   phase=persist|send / month=YYYY-MM / force=true
+
+on:
+  schedule:
+    # 毎日候補日。スクリプト側で「月末以外はスキップ」
+    - cron: "0 5 28-31 * *" # 14:00 JST → persist
+    - cron: "0 11 28-31 * *" # 20:00 JST → send
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "persist | send | all"
+        required: true
+        default: "persist"
+        type: choice
+        options:
+          - persist
+          - send
+          - all
+      month:
+        description: "YYYY-MM (empty = current JST month)"
+        required: false
+        default: ""
+      force:
+        description: "月末以外でも実行"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: monthly-progress-${{ github.event.inputs.phase || 'auto' }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Python / Pillow
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pillow
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        id: chrome
+
+      - name: Install deps
+        run: npm ci --omit=dev
+
+      - name: Resolve phase
+        id: meta
+        run: |
+          set -euo pipefail
+          HOUR_UTC=$(date -u +%H)
+          if [ -n "${{ github.event.inputs.phase }}" ]; then
+            PHASE="${{ github.event.inputs.phase }}"
+          elif [ "$HOUR_UTC" -lt 11 ]; then
+            PHASE=persist
+          else
+            PHASE=send
+          fi
+          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved phase=$PHASE hour_utc=$HOUR_UTC"
+
+      - name: Run month-end job
+        env:
+          CI: "true"
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          ARGS=(--audience=active-line --confirm-send --phase=${{ steps.meta.outputs.phase }})
+          if [ -n "${{ github.event.inputs.month }}" ]; then
+            ARGS+=(--month=${{ github.event.inputs.month }})
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          echo "node scripts/run-monthly-progress-month-end.mjs ${ARGS[*]}"
+          node scripts/run-monthly-progress-month-end.mjs "${ARGS[@]}"

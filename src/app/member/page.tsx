@@ -561,7 +561,7 @@ export default function MemberPage() {
                 <div className="space-y-1">
                   <div className="text-sm font-bold text-slate-900">成長レポート</div>
                   <p className="text-xs leading-relaxed text-slate-500">
-                    月次の成長レポートです。PDFや各ページ画像をいつでも確認できます。
+                    月次の成長レポートです。PDFや各ページ画像をいつでも確認できます。画像をタップすると拡大表示できます。
                   </p>
                 </div>
 
@@ -617,6 +617,8 @@ export default function MemberPage() {
                             src={url}
                             alt={`成長レポート ${i + 1}ページ`}
                             className="w-full rounded-xl border border-slate-200 bg-white"
+                            loading={i === 0 ? "eager" : "lazy"}
+                            decoding="async"
                           />
                         </a>
                       ))}
