@@ -1,5 +1,5 @@
 export type MenuSet = { reps: string; weight: string };
-export type MenuItem = { id: string; exercise: string; sets: MenuSet[] };
+export type MenuItem = { id: string; exercise: string; sets: MenuSet[]; isCustom?: boolean };
 
 export type KarteSessionState = {
   bodyWeightKg: string;
@@ -23,16 +23,79 @@ export const KARTE_TRAINING_PARTS = [
   { id: "肩", label: "肩" },
   { id: "腕", label: "腕" },
   { id: "腹筋", label: "腹筋" },
+  { id: "ピラティス", label: "ピラティス" },
   { id: "有酸素", label: "有酸素" },
 ] as const;
 
 export const KARTE_EXERCISE_CATALOG: Record<string, string[]> = {
-  胸: ["ベンチプレス", "インクラインベンチプレス", "ダンベルベンチプレス", "ダンベルフライ", "ケーブルフライ", "チェストプレス", "その他"],
-  肩: ["ショルダープレス", "ダンベルショルダープレス", "アーノルドプレス", "サイドレイズ", "フロントレイズ", "リアレイズ", "ケーブルサイドレイズ", "アップライトロウ", "シュラッグ", "フェイスプル", "その他"],
-  背中: ["ラットプルダウン", "シーテッドロー", "ワンハンドロー", "ベントオーバーロウ", "懸垂", "デッドリフト", "その他"],
-  腕: ["アームカール", "ハンマーカール", "ケーブルカール", "トライセプスプレスダウン", "フレンチプレス", "その他"],
-  脚: ["スクワット", "フロントスクワット", "ブルガリアンスクワット", "ワイドスクワット", "ゴブレットスクワット", "レッグプレス", "レッグエクステンション", "レッグカール", "ルーマニアンデッドリフト", "レッグアダクション", "レッグアブダクション", "カーフレイズ", "その他"],
-  腹筋: ["クランチ", "レッグレイズ", "プランク", "ケーブルクランチ", "その他"],
+  胸: [
+    "ベンチプレス",
+    "インクラインベンチプレス",
+    "インクラインダンベルプレス",
+    "ダンベルベンチプレス",
+    "ダンベルフライ",
+    "インクラインダンベルフライ",
+    "ケーブルフライ",
+    "チェストプレス",
+    "プッシュアップ",
+    "その他",
+  ],
+  肩: [
+    "ショルダープレス",
+    "ダンベルショルダープレス",
+    "アーノルドプレス",
+    "サイドレイズ",
+    "フロントレイズ",
+    "リアレイズ",
+    "ケーブルサイドレイズ",
+    "アップライトロウ",
+    "シュラッグ",
+    "フェイスプル",
+    "その他",
+  ],
+  背中: [
+    "ラットプルダウン",
+    "ラットプルダウン（ナローグリップ）",
+    "シーテッドロー",
+    "ワンハンドロー",
+    "ベントオーバーロウ",
+    "プルオーバー",
+    "懸垂",
+    "デッドリフト",
+    "その他",
+  ],
+  腕: [
+    "アームカール",
+    "インクラインアームカール",
+    "ハンマーカール",
+    "ケーブルカール",
+    "トライセプスプレスダウン",
+    "フレンチプレス",
+    "キックバック",
+    "その他",
+  ],
+  脚: [
+    "スクワット",
+    "フロントスクワット",
+    "ブルガリアンスクワット",
+    "ワイドスクワット",
+    "ゴブレットスクワット",
+    "ランジ",
+    "レッグプレス",
+    "レッグエクステンション",
+    "レッグカール",
+    "ルーマニアンデッドリフト",
+    "ヒップスラスト",
+    "ヒップリフト",
+    "ドンキーキック",
+    "クラムシェル",
+    "レッグアダクション",
+    "レッグアブダクション",
+    "カーフレイズ",
+    "その他",
+  ],
+  腹筋: ["クランチ", "レッグレイズ", "プランク", "サイドプランク", "デッドバグ", "ドローイン", "ケーブルクランチ", "その他"],
+  ピラティス: ["デッドバグ", "ドローイン", "サイドプランク", "ヒップリフト", "ドンキーキック", "クラムシェル", "その他"],
   有酸素: ["バイク", "ラン", "ウォーク", "ローイング", "その他"],
 };
 
@@ -57,10 +120,33 @@ export function createKarteRepOptions(): string[] {
   return Array.from({ length: 30 }, (_, i) => String(i + 1));
 }
 
+/** プランク系の秒数選択肢（1〜180秒） */
+export function createKarteSecondOptions(): string[] {
+  return Array.from({ length: 180 }, (_, i) => String(i + 1));
+}
+
 export function createKarteWeightOptions(): string[] {
   const out: string[] = [];
   for (let w = 0; w <= 200; w += 0.5) out.push(w % 1 === 0 ? String(w) : w.toFixed(1));
   return out;
+}
+
+/** プランク／サイドプランクは秒数で記録する */
+export function isKarteDurationExercise(exercise: string): boolean {
+  return exercise.includes("プランク");
+}
+
+export function formatKarteExerciseName(item: Pick<MenuItem, "exercise" | "isCustom">): string {
+  const name = item.exercise.trim();
+  if (item.isCustom) return name || "その他";
+  return name || "-";
+}
+
+export function formatKarteSetLine(exercise: string, s: MenuSet): string {
+  const unit = isKarteDurationExercise(exercise) ? "秒" : "回";
+  const reps = s.reps.trim() ? `${s.reps.trim()}${unit}` : "";
+  const w = s.weight.trim() ? `${s.weight.trim()}kg` : "";
+  return [w, reps].filter(Boolean).join("×") || "-";
 }
 
 export function buildKarteSessionContent(
@@ -99,15 +185,14 @@ export function buildKarteSessionContent(
     lines.push("-");
   } else {
     for (const item of state.menuItems) {
-      lines.push(`■ ${item.exercise}`);
+      const exerciseName = formatKarteExerciseName(item);
+      lines.push(`■ ${exerciseName}`);
       const sets = item.sets.filter((s) => s.reps.trim() || s.weight.trim());
       if (sets.length === 0) {
         lines.push("  -");
       } else {
         for (const s of sets) {
-          const reps = s.reps.trim() ? `${s.reps.trim()}回` : "";
-          const w = s.weight.trim() ? `${s.weight.trim()}kg` : "";
-          lines.push(`  ${[w, reps].filter(Boolean).join("×") || "-"}`);
+          lines.push(`  ${formatKarteSetLine(exerciseName, s)}`);
         }
       }
     }

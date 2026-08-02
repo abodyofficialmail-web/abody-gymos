@@ -32,6 +32,7 @@ const karteSessionSchema = z.object({
       id: z.string(),
       exercise: z.string(),
       sets: z.array(z.object({ reps: z.string(), weight: z.string() })),
+      isCustom: z.boolean().optional(),
     })
   ),
   stretch: z.string(),

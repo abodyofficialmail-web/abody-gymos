@@ -20,6 +20,17 @@ import {
   resolveMembershipStatus,
   type MembershipStatus,
 } from "@/lib/memberMembershipStatus";
+import {
+  createKarteRepOptions,
+  createKarteSecondOptions,
+  createKarteWeightOptions,
+  formatKarteExerciseName,
+  formatKarteSetLine,
+  isKarteDurationExercise,
+  KARTE_EXERCISE_CATALOG,
+  KARTE_TRAINING_PARTS,
+  type MenuItem,
+} from "@/lib/karteSession";
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -62,9 +73,6 @@ type ClientNoteRow = {
 
 type StoreRow = { id: string; name: string };
 type TrainerRow = { id: string; display_name: string };
-
-type MenuSet = { reps: string; weight: string };
-type MenuItem = { id: string; exercise: string; sets: MenuSet[] };
 
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { cache: "no-store" });
@@ -366,31 +374,8 @@ export function MemberDetailClient({
     refreshNotes().catch(() => setNotes([]));
   }, [memberId]);
 
-  const parts = useMemo(
-    () => [
-      { id: "脚", label: "脚" },
-      { id: "背中", label: "背中" },
-      { id: "胸", label: "胸" },
-      { id: "肩", label: "肩" },
-      { id: "腕", label: "腕" },
-      { id: "腹筋", label: "腹筋" },
-      { id: "有酸素", label: "有酸素" },
-    ],
-    []
-  );
-
-  const exerciseCatalog = useMemo(() => {
-    // 画像のUIに寄せた“部位→種目”の簡易カタログ（必要なら後でDB化できます）
-    return {
-      胸: ["ベンチプレス", "インクラインベンチプレス", "ダンベルベンチプレス", "ダンベルフライ", "ケーブルフライ", "チェストプレス", "その他"],
-      肩: ["ショルダープレス", "ダンベルショルダープレス", "アーノルドプレス", "サイドレイズ", "フロントレイズ", "リアレイズ", "ケーブルサイドレイズ", "アップライトロウ", "シュラッグ", "フェイスプル", "その他"],
-      背中: ["ラットプルダウン", "シーテッドロー", "ワンハンドロー", "ベントオーバーロウ", "懸垂", "デッドリフト", "その他"],
-      腕: ["アームカール", "ハンマーカール", "ケーブルカール", "トライセプスプレスダウン", "フレンチプレス", "その他"],
-      脚: ["スクワット", "フロントスクワット", "ブルガリアンスクワット", "ワイドスクワット", "ゴブレットスクワット", "レッグプレス", "レッグエクステンション", "レッグカール", "ルーマニアンデッドリフト", "レッグアダクション", "レッグアブダクション", "カーフレイズ", "その他"],
-      腹筋: ["クランチ", "レッグレイズ", "プランク", "ケーブルクランチ", "その他"],
-      有酸素: ["バイク", "ラン", "ウォーク", "ローイング", "その他"],
-    } as Record<string, string[]>;
-  }, []);
+  const parts = KARTE_TRAINING_PARTS;
+  const exerciseCatalog = KARTE_EXERCISE_CATALOG;
 
   const togglePart = (id: string) => {
     setTrainingParts((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -432,16 +417,16 @@ export function MemberDetailClient({
 
   const addMenuItem = (exercise: string) => {
     const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    setMenuItems((cur) => [...cur, { id, exercise, sets: [{ reps: "", weight: "" }] }]);
+    const isCustom = exercise === "その他";
+    setMenuItems((cur) => [
+      ...cur,
+      { id, exercise: isCustom ? "" : exercise, sets: [{ reps: "", weight: "" }], isCustom },
+    ]);
   };
 
-  const repOptions = useMemo(() => Array.from({ length: 30 }, (_, i) => String(i + 1)), []);
-  const weightOptions = useMemo(() => {
-    // 0〜200kg (0.5刻み) を選択式で提供（必要なら後で上限/刻み変更）
-    const out: string[] = [];
-    for (let w = 0; w <= 200; w += 0.5) out.push(w % 1 === 0 ? String(w) : w.toFixed(1));
-    return out;
-  }, []);
+  const repOptions = useMemo(() => createKarteRepOptions(), []);
+  const secondOptions = useMemo(() => createKarteSecondOptions(), []);
+  const weightOptions = useMemo(() => createKarteWeightOptions(), []);
 
   const appendSet = (itemId: string) => {
     setMenuItems((cur) =>
@@ -513,15 +498,14 @@ export function MemberDetailClient({
       lines.push("-");
     } else {
       for (const item of menuItems) {
-        lines.push(`■ ${item.exercise}`);
+        const exerciseName = formatKarteExerciseName(item);
+        lines.push(`■ ${exerciseName}`);
         const sets = item.sets.filter((s) => s.reps.trim() || s.weight.trim());
         if (sets.length === 0) {
           lines.push("  -");
         } else {
           for (const s of sets) {
-            const reps = s.reps.trim() ? `${s.reps.trim()}回` : "";
-            const w = s.weight.trim() ? `${s.weight.trim()}kg` : "";
-            lines.push(`  ${[w, reps].filter(Boolean).join("×") || "-"}`);
+            lines.push(`  ${formatKarteSetLine(exerciseName, s)}`);
           }
         }
       }
@@ -947,6 +931,36 @@ export function MemberDetailClient({
           </div>
         ) : null}
 
+        {(() => {
+          const hearing = preSessionByDate[noteDate] ?? (latestPreSession?.session_date === noteDate ? latestPreSession : null);
+          if (hearing) {
+            return (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-3 text-sm space-y-1">
+                <div className="font-semibold text-slate-900">セッション前ヒアリング（会員回答）</div>
+                <div className="text-xs text-slate-600">
+                  {hearing.session_date}
+                  {[hearing.store_name, hearing.trainer_name].filter(Boolean).length > 0
+                    ? `（${[hearing.store_name, hearing.trainer_name].filter(Boolean).join(" / ")}）`
+                    : ""}
+                </div>
+                {formatPreSessionSurveyDetailLines(hearing).map((line) => (
+                  <div key={line} className="text-slate-800">
+                    {line}
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          if (preSessionInviteByDate[noteDate]) {
+            return (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+                セッション前ヒアリング未回答（リマインド送信済み）
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         {karteStep === "idle" ? (
           <div className="pt-2">
             <button
@@ -1168,14 +1182,29 @@ export function MemberDetailClient({
                 <div className="text-xs font-semibold text-slate-700">本日のメニュー</div>
 
                 <div className="space-y-3">
-                  {menuItems.map((item) => (
+                  {menuItems.map((item) => {
+                    const duration = isKarteDurationExercise(item.exercise);
+                    const countOptions = duration ? secondOptions : repOptions;
+                    return (
                     <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 space-y-2">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-semibold text-slate-900">{item.exercise}</div>
+                        {item.isCustom ? (
+                          <input
+                            value={item.exercise}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setMenuItems((cur) => cur.map((x) => (x.id !== item.id ? x : { ...x, exercise: v })));
+                            }}
+                            placeholder="種目名を入力（自由記述）"
+                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                          />
+                        ) : (
+                          <div className="text-sm font-semibold text-slate-900">{item.exercise}</div>
+                        )}
                         <button
                           type="button"
                           onClick={() => setMenuItems((cur) => cur.filter((x) => x.id !== item.id))}
-                          className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700"
+                          className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700"
                         >
                           メニュー削除
                         </button>
@@ -1221,7 +1250,7 @@ export function MemberDetailClient({
                                 </select>
                               </div>
                               <div>
-                                <div className="text-xs text-slate-600">回数</div>
+                                <div className="text-xs text-slate-600">{duration ? "秒数" : "回数"}</div>
                                 <select
                                   value={s.reps}
                                   onChange={(e) => {
@@ -1237,7 +1266,7 @@ export function MemberDetailClient({
                                   className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[16px]"
                                 >
                                   <option value="">選択</option>
-                                  {repOptions.map((r) => (
+                                  {countOptions.map((r) => (
                                     <option key={r} value={r}>
                                       {r}
                                     </option>
@@ -1266,7 +1295,8 @@ export function MemberDetailClient({
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
