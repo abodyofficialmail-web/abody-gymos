@@ -13,11 +13,12 @@ import {
   postSessionSurveySortValue,
   type SurveyRateStats,
 } from "@/lib/surveyRateDisplay";
+import { MID_MONTH_LOW_BOOKING_MAX, isLowBookingMotivationNeed } from "@/lib/lowBookingMotivation";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 const TZ = "Asia/Tokyo";
-const LOW_BOOKING_MAX = 3;
+const LOW_BOOKING_MAX = MID_MONTH_LOW_BOOKING_MAX;
 
 type Store = { id: string; name: string };
 type MemberRow = {
@@ -83,8 +84,8 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
   useEffect(() => {
     let cancelled = false;
     setCountsLoading(true);
+    // 会員の所属店舗で一覧を絞っても、セッション件数は全店舗合計で表示する
     const qs = new URLSearchParams({ month, include_previous: "1" });
-    if (selectedStoreId !== "all") qs.set("store_id", selectedStoreId);
 
     fetch(`/api/admin/member-booking-counts?${qs.toString()}`, { cache: "no-store" })
       .then((res) => res.json())
@@ -107,7 +108,7 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
     return () => {
       cancelled = true;
     };
-  }, [month, selectedStoreId]);
+  }, [month]);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +364,7 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
                       </span>
                       <span className={bookingCountBadgeClass(bookingCount)}>
                         今月 {bookingCount}件
+                        {isLowBookingMotivationNeed(bookingCount) ? "・モチベアップ" : ""}
                       </span>
                     </div>
                   ) : null}

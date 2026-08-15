@@ -2,6 +2,11 @@
 
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  isLowBookingMotivationNeed,
+  lowBookingMotivationBadgeClass,
+  lowBookingMotivationBadgeLabel,
+} from "@/lib/lowBookingMotivation";
 
 const TZ = "Asia/Tokyo";
 
@@ -89,6 +94,28 @@ function sessionTypeBadge(sessionType: string | null | undefined) {
   const t = String(sessionType ?? "store");
   if (t === "online") return "💻 オンライン";
   return "🏠 店舗";
+}
+
+type BodyPhotoStatusRow = {
+  last_photo_date: string | null;
+  needs_photo: boolean;
+  reason: "never" | "stale_month" | null;
+};
+
+function bodyPhotoBadge(status: BodyPhotoStatusRow | undefined) {
+  if (!status?.needs_photo) return null;
+  if (status.reason === "never") {
+    return (
+      <span className="ml-2 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-900">
+        写真なし・撮影推奨
+      </span>
+    );
+  }
+  return (
+    <span className="ml-2 rounded-md bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-900">
+      今月未撮影・撮影推奨
+    </span>
+  );
 }
 
 function reservationAccent(stores: Store[] | null, r: ReservationRow): { border: string; soft: string } {
@@ -221,6 +248,11 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
   /** 当日・店舗フィルタに合わせたシフト（休憩一覧用） */
   const [dayShiftsByStore, setDayShiftsByStore] = useState<Array<{ store_id: string; store_name: string; shifts: ShiftDto[] }> | null>(
     null
+  );
+
+  /** 選択日の会員向け：体型写真の月一撮影ステータス */
+  const [bodyPhotoStatusByMember, setBodyPhotoStatusByMember] = useState<Record<string, BodyPhotoStatusRow>>(
+    {}
   );
 
   const selectedStoreName = useMemo(() => {
@@ -766,6 +798,46 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
     return list.sort((a, b) => DateTime.fromISO(a.start_at).toMillis() - DateTime.fromISO(b.start_at).toMillis());
   }, [rows, selectedYmd]);
 
+  const monthBookingByMember = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows ?? []) {
+      if (!r.member_id) continue;
+      if (String(r.status ?? "") === "cancelled") continue;
+      m.set(r.member_id, (m.get(r.member_id) ?? 0) + 1);
+    }
+    return m;
+  }, [rows]);
+
+  useEffect(() => {
+    if (!selectedYmd) {
+      setBodyPhotoStatusByMember({});
+      return;
+    }
+    const memberIds = [
+      ...new Set(selectedDayRows.map((r) => r.member_id).filter((id): id is string => Boolean(id))),
+    ];
+    if (memberIds.length === 0) {
+      setBodyPhotoStatusByMember({});
+      return;
+    }
+    let cancelled = false;
+    const qs = new URLSearchParams();
+    qs.set("member_ids", memberIds.join(","));
+    qs.set("as_of", selectedYmd);
+    apiGet<{ status: Record<string, BodyPhotoStatusRow> }>(
+      `/api/admin/member-body-photo-status?${qs.toString()}`
+    )
+      .then((d) => {
+        if (!cancelled) setBodyPhotoStatusByMember(d.status ?? {});
+      })
+      .catch(() => {
+        if (!cancelled) setBodyPhotoStatusByMember({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedYmd, selectedDayRows]);
+
   const dayBreakItems = useMemo((): DayBreakItem[] => {
     if (!selectedYmd || !dayShiftsByStore || dayShiftsByStore.length === 0) return [];
     const out: DayBreakItem[] = [];
@@ -973,8 +1045,17 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
       ) : (
         <section className="space-y-2">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-bold text-slate-900">
-              {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
+            <div>
+              <div className="text-sm font-bold text-slate-900">
+                {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
+              </div>
+              <div className="mt-1 text-[11px] text-slate-500">
+                体型写真は月1回。
+                <span className="mx-1 rounded-md bg-rose-100 px-1 py-0.5 font-semibold text-rose-900">写真なし</span>
+                /
+                <span className="mx-1 rounded-md bg-sky-100 px-1 py-0.5 font-semibold text-sky-900">今月未撮影</span>
+                の会員はカルテから撮影してください。
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -1054,6 +1135,15 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                         ) : null}
                         {r.blocks_capacity === false ? (
                           <span className="ml-2 rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-800">枠未確保</span>
+                        ) : null}
+                        {r.member_id && String(r.session_type ?? "store") !== "online"
+                          ? bodyPhotoBadge(bodyPhotoStatusByMember[r.member_id])
+                          : null}
+                        {r.member_id &&
+                        isLowBookingMotivationNeed(monthBookingByMember.get(r.member_id) ?? 0) ? (
+                          <span className={`ml-2 ${lowBookingMotivationBadgeClass(monthBookingByMember.get(r.member_id) ?? 0)}`}>
+                            {lowBookingMotivationBadgeLabel(monthBookingByMember.get(r.member_id) ?? 0)}
+                          </span>
                         ) : null}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
