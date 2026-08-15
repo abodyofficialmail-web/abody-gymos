@@ -50,6 +50,7 @@ type TrainerApiRow = {
   display_name: string;
   hourly_rate: number | null;
   monthly_pass_cost: number | null;
+  line_linked?: boolean;
 };
 
 type StoreRow = { id: string; name: string };
@@ -378,6 +379,11 @@ export function TrainerDetailClient({ trainer }: { trainer: TrainerDetail }) {
         </div>
         <p className="text-sm text-slate-500">
           ID: <span className="font-mono">{trainer.id}</span>
+          {" ・ "}
+          {rates?.line_linked ? "運営LINE連携済み" : "運営LINE未連携"}
+        </p>
+        <p className="text-xs text-slate-500">
+          連携方法: 恵比寿店の公式LINEを追加し、「トレーナー {displayName}」と送って「はい」で確定。
         </p>
       </header>
 

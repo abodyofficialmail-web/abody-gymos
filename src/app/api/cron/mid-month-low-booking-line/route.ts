@@ -3,12 +3,11 @@ import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import {
   alreadySentThisMonth,
-  buildMidMonthOpsListText,
-  buildMidMonthOpsReportText,
   listMidMonthLowBookingMembers,
   markSentThisMonth,
+  sendScopedLowBookingList,
+  sendScopedLowBookingReport,
   sendMidMonthMemberLine,
-  sendOpsLine,
 } from "@/lib/midMonthLowBooking";
 
 export const maxDuration = 300;
@@ -44,8 +43,7 @@ export async function GET(req: Request) {
     const supabase = createSupabaseServiceClient();
     const { monthKey, monthLabel, asOfLabel, members } = await listMidMonthLowBookingMembers(supabase, now);
 
-    const listText = buildMidMonthOpsListText({ monthLabel, asOfLabel, members });
-    const listNotify = dryRun ? { ok: true } : await sendOpsLine(supabase, listText);
+    const listNotify = dryRun ? { ok: true } : await sendScopedLowBookingList(supabase, { monthLabel, asOfLabel, members });
     if (!dryRun && !listNotify.ok) {
       return jsonResponse({ error: "ops_list_failed", detail: listNotify.error, count: members.length }, 500);
     }
@@ -88,16 +86,18 @@ export async function GET(req: Request) {
       await sleep(300);
     }
 
-    const reportText = buildMidMonthOpsReportText({
-      monthLabel,
-      sent,
-      photo,
-      failed,
-      skippedNoLine,
-      skippedAlready,
-      failedCodes,
-    });
-    const reportNotify = dryRun ? { ok: true } : await sendOpsLine(supabase, reportText);
+    const reportNotify = dryRun
+      ? { ok: true }
+      : await sendScopedLowBookingReport(supabase, {
+          monthLabel,
+          members,
+          sent,
+          photo,
+          failed,
+          skippedNoLine,
+          skippedAlready,
+          failedCodes,
+        });
 
     return jsonResponse({
       ok: failed === 0 && reportNotify.ok,

@@ -2,8 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
 import { MEMBER_BODY_PHOTO_BUCKET } from "@/lib/memberBodyPhotos";
 import { linePushTokenForMemberRow } from "@/lib/lineChannel";
-import { chunkLinePushText, pushLineTextChunks } from "@/lib/lineMessagingPush";
-import { dailyReportChannelToken, resolvePushRecipients } from "@/lib/dailyLineRecipients";
+import { dailyReportChannelToken } from "@/lib/dailyLineRecipients";
+import { pushOpsTexts } from "@/lib/trainerOpsScope";
+import { isTrainerLineUserId } from "@/lib/lineRoleSeparation";
 import {
   MID_MONTH_LOW_BOOKING_MAX,
   MONTHLY_SESSION_TARGET,
@@ -253,15 +254,64 @@ async function pushTextAndOptionalImage(params: {
 export async function sendOpsLine(supabase: SupabaseClient, text: string): Promise<{ ok: boolean; error?: string }> {
   const token = dailyReportChannelToken();
   if (!token) return { ok: false, error: "missing_line_token" };
-  const { ids } = await resolvePushRecipients(supabase);
-  if (ids.length === 0) return { ok: false, error: "no_recipients" };
-  const chunks = chunkLinePushText(text);
-  let allOk = true;
-  for (const toUserId of ids) {
-    const results = await pushLineTextChunks({ token, toUserId, chunks });
-    if (!results.every((r) => r.ok)) allOk = false;
+  const pushed = await pushOpsTexts(supabase as any, (r) => {
+    if (r.kind === "trainer") return null;
+    return text;
+  });
+  return { ok: pushed.ok, error: pushed.error };
+}
+
+export async function sendScopedLowBookingList(
+  supabase: SupabaseClient,
+  params: { monthLabel: string; asOfLabel: string; members: MidMonthLowBookingMember[] }
+): Promise<{ ok: boolean; error?: string }> {
+  const token = dailyReportChannelToken();
+  if (!token) return { ok: false, error: "missing_line_token" };
+  const pushed = await pushOpsTexts(supabase as any, (r) => {
+    if (r.kind === "trainer") return null;
+    const list = r.all_stores
+      ? params.members
+      : params.members.filter((m) => r.store_names.includes(m.store));
+    if (!r.all_stores && list.length === 0) return null;
+    return buildMidMonthOpsListText({
+      monthLabel: params.monthLabel,
+      asOfLabel: params.asOfLabel,
+      members: list,
+    });
+  });
+  return { ok: pushed.ok, error: pushed.error };
+}
+
+export async function sendScopedLowBookingReport(
+  supabase: SupabaseClient,
+  params: {
+    monthLabel: string;
+    members: MidMonthLowBookingMember[];
+    sent: number;
+    photo: number;
+    failed: number;
+    skippedNoLine: number;
+    skippedAlready: number;
+    failedCodes: string[];
   }
-  return { ok: allOk, error: allOk ? undefined : "ops_push_failed" };
+): Promise<{ ok: boolean; error?: string }> {
+  const token = dailyReportChannelToken();
+  if (!token) return { ok: false, error: "missing_line_token" };
+  const full = buildMidMonthOpsReportText(params);
+  const pushed = await pushOpsTexts(supabase as any, (r) => {
+    if (r.kind === "trainer") return null;
+    if (r.all_stores) return full;
+    const list = params.members.filter((m) => r.store_names.includes(m.store));
+    if (list.length === 0) return null;
+    const noLine = list.filter((m) => !m.line_user_id).length;
+    const failed = params.failedCodes.filter((c) => list.some((m) => m.member_code === c));
+    return [
+      `【${params.monthLabel} ${r.store_names.join("・")} 予約フォロー】`,
+      `対象 ${list.length}人（LINE未連携 ${noLine}）`,
+      failed.length > 0 ? `失敗: ${failed.join(", ")}` : "案内LINEを送りました。数字を見てフォローを続けてください。",
+    ].join("\n");
+  });
+  return { ok: pushed.ok, error: pushed.error };
 }
 
 export async function goalPhotoSignedUrl(
@@ -290,6 +340,9 @@ export async function sendMidMonthMemberLine(
   monthLabel: string
 ): Promise<{ ok: boolean; photo: boolean; error?: string }> {
   if (!member.line_user_id) return { ok: false, photo: false, error: "no_line_user_id" };
+  if (await isTrainerLineUserId(supabase, member.line_user_id)) {
+    return { ok: false, photo: false, error: "trainer_line_excluded" };
+  }
   const line = linePushTokenForMemberRow({
     member_code: member.member_code,
     line_channel_key: member.line_channel_key,

@@ -2,6 +2,22 @@ import { createClient } from "@supabase/supabase-js";
 import { createHmac, timingSafeEqual } from "crypto";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { sendGoalHearingInviteForMember } from "@/lib/goalHearingInviteSend";
+import {
+  opsKindLabel,
+  parseTrainerOpsCommand,
+  saveTrainerOpsMessage,
+  trainerOpsHelpText,
+  notifyTrainerOpsMessage,
+} from "@/lib/trainerOpsMessages";
+import {
+  isTrainerLineSessionCode,
+  normalizeTrainerName,
+  parseTrainerLinkCommand,
+  trainerIdFromSessionCode,
+  trainerSessionCode,
+  TRAINER_LINE_DEMO_NAME,
+} from "@/lib/trainerLineLink";
 
 export const runtime = "nodejs";
 
@@ -193,6 +209,59 @@ async function findMemberByLineUserId(supabase: SupabaseClient<Database>, userId
   return data;
 }
 
+type TrainerLineRow = {
+  id: string;
+  display_name: string;
+  is_active: boolean;
+  line_user_id: string | null;
+};
+
+async function findTrainerByLineUserId(
+  supabase: SupabaseClient<Database>,
+  userId: string
+): Promise<TrainerLineRow | null> {
+  const { data, error } = await supabase
+    .from("trainers")
+    .select("id, display_name, is_active, line_user_id")
+    .eq("line_user_id", userId)
+    .maybeSingle();
+  if (error) {
+    console.warn("[line-webhook] trainer line lookup", error.message);
+    return null;
+  }
+  if (!data || !data.is_active) return null;
+  return data as TrainerLineRow;
+}
+
+async function findActiveTrainersForLink(supabase: SupabaseClient<Database>): Promise<TrainerLineRow[]> {
+  const { data, error } = await supabase
+    .from("trainers")
+    .select("id, display_name, is_active, line_user_id")
+    .eq("is_active", true);
+  if (error) {
+    console.warn("[line-webhook] trainers list lookup", error.message);
+    return [];
+  }
+  return (data ?? []).filter((t) => String(t.display_name ?? "").trim() !== TRAINER_LINE_DEMO_NAME) as TrainerLineRow[];
+}
+
+async function linkTrainerLine(
+  supabase: SupabaseClient<Database>,
+  trainerId: string,
+  userId: string,
+  channelKey: ChannelKey
+) {
+  const { error } = await supabase
+    .from("trainers")
+    .update({
+      line_user_id: userId,
+      line_channel_key: channelKey,
+      updated_at: new Date().toISOString(),
+    } as any)
+    .eq("id", trainerId);
+  if (error) throw error;
+}
+
 async function linkLine(
   supabase: SupabaseClient<Database>,
   memberId: string,
@@ -263,8 +332,89 @@ export async function POST(request: Request) {
       // セッション取得
       const session = await getSession(supabase, userId);
 
-      // ① 確認ステップ（会員番号送信後に「はい」で確定）
+      // ① 確認ステップ（会員番号 or トレーナー名のあと「はい」で確定）
       if (session?.status === "confirm") {
+        if (isTrainerLineSessionCode(session.temp_member_code)) {
+          if (isAffirmative(text)) {
+            const trainerId = trainerIdFromSessionCode(session.temp_member_code ?? "");
+            if (!trainerId) {
+              await clearSession(supabase, userId);
+              await replyMessage(
+                replyTokenForChannel,
+                replyToken,
+                "セッションが切れました。もう一度「トレーナー だいき」のように送ってください。"
+              );
+              continue;
+            }
+            if (channelKey !== "default") {
+              await clearSession(supabase, userId);
+              await replyMessage(
+                replyTokenForChannel,
+                replyToken,
+                "運営報告のLINE連携は、恵比寿店の公式アカウントからお願いします。"
+              );
+              continue;
+            }
+            const asMember = await findMemberByLineUserId(supabase, userId);
+            if (asMember) {
+              await clearSession(supabase, userId);
+              await replyMessage(
+                replyTokenForChannel,
+                replyToken,
+                `このLINEは会員番号 ${asMember.member_code} と連携済みです。トレーナー連携はできません。`
+              );
+              continue;
+            }
+            const { data: trainer, error: trErr } = await supabase
+              .from("trainers")
+              .select("id, display_name, is_active, line_user_id")
+              .eq("id", trainerId)
+              .maybeSingle();
+            if (trErr) throw trErr;
+            if (!trainer || !trainer.is_active) {
+              await clearSession(supabase, userId);
+              await replyMessage(
+                replyTokenForChannel,
+                replyToken,
+                "トレーナー情報が見つかりませんでした。店舗までお問い合わせください。"
+              );
+              continue;
+            }
+            if (trainer.line_user_id && trainer.line_user_id !== userId) {
+              await clearSession(supabase, userId);
+              await replyMessage(
+                replyTokenForChannel,
+                replyToken,
+                `トレーナー「${trainer.display_name}」は別のLINEと既に連携済みです。店舗までお問い合わせください。`
+              );
+              continue;
+            }
+            await linkTrainerLine(supabase, trainer.id, userId, channelKey);
+            await clearSession(supabase, userId);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `トレーナーLINE連携が完了しました（${trainer.display_name}）。\n日報や予約フォローの報告が届きます。会員向けの案内は届きません。`
+            );
+            continue;
+          }
+          if (isNegative(text)) {
+            await clearSession(supabase, userId);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              "連携をキャンセルしました。再度行う場合は「トレーナー だいき」のように送ってください。"
+            );
+            continue;
+          }
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            "トレーナー連携の確認中です。\n\n「はい」と送ると連携が完了します。\nやり直す場合は「キャンセル」と送ってください。"
+          );
+          continue;
+        }
+
         if (isAffirmative(text)) {
           if (!session.temp_member_id) {
             await clearSession(supabase, userId);
@@ -274,7 +424,7 @@ export async function POST(request: Request) {
 
           const { data: member, error: memErr } = await supabase
             .from("members")
-            .select("id, member_code, name, is_active, line_user_id")
+            .select("id, member_code, name, is_active, line_user_id, line_channel_key, store_id")
             .eq("id", session.temp_member_id)
             .maybeSingle();
           if (memErr) throw memErr;
@@ -297,9 +447,50 @@ export async function POST(request: Request) {
             continue;
           }
 
+          const asTrainer = await findTrainerByLineUserId(supabase, userId);
+          if (asTrainer) {
+            await clearSession(supabase, userId);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `このLINEはトレーナー「${asTrainer.display_name}」と連携済みです。会員連携はできません。別のLINEを使ってください。`
+            );
+            continue;
+          }
+
+          const isFirstLink = !member.line_user_id;
           await linkLine(supabase, member.id, userId, channelKey);
           await clearSession(supabase, userId);
-          await replyMessage(replyTokenForChannel, replyToken, "LINE連携が完了しました！");
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            isFirstLink
+              ? "LINE連携が完了しました！\n続いて目標ヒアリングをお送りしますので、ご回答をお願いいたします。"
+              : "LINE連携が完了しました！"
+          );
+
+          // 初回連携時のみ目標ヒアリングを自動送信（失敗しても連携自体は成功扱い）
+          if (isFirstLink) {
+            try {
+              const inviteResult = await sendGoalHearingInviteForMember(supabase, {
+                member: {
+                  ...member,
+                  line_user_id: userId,
+                  line_channel_key: channelKey,
+                },
+                skipIfRecentlySentDays: 7,
+              });
+              if (!inviteResult.sent && !inviteResult.skipped) {
+                console.error("[line-webhook] goal hearing auto-send failed", {
+                  member_code: member.member_code,
+                  error: inviteResult.error,
+                  detail: inviteResult.detail,
+                });
+              }
+            } catch (e) {
+              console.error("[line-webhook] goal hearing auto-send error", e);
+            }
+          }
           continue;
         }
 
@@ -318,9 +509,87 @@ export async function POST(request: Request) {
         continue;
       }
 
-      // ② 会員番号入力（trim + uppercase の完全一致で検索）
+      // ② 既にトレーナー連携済み
+      const linkedTrainer = await findTrainerByLineUserId(supabase, userId);
+      if (linkedTrainer) {
+        const trainerCmd = parseTrainerLinkCommand(text);
+        if (trainerCmd) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            `このLINEはトレーナー「${linkedTrainer.display_name}」と連携済みです。`
+          );
+          continue;
+        }
+        const maybeMemberCode = normalizeMemberCodeInput(text);
+        if (maybeMemberCode && isPlausibleMemberCode(maybeMemberCode)) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            `このLINEはトレーナー「${linkedTrainer.display_name}」用です。会員番号では連携できません。`
+          );
+          continue;
+        }
+        const ops = parseTrainerOpsCommand(text);
+        if (ops?.kind === "help") {
+          await replyMessage(replyTokenForChannel, replyToken, trainerOpsHelpText());
+          continue;
+        }
+        if (ops && "body" in ops) {
+          if (!ops.body) {
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `${opsKindLabel(ops.kind)}の内容を続けて送ってください。\n例: 発注 プロテインがなくなりました`
+            );
+            continue;
+          }
+          try {
+            const saved = await saveTrainerOpsMessage(supabase, linkedTrainer, ops);
+            if (ops.kind === "order" || ops.kind === "feedback") {
+              await notifyTrainerOpsMessage({
+                supabase,
+                trainerName: linkedTrainer.display_name,
+                kind: ops.kind,
+                body: ops.body,
+                storeName: saved.storeName,
+                fromLineUserId: userId,
+              });
+            }
+            const share =
+              saved.storeName && (ops.kind === "order" || ops.kind === "feedback")
+                ? `${saved.storeName}の責任者と運営に共有しました。`
+                : "朝の業務LINEに載せます。";
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              `${opsKindLabel(ops.kind)}を受け付けました。${share}`
+            );
+          } catch (e) {
+            console.error("[line-webhook] trainer ops save failed", e);
+            await replyMessage(
+              replyTokenForChannel,
+              replyToken,
+              "受け付けに失敗しました。もう一度送るか、店舗まで連絡してください。"
+            );
+          }
+          continue;
+        }
+        continue;
+      }
+
+      // ③ 会員番号入力（trim + uppercase の完全一致で検索）
       const linkedMember = await findMemberByLineUserId(supabase, userId);
       if (linkedMember) {
+        const trainerCmd = parseTrainerLinkCommand(text);
+        if (trainerCmd) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            `このLINEは会員番号 ${linkedMember.member_code} と連携済みです。\nトレーナー連携は別のLINEを使うか、店舗までご相談ください。`
+          );
+          continue;
+        }
         const memberCode = normalizeMemberCodeInput(text);
         if (memberCode && isPlausibleMemberCode(memberCode)) {
           if (linkedMember.member_code.toUpperCase() === memberCode) {
@@ -339,6 +608,67 @@ export async function POST(request: Request) {
         }
         continue;
       }
+
+      // ④ トレーナー連携（会員番号フローとは別。恵比寿公式のみ）
+      const trainerCmd = parseTrainerLinkCommand(text);
+      if (trainerCmd) {
+        if (channelKey !== "default") {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            "運営報告のLINE連携は、恵比寿店の公式アカウントを追加して、そこから「トレーナー だいき」のように送ってください。"
+          );
+          continue;
+        }
+        if (trainerCmd.kind === "need_name") {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            "トレーナー連携ですね。ひらがなの名前をつけて送ってください。\n例: トレーナー だいき"
+          );
+          continue;
+        }
+        const trainers = await findActiveTrainersForLink(supabase);
+        const needle = normalizeTrainerName(trainerCmd.name);
+        const hits = trainers.filter((t) => normalizeTrainerName(t.display_name) === needle);
+        if (hits.length === 0) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            `トレーナー「${trainerCmd.name}」が見つかりませんでした。\nひらがなの名前で「トレーナー だいき」のように送ってください。`
+          );
+          continue;
+        }
+        if (hits.length > 1) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            "同名のトレーナーが複数います。店舗までお問い合わせください。"
+          );
+          continue;
+        }
+        const trainer = hits[0];
+        if (trainer.line_user_id && trainer.line_user_id !== userId) {
+          await replyMessage(
+            replyTokenForChannel,
+            replyToken,
+            `トレーナー「${trainer.display_name}」は別のLINEと既に連携済みです。店舗までお問い合わせください。`
+          );
+          continue;
+        }
+        await saveSession(supabase, userId, {
+          status: "confirm",
+          temp_member_id: null,
+          temp_member_code: trainerSessionCode(trainer.id),
+        });
+        await replyMessage(
+          replyTokenForChannel,
+          replyToken,
+          `このトレーナーでよろしいですか？\n${trainer.display_name}\n\n「はい」で確定します。会員向けの案内は届きません。`
+        );
+        continue;
+      }
+
       const memberCode = normalizeMemberCodeInput(text);
       if (!memberCode) {
         continue;

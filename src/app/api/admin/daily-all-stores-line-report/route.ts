@@ -2,8 +2,16 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
-import { chunkLinePushText, pushLineTextChunks } from "@/lib/lineMessagingPush";
-import { dailyReportChannelToken, resolvePushRecipients } from "@/lib/dailyLineRecipients";
+import { dailyReportChannelToken } from "@/lib/dailyLineRecipients";
+import { listMidMonthLowBookingMembers } from "@/lib/midMonthLowBooking";
+import {
+  buildDailyOpsText,
+  loadDailySurveyVoices,
+  loadKarteDoneKeys,
+  loadOpenOpsMessages,
+  type DailyOpsBundle,
+} from "@/lib/trainerDailyBriefing";
+import { pushOpsTexts, resolveOpsRecipients } from "@/lib/trainerOpsScope";
 
 const TZ = "Asia/Tokyo";
 
@@ -42,20 +50,6 @@ function mustCronAuth(req: Request): boolean {
   return false;
 }
 
-function formatDateJa(ymd: string) {
-  const dt = DateTime.fromISO(ymd, { zone: TZ });
-  return dt.isValid ? dt.setLocale("ja").toFormat("yyyy年M月d日（ccc）") : ymd;
-}
-
-function formatTimeJa(utcIso: string) {
-  return DateTime.fromISO(utcIso).setZone(TZ).toFormat("HH:mm");
-}
-
-function sliceHhmm(t: string) {
-  const s = String(t ?? "");
-  return s.length >= 5 ? s.slice(0, 5) : s;
-}
-
 export async function GET(req: Request) {
   try {
     if (!mustCronAuth(req)) {
@@ -77,7 +71,7 @@ export async function GET(req: Request) {
 
     const supabase = createSupabaseServiceClient();
 
-    const { ids: recipientIds, member_codes_queried, missing_line_for_codes } = await resolvePushRecipients(supabase);
+    const recipients = await resolveOpsRecipients(supabase);
 
     const token = dailyReportChannelToken();
     if (!dryRun && !token) {
@@ -90,14 +84,12 @@ export async function GET(req: Request) {
       );
     }
 
-    if (!dryRun && recipientIds.length === 0) {
+    if (!dryRun && recipients.length === 0) {
       return jsonResponse(
         {
           error: "missing_recipients",
           detail:
-            "送信先がありません。LINE_DAILY_REPORT_USER_IDS を設定するか、会員番号（既定EBI020）の LINE連携（line_user_id）を確認してください。",
-          member_codes_queried,
-          missing_line_for_codes,
+            "送信先がありません。LINE_DAILY_REPORT_USER_IDS を設定するか、会員番号（既定EBI020）の LINE連携、またはトレーナーLINE連携を確認してください。",
         },
         500
       );
@@ -186,80 +178,61 @@ export async function GET(req: Request) {
     for (const t of trainersQ.data ?? []) {
       trainerNameById.set(String(t.id), String(t.display_name ?? ""));
     }
+    const storeNameById = new Map(stores.map((s) => [s.id, s.name]));
 
-    const timingLabel =
-      target === "tomorrow"
-        ? "明日の業務サマリ（前日22時・JST送信／対象は翌日）"
-        : "本日の業務サマリ（当日7時・JST送信／対象は当日）";
+    const voiceYmd = target === "tomorrow" ? nowJst.toISODate()! : dateYmd;
+    const reservationMemberIds = Array.from(
+      new Set(reservationsFiltered.map((r) => String(r.member_id ?? "")).filter(Boolean))
+    );
+    const [lowBookingPack, voices, opsMessages, karteDone] = await Promise.all([
+      listMidMonthLowBookingMembers(supabase, nowJst),
+      loadDailySurveyVoices(supabase, voiceYmd),
+      loadOpenOpsMessages(supabase),
+      loadKarteDoneKeys(supabase, dateYmd, reservationMemberIds),
+    ]);
 
-    const lines: string[] = [`【全店舗】${formatDateJa(dateYmd)}｜${timingLabel}`, ``];
+    const bundle: DailyOpsBundle = {
+      dateYmd,
+      target,
+      stores,
+      shifts: ((shifts ?? []) as any[]).map((s) => ({
+        store_id: String(s.store_id),
+        trainer_id: String(s.trainer_id),
+        start_local: String(s.start_local),
+        end_local: String(s.end_local),
+        is_break: s.is_break,
+      })),
+      events: events.map((e) => ({
+        store_id: String(e.store_id),
+        trainer_id: String(e.trainer_id),
+        start_local: String(e.start_local),
+        end_local: String(e.end_local),
+        title: String(e.title ?? ""),
+        notes: e.notes ?? null,
+        block_booking: Boolean(e.block_booking),
+      })),
+      reservations: reservationsFiltered.map((r) => ({
+        store_id: String(r.store_id),
+        trainer_id: r.trainer_id ? String(r.trainer_id) : null,
+        member_id: r.member_id ? String(r.member_id) : null,
+        start_at: String(r.start_at),
+        end_at: String(r.end_at),
+      })),
+      memberById,
+      trainerNameById,
+      storeNameById,
+      lowBooking: lowBookingPack.members,
+      voices,
+      opsMessages,
+      karteDone,
+    };
 
-    for (const st of stores) {
-      const sid = st.id;
-
-      const shiftList = (shifts ?? [])
-        .filter((s) => String(s.store_id) === sid && s.is_break !== true)
-        .slice()
-        .sort((a, b) => String(a.start_local).localeCompare(String(b.start_local)));
-
-      const shiftLines =
-        shiftList.length === 0
-          ? ["（勤務予定なし）"]
-          : shiftList.map((s) => {
-              const trainerName = trainerNameById.get(String(s.trainer_id)) ?? String(s.trainer_id);
-              return `・${trainerName} ${sliceHhmm(String(s.start_local))}〜${sliceHhmm(String(s.end_local))}`;
-            });
-
-      const storeEvents = events.filter((e) => String(e.store_id) === sid);
-      const eventLines =
-        storeEvents.length === 0
-          ? ["（予定なし）"]
-          : storeEvents
-              .slice()
-              .sort((a, b) => sliceHhmm(a.start_local).localeCompare(sliceHhmm(b.start_local)))
-              .map((e) => {
-                const trainerName = trainerNameById.get(String(e.trainer_id)) ?? String(e.trainer_id);
-                const title = String(e.title ?? "").trim() || "（無題）";
-                const blockLabel = e.block_booking ? "抑える" : "抑えない";
-                const note = e.notes?.trim() ? `｜${e.notes.trim()}` : "";
-                return `・${sliceHhmm(e.start_local)}〜${sliceHhmm(e.end_local)} ${trainerName}｜${title}（予約枠: ${blockLabel}）${note}`;
-              });
-
-      const resList = reservationsFiltered
-        .filter((r) => String(r.store_id) === sid)
-        .slice()
-        .sort((a, b) => String(a.start_at).localeCompare(String(b.start_at)));
-
-      const resLines =
-        resList.length === 0
-          ? ["（予約なし）"]
-          : resList.map((r) => {
-              const member = memberById.get(String(r.member_id));
-              const memberCode = member?.member_code ? member.member_code : String(r.member_id);
-              const memberName = member?.name ? member.name : "";
-              const tName = r.trainer_id ? trainerNameById.get(String(r.trainer_id)) ?? "" : "";
-              const time = `${formatTimeJa(String(r.start_at))}〜${formatTimeJa(String(r.end_at))}`;
-              const who = `${memberCode} ${memberName}`.trim();
-              const stype = String(r.session_type ?? "store") === "online" ? "オンライン" : "店舗";
-              const trainerSuffix = tName ? tName : "—";
-              return `・${time}  ${who}（${stype}｜${trainerSuffix}）`;
-            });
-
-      lines.push(
-        `━━ ${st.name} ━━`,
-        `■ 勤務予定`,
-        ...shiftLines,
-        ``,
-        `■ 予定（MTG/撮影/作業など）`,
-        ...eventLines,
-        ``,
-        `■ 予約一覧（${resList.length}件）`,
-        ...resLines,
-        ``
-      );
+    const previewByKind: Record<string, string> = {};
+    for (const r of recipients) {
+      if (previewByKind[r.kind]) continue;
+      const text = buildDailyOpsText(bundle, r);
+      if (text) previewByKind[r.kind] = text;
     }
-
-    const text = lines.join("\n").trimEnd();
 
     if (dryRun) {
       return jsonResponse(
@@ -269,38 +242,33 @@ export async function GET(req: Request) {
           target,
           date: dateYmd,
           store_count: stores.length,
-          recipient_count: recipientIds.length,
-          member_codes_queried,
-          missing_line_for_codes,
-          text,
+          recipient_count: recipients.length,
+          recipients: recipients.map((r) => ({
+            kind: r.kind,
+            display_name: r.display_name,
+            store_names: r.store_names,
+            all_stores: r.all_stores,
+          })),
+          preview_by_kind: previewByKind,
         },
         200
       );
     }
 
-    const chunks = chunkLinePushText(text);
-    const perRecipient: Array<{ user_id: string; ok: boolean; chunks_sent: number; pushResults: Awaited<ReturnType<typeof pushLineTextChunks>> }> =
-      [];
-
-    for (const toUserId of recipientIds) {
-      const pushResults = await pushLineTextChunks({ token: token!, toUserId, chunks });
-      const allOk = pushResults.length > 0 && pushResults.every((r) => r.ok);
-      perRecipient.push({ user_id: toUserId, ok: allOk, chunks_sent: chunks.length, pushResults });
-    }
-
-    const allOk = perRecipient.every((p) => p.ok);
+    const pushed = await pushOpsTexts(supabase, (r) => buildDailyOpsText(bundle, r));
 
     return jsonResponse(
       {
-        ok: allOk,
+        ok: pushed.ok,
         target,
         date: dateYmd,
         store_count: stores.length,
-        recipients: perRecipient.length,
-        chunks_per_message: chunks.length,
-        perRecipient,
+        recipients: recipients.length,
+        sent: pushed.sent,
+        skipped: pushed.skipped,
+        error: pushed.error,
       },
-      allOk ? 200 : 502
+      pushed.ok ? 200 : 502
     );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

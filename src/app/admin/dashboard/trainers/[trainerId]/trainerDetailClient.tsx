@@ -57,6 +57,7 @@ type TrainerRow = {
   store_id: string;
   hourly_rate: number | null;
   monthly_pass_cost: number | null;
+  line_linked?: boolean;
 };
 
 type StoreRow = { id: string; name: string };
@@ -401,6 +402,11 @@ export function TrainerDetailClient({ trainerId }: { trainerId: string }) {
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">{name}</h1>
         <p className="text-sm text-slate-500">
           ID: <span className="font-mono">{trainerId}</span>
+          {" ・ "}
+          {trainer?.line_linked ? "運営LINE連携済み" : "運営LINE未連携"}
+        </p>
+        <p className="text-xs text-slate-500">
+          連携方法: 恵比寿店の公式LINEを追加し、「トレーナー {name}」と送って「はい」で確定。会員番号では連携しないでください。
         </p>
       </header>
 

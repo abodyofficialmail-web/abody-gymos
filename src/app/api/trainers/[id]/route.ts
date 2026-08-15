@@ -11,16 +11,26 @@ const patchSchema = z.object({
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const supabase = createSupabaseServiceClient();
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("trainers")
       .select(
-        "id, display_name, store_id, hourly_rate, monthly_pass_cost, hourly_rate_yen, is_active"
+        "id, display_name, store_id, hourly_rate, monthly_pass_cost, hourly_rate_yen, is_active, line_user_id"
       )
       .eq("id", params.id)
       .maybeSingle();
+    if (error && /line_user_id/i.test(error.message)) {
+      const retry = await supabase
+        .from("trainers")
+        .select("id, display_name, store_id, hourly_rate, monthly_pass_cost, hourly_rate_yen, is_active")
+        .eq("id", params.id)
+        .maybeSingle();
+      data = retry.data as typeof data;
+      error = retry.error;
+    }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data) return NextResponse.json({ error: "not_found" }, { status: 404 });
-    return NextResponse.json({ trainer: data });
+    const { line_user_id: _lineUserId, ...rest } = data as typeof data & { line_user_id?: string | null };
+    return NextResponse.json({ trainer: { ...rest, line_linked: Boolean(_lineUserId) } });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });
@@ -48,11 +58,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       .update(patch)
       .eq("id", params.id)
       .select(
-        "id, display_name, store_id, hourly_rate, monthly_pass_cost, hourly_rate_yen, is_active"
+        "id, display_name, store_id, hourly_rate, monthly_pass_cost, hourly_rate_yen, is_active, line_user_id"
       )
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ trainer: data });
+    const { line_user_id: _lineUserId, ...rest } = data as typeof data & { line_user_id?: string | null };
+    return NextResponse.json({ trainer: { ...rest, line_linked: Boolean(_lineUserId) } });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: message }, { status: 500 });
