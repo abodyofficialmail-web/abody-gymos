@@ -370,12 +370,23 @@ export async function POST(req: Request) {
       is_break,
     } as any;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("trainer_shifts")
       .insert(insertRow)
       .select(SHIFT_SELECT_WITH_BREAKS)
       .single();
-    if (error) return json({ error: "insert_failed", detail: error.message }, 500);
+    if (error && isMissingBreaksRelationError(error)) {
+      const retry = await supabase.from("trainer_shifts").insert(insertRow).select(SHIFT_SELECT_NO_BREAKS).single();
+      data = retry.data as typeof data;
+      error = retry.error;
+    }
+    if (error && isMissingBreakMinutesError(error)) {
+      const { break_minutes: _ignored, ...withoutBreakMinutes } = insertRow;
+      const retry = await supabase.from("trainer_shifts").insert(withoutBreakMinutes).select(SHIFT_SELECT_NO_BREAK).single();
+      data = retry.data as typeof data;
+      error = retry.error;
+    }
+    if (error) return json({ error: error.message }, 500);
     return json({ shift: data }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

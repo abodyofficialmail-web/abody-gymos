@@ -42,6 +42,17 @@ async function apiGet<T>(path: string): Promise<T> {
   return json as T;
 }
 
+function apiErrorMessage(json: unknown, fallback: string) {
+  const j = json as { error?: { fieldErrors?: unknown } | string; detail?: string };
+  if (j?.error && typeof j.error === "object" && j.error.fieldErrors) {
+    return JSON.stringify(j.error.fieldErrors);
+  }
+  const err = typeof j?.error === "string" ? j.error : "";
+  const detail = typeof j?.detail === "string" ? j.detail : "";
+  if (err && detail) return `${err}: ${detail}`;
+  return err || detail || fallback;
+}
+
 async function apiJson<T>(path: string, method: "POST" | "PATCH", body: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -49,12 +60,7 @@ async function apiJson<T>(path: string, method: "POST" | "PATCH", body: unknown)
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = (json as any)?.error?.fieldErrors
-      ? JSON.stringify((json as any).error.fieldErrors)
-      : (json as any)?.error ?? "送信に失敗しました";
-    throw new Error(msg);
-  }
+  if (!res.ok) throw new Error(apiErrorMessage(json, "送信に失敗しました"));
   return json as T;
 }
 
@@ -146,6 +152,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
   const [ok, setOk] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
   const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
   const [trainerId, setTrainerId] = useState("");
   const [startAt, setStartAt] = useState("09:00");
@@ -174,12 +181,18 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
 
   useEffect(() => {
     fetch("/api/trainers", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data: { trainers?: ApiTrainer[] }) => {
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as { trainers?: ApiTrainer[]; error?: string };
+        if (!res.ok) throw new Error(data.error ?? "取得に失敗しました");
+        return data;
+      })
+      .then((data) => {
         const list = (data.trainers ?? []).map(
           (t): Trainer => ({ id: t.id, display_name: t.name, store_id: t.store_id })
         );
         list.sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
+        // 空配列で上書きすると SSR の一覧が消えて保存できなくなる
+        if (list.length === 0) return;
         setTrainersLive(list);
       })
       .catch(() => setTrainersLive(null));
@@ -415,11 +428,31 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
     }
   }
 
+  function openCreate() {
+    setCreateErr(null);
+    if (!trainerId && effectiveTrainers[0]?.id) setTrainerId(effectiveTrainers[0].id);
+    setCreateOpen(true);
+  }
+
   async function onCreate() {
-    if (!storeId || !trainerId) return;
+    if (!storeId) {
+      setCreateErr("店舗を選択してください。");
+      return;
+    }
+    if (!trainerId) {
+      setCreateErr("トレーナーを選択してください。");
+      return;
+    }
+    const sm = parseMinutes(startAt);
+    const em = parseMinutes(endAt);
+    if (!(em > sm)) {
+      setCreateErr("終了時間は開始時間より後にしてください。");
+      return;
+    }
     setBusy(true);
     setErr(null);
     setOk(null);
+    setCreateErr(null);
     try {
       await apiJson<{ shift: ShiftRow }>("/api/shifts", "POST", {
         trainer_id: trainerId,
@@ -433,7 +466,9 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
       setOk("追加しました。");
       await refresh();
     } catch (e: any) {
-      setErr(String(e?.message ?? "追加に失敗しました"));
+      const msg = String(e?.message ?? "追加に失敗しました");
+      setCreateErr(msg);
+      setErr(msg);
     } finally {
       setBusy(false);
     }
@@ -468,7 +503,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
         </div>
         <button
           type="button"
-          onClick={() => setCreateOpen(true)}
+          onClick={openCreate}
           className="min-h-[44px] rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-60"
           disabled={busy}
         >
@@ -608,6 +643,12 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
 
             <div className="text-xs text-slate-500">{formatJstDateLabel(date)}</div>
 
+            {createErr ? (
+              <div className="rounded-xl border border-slate-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                {createErr}
+              </div>
+            ) : null}
+
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-sm font-medium text-slate-700">
                 店舗
@@ -628,10 +669,16 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
                 トレーナー
                 <select
                   value={trainerId}
-                  onChange={(e) => setTrainerId(e.target.value)}
+                  onChange={(e) => {
+                    setTrainerId(e.target.value);
+                    setCreateErr(null);
+                  }}
                   className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-200 bg-white px-3 text-sm"
                   disabled={busy || effectiveTrainers.length === 0}
                 >
+                  <option value="" disabled>
+                    {effectiveTrainers.length === 0 ? "トレーナーを読み込めません" : "選択してください"}
+                  </option>
                   {effectiveTrainers.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.display_name}
@@ -678,7 +725,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
               type="button"
               onClick={() => void onCreate()}
               className="min-h-[44px] w-full rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-60"
-              disabled={busy || !storeId || !trainerId}
+              disabled={busy}
             >
               保存
             </button>

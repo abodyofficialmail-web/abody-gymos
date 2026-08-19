@@ -65,10 +65,17 @@ export async function GET() {
 
   const { data: rows, error } = await supabase
     .from("trainers")
-    .select("id, display_name, email, hourly_rate_yen, is_active, user_id, store_id, stores ( name )")
+    .select("id, display_name, email, hourly_rate_yen, is_active, user_id, store_id")
     .order("created_at", { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  const storeIds = Array.from(new Set((rows ?? []).map((t) => String((t as any).store_id ?? "")).filter(Boolean)));
+  const storeNameById = new Map<string, string>();
+  if (storeIds.length > 0) {
+    const { data: stores } = await supabase.from("stores").select("id, name").in("id", storeIds);
+    for (const s of stores ?? []) storeNameById.set(String(s.id), String(s.name ?? ""));
+  }
 
   const trainers = (rows ?? []).map((t) => ({
     id: t.id,
@@ -78,10 +85,7 @@ export async function GET() {
     is_active: t.is_active,
     user_id: t.user_id,
     store_id: (t as any).store_id as string,
-    store_name:
-      (t as any).stores && typeof (t as any).stores === "object" && "name" in (t as any).stores
-        ? String(((t as any).stores as { name: string }).name)
-        : "",
+    store_name: storeNameById.get(String((t as any).store_id ?? "")) ?? "",
   }));
 
   return NextResponse.json({ trainers });

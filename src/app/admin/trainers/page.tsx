@@ -13,8 +13,7 @@ export default async function AdminTrainersPage() {
       hourly_rate_yen,
       is_active,
       user_id,
-      store_id,
-      stores ( name )
+      store_id
     `
     )
     .order("created_at", { ascending: true });
@@ -44,10 +43,7 @@ export default async function AdminTrainersPage() {
           id: t.id,
           display_name: t.display_name,
           store_id: (t as any).store_id,
-          store_name:
-            t.stores && typeof t.stores === "object" && "name" in t.stores
-              ? String((t.stores as { name: string }).name)
-              : "",
+          store_name: (stores ?? []).find((s) => s.id === (t as any).store_id)?.name ?? "",
           hourly_rate_yen: t.hourly_rate_yen,
           is_active: t.is_active,
           user_id: t.user_id,

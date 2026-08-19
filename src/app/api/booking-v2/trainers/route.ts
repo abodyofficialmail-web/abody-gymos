@@ -48,17 +48,23 @@ export async function GET(request: Request) {
     if (listAll) {
       const { data, error } = await supabase
         .from("trainers")
-        .select("id, display_name, store_id, stores(name)")
+        .select("id, display_name, store_id")
         .eq("is_active", true)
         .order("created_at", { ascending: true });
       if (error) {
         return jsonResponse({ error: "トレーナー一覧の取得に失敗しました", detail: error.message }, 500);
       }
+      const storeIds = Array.from(new Set((data ?? []).map((t: any) => String(t.store_id ?? "")).filter(Boolean)));
+      const storeNameById = new Map<string, string>();
+      if (storeIds.length > 0) {
+        const { data: stores } = await supabase.from("stores").select("id, name").in("id", storeIds);
+        for (const s of stores ?? []) storeNameById.set(String(s.id), String(s.name ?? ""));
+      }
       const trainers = (data ?? []).map((t: any) => ({
         id: t.id as string,
         display_name: t.display_name as string,
         store_id: t.store_id as string,
-        store_name: (t.stores && typeof t.stores === "object" && "name" in t.stores ? String((t.stores as { name: string }).name) : "") || "",
+        store_name: storeNameById.get(String(t.store_id ?? "")) ?? "",
       }));
       return jsonResponse({ trainers }, 200);
     }

@@ -111,8 +111,12 @@ export function AdminTrainersClient({
 
   useEffect(() => {
     fetch("/api/trainers", { cache: "no-store" })
-      .then((res) => res.json())
-      .then((data: { trainers?: ApiTrainer[] }) => {
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as { trainers?: ApiTrainer[]; error?: string };
+        if (!res.ok) throw new Error(data.error ?? "取得に失敗しました");
+        return data;
+      })
+      .then((data) => {
         const list = (data.trainers ?? []).map(
           (t): TrainerRow => ({
             id: t.id,
@@ -125,6 +129,7 @@ export function AdminTrainersClient({
             email: null,
           })
         );
+        if (list.length === 0) return;
         setTrainersLive(list);
       })
       .catch(() => {
