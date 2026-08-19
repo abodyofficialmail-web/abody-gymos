@@ -20,7 +20,24 @@ export type WeightProgressRow = {
   vsPrev: number | null;
   vsFirst: number;
   growthPct: number;
+  /** 先月比の伸び率（%） */
+  vsPrevPct?: number | null;
   julySets: number;
+  /** 来月の目標重量（AI推定） */
+  nextTarget?: number;
+  /** 今月→来月の想定伸び kg */
+  nextDelta?: number;
+  /** 今月→来月の想定伸び率 % */
+  nextGrowthPct?: number;
+  /** 推定根拠の短い説明（ルール） */
+  nextReason?: string;
+  /** LLM（またはフォールバック）の根拠コメント ※キャッシュ読込 */
+  aiRationale?: string;
+  /** トレーナー向け一言 ※キャッシュ読込 */
+  trainerTip?: string;
+  aiCommentModel?: string | null;
+  /** 基準月に実施があったか（ライブ表示用） */
+  hasCurrentMonth?: boolean;
 };
 
 export type PartRatio = {
