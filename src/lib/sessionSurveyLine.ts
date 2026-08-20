@@ -282,7 +282,7 @@ export async function sendSessionSurveyAfterClientNote(
   const surveyUrl = surveyUrlForInvite(invite, params);
   if (!surveyUrl) return { sent: false };
 
-  if (invite?.id) {
+  if (invite?.id && String(params.member_code ?? "").toUpperCase() !== "EBI020") {
     const { data: responded } = await supabase
       .from("session_survey_responses")
       .select("id")
