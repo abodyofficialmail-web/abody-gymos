@@ -15,7 +15,8 @@ import {
   type SurveyRateStats,
 } from "@/lib/surveyRateDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { loadNextBookingEligibility } from "@/lib/sessionSurveyNextBooking";
+import { loadNextBookingOffer } from "@/lib/sessionSurveyNextBooking";
+import { nextBookingPageUrlFromInviteToken, pushNextBookingInviteLine } from "@/lib/nextBookingLine";
 
 export type SessionSurveyInviteParams = {
   member_id: string;
@@ -108,12 +109,9 @@ export function buildSessionSurveyFlexMessage(params: {
   trainerDisplayName: string;
   surveyUrl: string;
   memberStats?: SurveyRateStats | null;
-  offerNextBooking?: boolean;
 }): object {
   const name = params.trainerDisplayName.trim() || "トレーナー";
-  const intro = params.offerNextBooking
-    ? `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\nご回答画面で、通いやすい時間の空きから次回予約もすぐ確定できます。`
-    : `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かすほか、トレーナーの評価にも反映されます。\nご回答いただくと、トレーナーから返信が届く場合もあります。`;
+  const intro = `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かすほか、トレーナーの評価にも反映されます。\nご回答いただくと、トレーナーから返信が届く場合もあります。`;
   const rateText = params.memberStats ? formatMemberSurveyRateForLine(params.memberStats) : null;
   const buttonColor = sessionSurveyLineButtonColor(
     params.memberStats ?? { invite_count: 0, response_count: 0, response_rate: null }
@@ -154,7 +152,7 @@ export function buildSessionSurveyFlexMessage(params: {
     height: "sm",
     action: {
       type: "uri",
-      label: params.offerNextBooking ? "評価して次回を予約" : "アンケートに回答する",
+      label: "アンケートに回答する",
       uri: params.surveyUrl,
     },
   });
@@ -201,7 +199,6 @@ export async function pushSessionSurveyInviteLine(params: {
   /** invite UUID またはフル survey URL */
   inviteToken: string;
   memberStats?: SurveyRateStats | null;
-  offerNextBooking?: boolean;
 }): Promise<boolean> {
   const surveyUrl = params.inviteToken.startsWith("http")
     ? params.inviteToken
@@ -212,7 +209,6 @@ export async function pushSessionSurveyInviteLine(params: {
     trainerDisplayName: params.trainerDisplayName,
     surveyUrl,
     memberStats: params.memberStats,
-    offerNextBooking: params.offerNextBooking,
   });
 
   const line = linePushTokenForMember({
@@ -277,12 +273,12 @@ export async function sendSessionSurveyAfterClientNote(
     store_name: string;
     trainer_display_name: string;
   }
-): Promise<{ sent: boolean; invite_id?: string; survey_url?: string; mode?: string }> {
+): Promise<{ sent: boolean; invite_id?: string; survey_url?: string; mode?: string; next_booking_sent?: boolean }> {
   const invite = await upsertSessionSurveyInvite(supabase, params);
   const surveyUrl = surveyUrlForInvite(invite, params);
   if (!surveyUrl) return { sent: false };
 
-  if (invite?.id && String(params.member_code ?? "").toUpperCase() !== "EBI020") {
+  if (invite?.id) {
     const { data: responded } = await supabase
       .from("session_survey_responses")
       .select("id")
@@ -291,13 +287,7 @@ export async function sendSessionSurveyAfterClientNote(
     if (responded?.id) return { sent: false, invite_id: invite.id, survey_url: surveyUrl };
   }
 
-  const [{ survey_stats: memberStats }, eligibility] = await Promise.all([
-    fetchSessionSurveysForMember(supabase, params.member_id),
-    loadNextBookingEligibility(supabase, params.member_id).catch((e) => {
-      console.error("next booking eligibility failed", e);
-      return { eligible: false };
-    }),
-  ]);
+  const { survey_stats: memberStats } = await fetchSessionSurveysForMember(supabase, params.member_id);
 
   const sent = await pushSessionSurveyInviteLine({
     lineUserId: params.line_user_id,
@@ -307,7 +297,6 @@ export async function sendSessionSurveyAfterClientNote(
     trainerDisplayName: params.trainer_display_name,
     inviteToken: surveyUrl,
     memberStats,
-    offerNextBooking: eligibility.eligible,
   });
 
   if (sent && invite?.id) {
@@ -317,10 +306,58 @@ export async function sendSessionSurveyAfterClientNote(
       .eq("id", invite.id);
   }
 
+  let next_booking_sent = false;
+  if (invite?.id) {
+    try {
+      next_booking_sent = await sendNextBookingLineForInvite(supabase, {
+        inviteId: invite.id,
+        memberId: params.member_id,
+        storeId: params.store_id,
+        sessionDate: params.session_date,
+        lineUserId: params.line_user_id,
+        memberCode: params.member_code,
+        lineChannelKey: params.line_channel_key,
+        storeName: params.store_name,
+      });
+    } catch (e) {
+      console.error("next booking LINE failed", e);
+    }
+  }
+
   return {
     sent,
     invite_id: invite?.id,
     survey_url: surveyUrl,
     mode: invite?.id ? "invite" : "signed",
+    next_booking_sent,
   };
+}
+
+export async function sendNextBookingLineForInvite(
+  supabase: SupabaseClient,
+  params: {
+    inviteId: string;
+    memberId: string;
+    storeId: string;
+    sessionDate: string;
+    lineUserId: string;
+    memberCode?: string | null;
+    lineChannelKey?: string | null;
+    storeName: string;
+  }
+): Promise<boolean> {
+  const offer = await loadNextBookingOffer(supabase, {
+    memberId: params.memberId,
+    storeId: params.storeId,
+    sessionDate: params.sessionDate,
+  });
+  if (!offer.eligible) return false;
+  return pushNextBookingInviteLine({
+    lineUserId: params.lineUserId,
+    memberCode: params.memberCode,
+    lineChannelKey: params.lineChannelKey,
+    storeName: params.storeName,
+    bookingUrl: nextBookingPageUrlFromInviteToken(params.inviteId),
+    offer,
+  });
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DateTime } from "luxon";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
-import { sendSessionSurveyAfterClientNote } from "@/lib/sessionSurveyLine";
+import { sendNextBookingLineForInvite, sendSessionSurveyAfterClientNote, upsertSessionSurveyInvite } from "@/lib/sessionSurveyLine";
 
 const TZ = "Asia/Tokyo";
 
@@ -25,6 +25,7 @@ function mustCronAuth(req: Request): boolean {
 const bodySchema = z.object({
   member_codes: z.array(z.string()).min(1).optional(),
   session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  kind: z.enum(["survey", "next_booking"]).optional().default("survey"),
 });
 
 export async function POST(req: Request) {
@@ -77,6 +78,32 @@ export async function POST(req: Request) {
 
       if (!trainerId || !storeId) {
         results.push({ member_code: memberCode, sent: false, error: "trainer_or_store_missing" });
+        continue;
+      }
+
+      if (parsed.data.kind === "next_booking") {
+        const invite = await upsertSessionSurveyInvite(supabase, {
+          member_id: member.id,
+          trainer_id: trainerId,
+          store_id: storeId,
+          session_date: sessionDate,
+          client_note_id: note?.id ?? null,
+        });
+        if (!invite?.id) {
+          results.push({ member_code: memberCode, sent: false, error: "invite_missing" });
+          continue;
+        }
+        const sent = await sendNextBookingLineForInvite(supabase, {
+          inviteId: invite.id,
+          memberId: member.id,
+          storeId,
+          sessionDate,
+          lineUserId: String(member.line_user_id),
+          memberCode: String(member.member_code ?? memberCode),
+          lineChannelKey: (member as { line_channel_key?: string | null }).line_channel_key ?? null,
+          storeName,
+        });
+        results.push({ member_code: memberCode, sent, invite_id: invite.id, kind: "next_booking" });
         continue;
       }
 

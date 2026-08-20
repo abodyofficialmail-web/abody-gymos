@@ -151,7 +151,7 @@ export async function POST(request: Request) {
         end_at: parsed.data.end_at,
         session_type: sessionType,
         status: "confirmed",
-        notes: "created_from=session_survey_next_booking",
+        notes: "created_from=next_booking",
         blocks_capacity: true,
       };
       const first = await supabase.from("reservations").insert(insertRow).select("id, start_at, end_at, session_type, store_id, status").single();

@@ -8,7 +8,6 @@ import {
 } from "@/lib/sessionSurvey";
 import { upsertSessionSurveyInvite } from "@/lib/sessionSurveyLine";
 import { resolveSessionSurveyInviteContext } from "@/lib/sessionSurveyInvite";
-import { loadNextBookingOffer } from "@/lib/sessionSurveyNextBooking";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -44,17 +43,6 @@ export async function GET(request: Request) {
     const ctx = await resolveSessionSurveyInviteContext(supabase, { token, s, sig });
     if (!ctx.ok) return json({ error: ctx.error, detail: ctx.detail }, ctx.status);
 
-    let next_booking = null;
-    try {
-      next_booking = await loadNextBookingOffer(supabase, {
-        memberId: ctx.member_id,
-        storeId: ctx.store_id,
-        sessionDate: ctx.session_date,
-      });
-    } catch (e) {
-      console.error("session survey next booking offer failed", e);
-    }
-
     return json({
       invite: {
         token: ctx.invite_id || token || "signed",
@@ -70,7 +58,6 @@ export async function GET(request: Request) {
         s: s || undefined,
         sig: sig || undefined,
       },
-      next_booking,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
