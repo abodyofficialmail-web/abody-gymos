@@ -6,8 +6,9 @@ import {
   followupStatusForRating,
   needsSessionSurveyFollowup,
 } from "@/lib/sessionSurvey";
-import { verifySessionSurveySigned } from "@/lib/sessionSurveySigned";
 import { upsertSessionSurveyInvite } from "@/lib/sessionSurveyLine";
+import { resolveSessionSurveyInviteContext } from "@/lib/sessionSurveyInvite";
+import { loadNextBookingOffer } from "@/lib/sessionSurveyNextBooking";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -31,119 +32,6 @@ const postSchema = z.object({
   comment_questions: z.string().max(4000).optional(),
 });
 
-async function loadTrainerStore(
-  supabase: ReturnType<typeof createSupabaseServiceClient>,
-  trainerId: string,
-  storeId: string
-) {
-  const [{ data: trainer }, { data: store }] = await Promise.all([
-    supabase.from("trainers").select("display_name").eq("id", trainerId).maybeSingle(),
-    supabase.from("stores").select("name").eq("id", storeId).maybeSingle(),
-  ]);
-  return {
-    trainer_name: trainer?.display_name ?? "",
-    store_name: store?.name ?? "",
-  };
-}
-
-async function resolveInviteContext(
-  supabase: ReturnType<typeof createSupabaseServiceClient>,
-  params: { token?: string; s?: string; sig?: string }
-): Promise<
-  | {
-      ok: true;
-      invite_id: string;
-      member_id: string;
-      trainer_id: string;
-      store_id: string;
-      session_date: string;
-      trainer_name: string;
-      store_name: string;
-      already_responded: boolean;
-    }
-  | { ok: false; status: number; error: string; detail?: string }
-> {
-  if (params.token) {
-    const { data: invite, error } = await supabase
-      .from("session_survey_invites")
-      .select("id, session_date, member_id, trainer_id, store_id")
-      .eq("id", params.token)
-      .maybeSingle();
-
-    if (error) {
-      const msg = String(error.message ?? "");
-      if (msg.includes("session_survey")) {
-        return { ok: false, status: 503, error: "アンケートの準備ができていません", detail: msg };
-      }
-      return { ok: false, status: 500, error: "取得に失敗しました", detail: msg };
-    }
-    if (!invite) return { ok: false, status: 404, error: "リンクが無効です" };
-
-    const meta = await loadTrainerStore(supabase, invite.trainer_id, invite.store_id);
-    const { data: existing } = await supabase
-      .from("session_survey_responses")
-      .select("id")
-      .eq("invite_id", invite.id)
-      .maybeSingle();
-
-    return {
-      ok: true,
-      invite_id: invite.id,
-      member_id: invite.member_id,
-      trainer_id: invite.trainer_id,
-      store_id: invite.store_id,
-      session_date: invite.session_date,
-      trainer_name: meta.trainer_name,
-      store_name: meta.store_name,
-      already_responded: Boolean(existing?.id),
-    };
-  }
-
-  const signed = verifySessionSurveySigned(params.s ?? "", params.sig ?? "");
-  if (!signed) return { ok: false, status: 400, error: "リンクが無効または期限切れです" };
-
-  const meta = await loadTrainerStore(supabase, signed.trainer_id, signed.store_id);
-  const invite = await upsertSessionSurveyInvite(supabase, {
-    member_id: signed.member_id,
-    trainer_id: signed.trainer_id,
-    store_id: signed.store_id,
-    session_date: signed.session_date,
-    client_note_id: signed.client_note_id ?? null,
-  });
-
-  if (!invite) {
-    return {
-      ok: true,
-      invite_id: "",
-      member_id: signed.member_id,
-      trainer_id: signed.trainer_id,
-      store_id: signed.store_id,
-      session_date: signed.session_date,
-      trainer_name: meta.trainer_name,
-      store_name: meta.store_name,
-      already_responded: false,
-    };
-  }
-
-  const { data: existing } = await supabase
-    .from("session_survey_responses")
-    .select("id")
-    .eq("invite_id", invite.id)
-    .maybeSingle();
-
-  return {
-    ok: true,
-    invite_id: invite.id,
-    member_id: signed.member_id,
-    trainer_id: signed.trainer_id,
-    store_id: signed.store_id,
-    session_date: signed.session_date,
-    trainer_name: meta.trainer_name,
-    store_name: meta.store_name,
-    already_responded: Boolean(existing?.id),
-  };
-}
-
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -153,8 +41,19 @@ export async function GET(request: Request) {
     if (!token && !(s && sig)) return json({ error: "リンクが不正です" }, 400);
 
     const supabase = createSupabaseServiceClient();
-    const ctx = await resolveInviteContext(supabase, { token, s, sig });
+    const ctx = await resolveSessionSurveyInviteContext(supabase, { token, s, sig });
     if (!ctx.ok) return json({ error: ctx.error, detail: ctx.detail }, ctx.status);
+
+    let next_booking = null;
+    try {
+      next_booking = await loadNextBookingOffer(supabase, {
+        memberId: ctx.member_id,
+        storeId: ctx.store_id,
+        sessionDate: ctx.session_date,
+      });
+    } catch (e) {
+      console.error("session survey next booking offer failed", e);
+    }
 
     return json({
       invite: {
@@ -171,6 +70,7 @@ export async function GET(request: Request) {
         s: s || undefined,
         sig: sig || undefined,
       },
+      next_booking,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -187,7 +87,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = createSupabaseServiceClient();
-    const ctx = await resolveInviteContext(supabase, {
+    const ctx = await resolveSessionSurveyInviteContext(supabase, {
       token: parsed.data.token,
       s: parsed.data.s,
       sig: parsed.data.sig,

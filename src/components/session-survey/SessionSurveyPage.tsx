@@ -52,6 +52,25 @@ async function tryInitSurveyLiff(liffId: string): Promise<boolean> {
   });
 }
 
+type SuggestedSlot = {
+  start_at: string;
+  end_at: string;
+  date_label: string;
+  time_label: string;
+  match_label: string;
+};
+
+type NextBookingOffer = {
+  eligible: boolean;
+  monthly_average: number;
+  month_count: number;
+  future_hold_count: number;
+  remaining_holds: number;
+  preferred_labels: string[];
+  slots: SuggestedSlot[];
+  booking_url: string;
+};
+
 type InvitePayload = {
   invite: {
     token: string;
@@ -63,11 +82,128 @@ type InvitePayload = {
   highlights: typeof SESSION_SURVEY_HIGHLIGHTS;
   intensity_options: typeof SESSION_SURVEY_INTENSITY;
   submit?: { token?: string; s?: string; sig?: string };
+  next_booking?: NextBookingOffer | null;
 };
+
+function nextBookingCopy(average: number) {
+  const avg = Number.isInteger(average) ? String(average) : average.toFixed(1);
+  return `直近の平均は月${avg}回です。通いやすい時間の空きから、次回をこの場で確定できます。`;
+}
 
 function formatSessionDate(ymd: string) {
   const dt = DateTime.fromISO(ymd, { zone: TZ });
   return dt.isValid ? dt.setLocale("ja").toFormat("M月d日（ccc）") : ymd;
+}
+
+function NextBookingPanel(props: {
+  offer: NextBookingOffer;
+  storeName: string;
+  booking: boolean;
+  bookingErr: string | null;
+  bookedLabels: string[];
+  pending: SuggestedSlot | null;
+  onPick: (slot: SuggestedSlot) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { offer, storeName, booking, bookingErr, bookedLabels, pending, onPick, onConfirm, onCancel } = props;
+  if (!offer.eligible && bookedLabels.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">次回のご予約</p>
+      <h2 className="mt-1 text-sm font-bold text-slate-900">希望時間の空きからすぐ確定</h2>
+      {bookedLabels.length === 0 ? (
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">{nextBookingCopy(offer.monthly_average)}</p>
+      ) : (
+        <p className="mt-2 text-sm leading-relaxed text-emerald-800">
+          予約が確定しました。LINEにもご案内します。
+        </p>
+      )}
+      {offer.eligible && offer.remaining_holds > 0 && bookedLabels.length === 0 ? (
+        <p className="mt-1 text-xs text-slate-500">この場であと{offer.remaining_holds}枠まで取れます。</p>
+      ) : null}
+      {storeName ? <p className="mt-1 text-xs text-slate-500">店舗：{storeName}</p> : null}
+      {offer.preferred_labels.length ? (
+        <p className="mt-1 text-xs text-slate-500">希望：{offer.preferred_labels.join(" / ")}</p>
+      ) : null}
+
+      {bookedLabels.length ? (
+        <ul className="mt-3 space-y-1.5">
+          {bookedLabels.map((label) => (
+            <li
+              key={label}
+              className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900"
+            >
+              {label}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {pending ? (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-sm font-bold text-slate-900">この時間で確定しますか？</p>
+          <p className="mt-1 text-sm text-slate-700">
+            {pending.date_label} {pending.time_label}
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={booking}
+              onClick={onCancel}
+              className="rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-700"
+            >
+              もどる
+            </button>
+            <button
+              type="button"
+              disabled={booking}
+              onClick={onConfirm}
+              className="rounded-xl bg-emerald-600 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+            >
+              {booking ? "確定中…" : "予約を確定する"}
+            </button>
+          </div>
+        </div>
+      ) : offer.eligible && offer.slots.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {offer.slots.map((slot) => (
+            <button
+              key={slot.start_at}
+              type="button"
+              disabled={booking}
+              onClick={() => onPick(slot)}
+              className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-60"
+            >
+              <span>
+                <span className="block text-sm font-bold text-slate-900">
+                  {slot.date_label} {slot.time_label}
+                </span>
+                <span className="mt-0.5 block text-[11px] text-slate-500">{slot.match_label}</span>
+              </span>
+              <span className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white">
+                予約する
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : offer.eligible ? (
+        <p className="mt-3 text-sm text-slate-600">
+          いま希望時間の空きが見つかりませんでした。予約サイトから他の時間も選べます。
+        </p>
+      ) : null}
+
+      {bookingErr ? <p className="mt-3 text-sm text-red-600">{bookingErr}</p> : null}
+
+      <a
+        href={offer.booking_url}
+        className="mt-4 inline-block text-xs font-semibold text-emerald-800 underline"
+      >
+        別の時間がいい場合は予約サイトへ
+      </a>
+    </section>
+  );
 }
 
 export default function SessionSurveyPage() {
@@ -87,6 +223,11 @@ export default function SessionSurveyPage() {
   const [commentGeneral, setCommentGeneral] = useState("");
   const [commentImprove, setCommentImprove] = useState("");
   const [commentQuestions, setCommentQuestions] = useState("");
+  const [nextBooking, setNextBooking] = useState<NextBookingOffer | null>(null);
+  const [pendingSlot, setPendingSlot] = useState<SuggestedSlot | null>(null);
+  const [booking, setBooking] = useState(false);
+  const [bookingErr, setBookingErr] = useState<string | null>(null);
+  const [bookedLabels, setBookedLabels] = useState<string[]>([]);
 
   const title = useMemo(() => {
     if (!payload) return "セッション評価";
@@ -102,6 +243,7 @@ export default function SessionSurveyPage() {
     const data = json as InvitePayload;
     setPayload(data);
     setSubmitRef(data.submit ?? {});
+    setNextBooking(data.next_booking ?? null);
     if (data.invite.already_responded) setDone(true);
   }, []);
 
@@ -209,6 +351,53 @@ export default function SessionSurveyPage() {
     }
   };
 
+  const confirmBooking = async () => {
+    if (!pendingSlot || (!token && !signed)) return;
+    setBooking(true);
+    setBookingErr(null);
+    try {
+      const res = await fetch("/api/member/session-survey/book", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token: submitRef.token ?? token ?? undefined,
+          s: submitRef.s ?? signed?.s,
+          sig: submitRef.sig ?? signed?.sig,
+          start_at: pendingSlot.start_at,
+          end_at: pendingSlot.end_at,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string })?.error ?? "予約に失敗しました");
+      setBookedLabels((prev) => [...prev, `${pendingSlot.date_label} ${pendingSlot.time_label}`]);
+      setPendingSlot(null);
+      const refreshed = (json as { next_booking?: NextBookingOffer | null }).next_booking;
+      if (refreshed) setNextBooking(refreshed);
+    } catch (e: unknown) {
+      setBookingErr(e instanceof Error ? e.message : "予約に失敗しました");
+    } finally {
+      setBooking(false);
+    }
+  };
+
+  const bookingPanel =
+    nextBooking && payload ? (
+      <NextBookingPanel
+        offer={nextBooking}
+        storeName={payload.invite.store_name}
+        booking={booking}
+        bookingErr={bookingErr}
+        bookedLabels={bookedLabels}
+        pending={pendingSlot}
+        onPick={setPendingSlot}
+        onConfirm={() => void confirmBooking()}
+        onCancel={() => {
+          setPendingSlot(null);
+          setBookingErr(null);
+        }}
+      />
+    ) : null;
+
   if (loading) {
     return (
       <>
@@ -232,19 +421,22 @@ export default function SessionSurveyPage() {
     return (
       <main className="mx-auto min-h-screen max-w-lg bg-slate-50 px-4 py-10">
         <Script src="https://static.line-scdn.net/liff/edge/2/sdk.js" strategy="afterInteractive" />
-        <div className="rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm">
-          <h1 className="text-lg font-bold text-slate-900">ご回答ありがとうございました</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            {payload.invite.trainer_name
-              ? `担当の${payload.invite.trainer_name}へフィードバックをお届けしました。`
-              : "フィードバックを記録しました。"}
-            次回のセッション改善に活かします。
-          </p>
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm">
+            <h1 className="text-lg font-bold text-slate-900">ご回答ありがとうございました</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              {payload.invite.trainer_name
+                ? `担当の${payload.invite.trainer_name}へフィードバックをお届けしました。`
+                : "フィードバックを記録しました。"}
+              次回のセッション改善に活かします。
+            </p>
+          </div>
+          {bookingPanel}
           {inLiff ? (
             <button
               type="button"
               onClick={closeLiff}
-              className="mt-4 w-full rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white"
+              className="w-full rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white"
             >
               LINEに戻る
             </button>
@@ -272,6 +464,8 @@ export default function SessionSurveyPage() {
       </header>
 
       <div className="space-y-5">
+        {bookingPanel}
+
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-bold text-slate-900">セッション評価（5段階）</h2>
           <div className="mt-3 flex justify-between gap-1">

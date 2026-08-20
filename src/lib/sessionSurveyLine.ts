@@ -15,6 +15,7 @@ import {
   type SurveyRateStats,
 } from "@/lib/surveyRateDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { loadNextBookingEligibility } from "@/lib/sessionSurveyNextBooking";
 
 export type SessionSurveyInviteParams = {
   member_id: string;
@@ -107,9 +108,12 @@ export function buildSessionSurveyFlexMessage(params: {
   trainerDisplayName: string;
   surveyUrl: string;
   memberStats?: SurveyRateStats | null;
+  offerNextBooking?: boolean;
 }): object {
   const name = params.trainerDisplayName.trim() || "トレーナー";
-  const intro = `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かすほか、トレーナーの評価にも反映されます。\nご回答いただくと、トレーナーから返信が届く場合もあります。`;
+  const intro = params.offerNextBooking
+    ? `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\nご回答画面で、通いやすい時間の空きから次回予約もすぐ確定できます。`
+    : `担当トレーナーの${name}です。\n本日のセッションはいかがでしたでしょうか？\n次回のセッションに活かすほか、トレーナーの評価にも反映されます。\nご回答いただくと、トレーナーから返信が届く場合もあります。`;
   const rateText = params.memberStats ? formatMemberSurveyRateForLine(params.memberStats) : null;
   const buttonColor = sessionSurveyLineButtonColor(
     params.memberStats ?? { invite_count: 0, response_count: 0, response_rate: null }
@@ -150,7 +154,7 @@ export function buildSessionSurveyFlexMessage(params: {
     height: "sm",
     action: {
       type: "uri",
-      label: "アンケートに回答する",
+      label: params.offerNextBooking ? "評価して次回を予約" : "アンケートに回答する",
       uri: params.surveyUrl,
     },
   });
@@ -197,6 +201,7 @@ export async function pushSessionSurveyInviteLine(params: {
   /** invite UUID またはフル survey URL */
   inviteToken: string;
   memberStats?: SurveyRateStats | null;
+  offerNextBooking?: boolean;
 }): Promise<boolean> {
   const surveyUrl = params.inviteToken.startsWith("http")
     ? params.inviteToken
@@ -207,6 +212,7 @@ export async function pushSessionSurveyInviteLine(params: {
     trainerDisplayName: params.trainerDisplayName,
     surveyUrl,
     memberStats: params.memberStats,
+    offerNextBooking: params.offerNextBooking,
   });
 
   const line = linePushTokenForMember({
@@ -285,7 +291,13 @@ export async function sendSessionSurveyAfterClientNote(
     if (responded?.id) return { sent: false, invite_id: invite.id, survey_url: surveyUrl };
   }
 
-  const { survey_stats: memberStats } = await fetchSessionSurveysForMember(supabase, params.member_id);
+  const [{ survey_stats: memberStats }, eligibility] = await Promise.all([
+    fetchSessionSurveysForMember(supabase, params.member_id),
+    loadNextBookingEligibility(supabase, params.member_id).catch((e) => {
+      console.error("next booking eligibility failed", e);
+      return { eligible: false };
+    }),
+  ]);
 
   const sent = await pushSessionSurveyInviteLine({
     lineUserId: params.line_user_id,
@@ -295,6 +307,7 @@ export async function sendSessionSurveyAfterClientNote(
     trainerDisplayName: params.trainer_display_name,
     inviteToken: surveyUrl,
     memberStats,
+    offerNextBooking: eligibility.eligible,
   });
 
   if (sent && invite?.id) {
