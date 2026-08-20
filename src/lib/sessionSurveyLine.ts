@@ -273,7 +273,7 @@ export async function sendSessionSurveyAfterClientNote(
     store_name: string;
     trainer_display_name: string;
   }
-): Promise<{ sent: boolean; invite_id?: string; survey_url?: string; mode?: string; next_booking_sent?: boolean }> {
+): Promise<{ sent: boolean; invite_id?: string; survey_url?: string; mode?: string }> {
   const invite = await upsertSessionSurveyInvite(supabase, params);
   const surveyUrl = surveyUrlForInvite(invite, params);
   if (!surveyUrl) return { sent: false };
@@ -306,30 +306,11 @@ export async function sendSessionSurveyAfterClientNote(
       .eq("id", invite.id);
   }
 
-  let next_booking_sent = false;
-  if (invite?.id) {
-    try {
-      next_booking_sent = await sendNextBookingLineForInvite(supabase, {
-        inviteId: invite.id,
-        memberId: params.member_id,
-        storeId: params.store_id,
-        sessionDate: params.session_date,
-        lineUserId: params.line_user_id,
-        memberCode: params.member_code,
-        lineChannelKey: params.line_channel_key,
-        storeName: params.store_name,
-      });
-    } catch (e) {
-      console.error("next booking LINE failed", e);
-    }
-  }
-
   return {
     sent,
     invite_id: invite?.id,
     survey_url: surveyUrl,
     mode: invite?.id ? "invite" : "signed",
-    next_booking_sent,
   };
 }
 

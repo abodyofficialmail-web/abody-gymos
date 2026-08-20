@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-function nextBookingCopy(average: number) {
-  const avg = Number.isInteger(average) ? String(average) : average.toFixed(1);
-  return `直近の平均は月${avg}回です。通いやすい時間の空きから、次回をこの場で確定できます。`;
+function nextBookingCopy(count: number) {
+  return `今月はまだ${count}回です。通いやすい時間の空きから、次回をこの場で確定できます。`;
 }
 
 type SuggestedSlot = {
@@ -37,6 +36,7 @@ function slotFromQuery(startAt: string, endAt: string): SuggestedSlot {
 type NextBookingOffer = {
   eligible: boolean;
   monthly_average: number;
+  this_month_count?: number;
   remaining_holds: number;
   preferred_labels: string[];
   slots: SuggestedSlot[];
@@ -139,7 +139,9 @@ export default function NextBookingPage() {
       <header className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">次回のご予約</p>
         <h1 className="mt-1 text-xl font-bold text-slate-900">希望時間の空きからすぐ確定</h1>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">{nextBookingCopy(offer.monthly_average)}</p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          {nextBookingCopy(offer.this_month_count ?? offer.monthly_average)}
+        </p>
         {payload.invite.store_name ? (
           <p className="mt-1 text-xs text-slate-500">店舗：{payload.invite.store_name}</p>
         ) : null}

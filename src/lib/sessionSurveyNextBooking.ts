@@ -4,6 +4,11 @@ import { GET as getAvailableDates } from "@/app/api/booking-v2/available-dates/r
 import { GET as getAvailableSlots } from "@/app/api/booking-v2/available-slots/route";
 import { MONTHLY_SESSION_TARGET } from "@/lib/lowBookingMotivation";
 import { isBookingClosedDate } from "@/lib/bookingClosedDates";
+import {
+  nextBookingAudience,
+  sessionCountsForNextBooking,
+  type NextBookingAudienceReason,
+} from "@/lib/nextBookingAudience";
 
 const TZ = "Asia/Tokyo";
 
@@ -42,6 +47,10 @@ export type SuggestedBookingSlot = {
 export type NextBookingOffer = {
   eligible: boolean;
   monthly_average: number;
+  this_month_count: number;
+  prev_month_count: number;
+  first_half_count: number;
+  audience_reasons: NextBookingAudienceReason[];
   month_count: number;
   future_hold_count: number;
   remaining_holds: number;
@@ -234,11 +243,15 @@ export async function loadNextBookingEligibility(
 ): Promise<{
   eligible: boolean;
   monthly_average: number;
+  this_month_count: number;
+  prev_month_count: number;
+  first_half_count: number;
+  audience_reasons: NextBookingAudienceReason[];
   month_count: number;
   future_hold_count: number;
   remaining_holds: number;
 }> {
-  const lookbackStart = now.startOf("month").minus({ months: LOOKBACK_MONTHS - 1 });
+  const lookbackStart = now.startOf("month").minus({ months: 1 });
   const [{ data: member }, { data: reservations }] = await Promise.all([
     supabase.from("members").select("id, created_at, member_code").eq("id", memberId).maybeSingle(),
     supabase
@@ -250,20 +263,22 @@ export async function loadNextBookingEligibility(
   ]);
 
   const rows = (reservations ?? []) as Array<{ start_at: string; status: string }>;
-  const { average, monthCount } = computeMonthlyAverage({
-    startAts: rows.map((r) => r.start_at),
-    memberCreatedAt: member?.created_at ?? null,
-    now,
-  });
+  const startAts = rows.map((r) => r.start_at);
+  const counts = sessionCountsForNextBooking(startAts, now);
+  const audience = nextBookingAudience(now, counts);
   const nowMs = now.toUTC().toMillis();
   const futureHoldCount = rows.filter((r) => DateTime.fromISO(r.start_at).toMillis() > nowMs).length;
   const remaining = Math.max(0, NEXT_BOOKING_MAX_FUTURE_HOLDS - futureHoldCount);
   const previewMember = String(member?.member_code ?? "").toUpperCase() === "EBI020";
-  const eligible = previewMember || (average <= NEXT_BOOKING_MONTHLY_AVG_MAX && remaining > 0);
+  const eligible = previewMember || (audience.eligible && remaining > 0);
   return {
     eligible,
-    monthly_average: average,
-    month_count: monthCount,
+    monthly_average: counts.thisMonthCount,
+    this_month_count: counts.thisMonthCount,
+    prev_month_count: counts.prevMonthCount,
+    first_half_count: counts.firstHalfCount,
+    audience_reasons: previewMember && !audience.eligible ? [] : audience.reasons,
+    month_count: 1,
     future_hold_count: futureHoldCount,
     remaining_holds: previewMember ? Math.max(1, remaining) : remaining,
   };
@@ -437,8 +452,7 @@ export async function loadNextBookingOffer(
   };
 }
 
-export function nextBookingTargetCopy(average: number): string {
-  const avgText = Number.isInteger(average) ? String(average) : average.toFixed(1);
-  return `直近の平均は月${avgText}回です。月${MONTHLY_SESSION_TARGET}回を目標に、通いやすい時間の空きから次回を確保できます。`;
+export function nextBookingTargetCopy(thisMonthCount: number): string {
+  return `今月はまだ${thisMonthCount}回です。月${MONTHLY_SESSION_TARGET}回を目標に、通いやすい時間の空きから次回を確保できます。`;
 }
 

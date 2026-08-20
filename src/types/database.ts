@@ -354,6 +354,27 @@ export interface Database {
         };
         Relationships: [];
       };
+      session_end_next_booking_dispatches: {
+        Row: {
+          id: string;
+          reservation_id: string;
+          sent_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          reservation_id: string;
+          sent_at?: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          reservation_id?: string;
+          sent_at?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       goal_hearing_invites: {
         Row: {
           id: string;

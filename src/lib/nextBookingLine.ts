@@ -256,8 +256,8 @@ export function buildNextBookingLineMessages(params: {
     : "";
   const intro =
     params.offer.slots.length > 0
-      ? `${nextBookingTargetCopy(params.offer.monthly_average)}\n${store}の空きです。カードを横にスライドして、希望の枠をお選びください。${preferred}`
-      : `${nextBookingTargetCopy(params.offer.monthly_average)}\n${store}の希望時間に、いま空きが見つかりませんでした。`;
+      ? `${nextBookingTargetCopy(params.offer.this_month_count ?? params.offer.monthly_average)}\n${store}の空きです。カードを横にスライドして、希望の枠をお選びください。${preferred}`
+      : `${nextBookingTargetCopy(params.offer.this_month_count ?? params.offer.monthly_average)}\n${store}の希望時間に、いま空きが見つかりませんでした。`;
 
   return [
     { type: "text", text: intro },
