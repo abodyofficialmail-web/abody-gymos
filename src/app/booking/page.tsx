@@ -13,8 +13,34 @@ type Store = { id: string; name: string };
 type Slot = { startAt: string; endAt: string };
 type BookingV2Slot = { start_at: string; end_at: string };
 type SessionType = "store" | "online";
+type DateView = "calendar" | "list";
+type AvailableDay = { date: string; slotCount: number; status: "available" | "limited" | "full" };
 
 const TZ = "Asia/Tokyo";
+const DATE_VIEW_KEY = "booking-date-view";
+const SLOT_FETCH_CONCURRENCY = 4;
+
+function readDateView(): DateView {
+  if (typeof window === "undefined") return "calendar";
+  try {
+    return sessionStorage.getItem(DATE_VIEW_KEY) === "list" ? "list" : "calendar";
+  } catch {
+    return "calendar";
+  }
+}
+
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 function formatJstDateLabel(ymd: string) {
   const dt = DateTime.fromISO(ymd, { zone: TZ });
@@ -144,9 +170,10 @@ export default function BookingPage() {
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
 
   const [month, setMonth] = useState(() => DateTime.now().setZone(TZ).startOf("month"));
-  const [days, setDays] = useState<
-    { date: string; slotCount: number; status: "available" | "limited" | "full" }[] | null
-  >(null);
+  const [dateView, setDateView] = useState<DateView>("calendar");
+  const [days, setDays] = useState<AvailableDay[] | null>(null);
+  const [monthSlots, setMonthSlots] = useState<Record<string, Slot[]> | null>(null);
+  const [monthSlotsLoading, setMonthSlotsLoading] = useState(false);
   const daysByDate = useMemo(() => {
     const m = new Map<string, { slotCount: number; status: "available" | "limited" | "full" }>();
     for (const d of days ?? []) m.set(d.date, { slotCount: d.slotCount, status: d.status });
@@ -167,6 +194,10 @@ export default function BookingPage() {
   const [error, setError] = useState<string | null>(null);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
+  const listDays = useMemo(
+    () => (days ?? []).filter((d) => d.date >= todayYmd && d.slotCount > 0),
+    [days, todayYmd]
+  );
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
@@ -175,6 +206,10 @@ export default function BookingPage() {
     const [startAt, endAt] = selectedSlotKey.split("|");
     return slots.find((s) => s.startAt === startAt && s.endAt === endAt) ?? null;
   }, [slots, selectedSlotKey]);
+
+  useEffect(() => {
+    setDateView(readDateView());
+  }, []);
 
   useEffect(() => {
     setError(null);
@@ -196,6 +231,7 @@ export default function BookingPage() {
     setError(null);
     setSessionType("store");
     setDays(null);
+    setMonthSlots(null);
     setSelectedDate("");
     setSlots(null);
     setSelectedSlotKey("");
@@ -219,25 +255,65 @@ export default function BookingPage() {
 
   useEffect(() => {
     if (!selectedStoreId || !selectedDate) return;
+    let cancelled = false;
     setMemberName("");
-    setSlots(null);
-    setSelectedSlotKey("");
     setError(null);
     apiGet<BookingV2Slot[]>(
       `/api/booking-v2/available-slots?store_id=${encodeURIComponent(selectedStoreId)}&date=${encodeURIComponent(
         selectedDate
       )}`
     )
-      .then((rows) =>
-        setSlots(
-          (rows ?? []).map((r) => ({
-            startAt: r.start_at,
-            endAt: r.end_at,
-          }))
-        )
-      )
-      .catch((e: any) => setError(e?.message ?? "空き枠の取得に失敗しました"));
+      .then((rows) => {
+        if (cancelled) return;
+        const mapped = (rows ?? []).map((r) => ({
+          startAt: r.start_at,
+          endAt: r.end_at,
+        }));
+        setSlots(mapped);
+        setSelectedSlotKey((prev) =>
+          prev && mapped.some((s) => `${s.startAt}|${s.endAt}` === prev) ? prev : ""
+        );
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setError(e?.message ?? "空き枠の取得に失敗しました");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedStoreId, selectedDate]);
+
+  useEffect(() => {
+    if (dateView !== "list") return;
+    if (!selectedStoreId || !days) return;
+    const dates = days.filter((d) => d.date >= todayYmd && d.slotCount > 0).map((d) => d.date);
+    let cancelled = false;
+    setMonthSlotsLoading(true);
+    if (dates.length === 0) {
+      setMonthSlots({});
+      setMonthSlotsLoading(false);
+      return;
+    }
+    void mapPool(dates, SLOT_FETCH_CONCURRENCY, async (date) => {
+      try {
+        const rows = await apiGet<BookingV2Slot[]>(
+          `/api/booking-v2/available-slots?store_id=${encodeURIComponent(selectedStoreId)}&date=${encodeURIComponent(date)}`
+        );
+        return [date, (rows ?? []).map((r) => ({ startAt: r.start_at, endAt: r.end_at }))] as const;
+      } catch {
+        return [date, [] as Slot[]] as const;
+      }
+    }).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, Slot[]> = {};
+      for (const [date, slotsForDate] of pairs) next[date] = slotsForDate;
+      setMonthSlots(next);
+      setMonthSlotsLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dateView, selectedStoreId, days, todayYmd]);
 
   const selectedStoreName = useMemo(
     () => (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "",
@@ -254,6 +330,31 @@ export default function BookingPage() {
       return { ok: false, message: "メールアドレスの形式が不正です" };
     }
     return { ok: true, email };
+  }
+
+  async function lookupMemberAndGoToConfirm() {
+    const v = validateMemberEmail(memberEmailInput);
+    if (!v.ok) {
+      setError(v.message);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const qs = new URLSearchParams({ email: v.email });
+      if (selectedStoreId) qs.set("store_id", selectedStoreId);
+      const info = await apiGet<{ member: { id: string; member_code: string; name: string } }>(
+        `/api/booking-v2/member?${qs.toString()}`
+      );
+      setMemberEmailInput(v.email.trim());
+      setMemberName(info.member.name ?? "");
+      setStep(6);
+    } catch (e: any) {
+      setMemberName("");
+      setError(e?.message ?? "会員情報の取得に失敗しました。もう一度お試しください。");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleCreateReservation() {
@@ -322,12 +423,48 @@ export default function BookingPage() {
     setStep(1);
     setMonth(DateTime.now().setZone(TZ).startOf("month"));
     setDays(null);
+    setMonthSlots(null);
     setSelectedDate("");
     setSessionType("store");
     setSlots(null);
     setSelectedSlotKey("");
     setMemberEmailInput("");
     setMemberName("");
+  }
+
+  function changeDateView(next: DateView) {
+    setDateView(next);
+    try {
+      sessionStorage.setItem(DATE_VIEW_KEY, next);
+    } catch {
+      // ignore
+    }
+  }
+
+  function goToDate(ymd: string, slot?: Slot | null) {
+    setSelectedDate(ymd);
+    setMemberEmailInput("");
+    setSessionType("store");
+    if (slot) {
+      const daySlots = monthSlots?.[ymd];
+      setSlots(daySlots && daySlots.length > 0 ? daySlots : [slot]);
+      setSelectedSlotKey(`${slot.startAt}|${slot.endAt}`);
+    } else {
+      setSelectedSlotKey("");
+      setSlots(null);
+    }
+    setStep(3);
+  }
+
+  function goToTimeOrMember() {
+    setStep(selectedSlotKey ? 5 : 4);
+  }
+
+  function dayStatusMeta(status: AvailableDay["status"]) {
+    const symbol = status === "available" ? "○" : status === "limited" ? "△" : "×";
+    const color =
+      status === "available" ? "var(--ok)" : status === "limited" ? "var(--warn)" : "var(--muted)";
+    return { symbol, color };
   }
 
   return (
@@ -404,7 +541,7 @@ export default function BookingPage() {
                   }
                 >
                   <div className="text-base font-semibold">{s.name}</div>
-                  <div className="text-xs text-ink-500 pt-1">この店舗のカレンダーに進みます</div>
+                  <div className="text-xs text-ink-500 pt-1">この店舗の空き状況を確認します</div>
                 </button>
               );
             })}
@@ -413,12 +550,43 @@ export default function BookingPage() {
         </section>
       ) : null}
 
-      {/* Step 2: calendar */}
+      {/* Step 2: calendar or availability list */}
       {step === 2 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
           <div className="space-y-1">
-            <div className="text-base font-semibold">日付を選択</div>
-            <div className="text-sm text-ink-500">{selectedStoreName} のカレンダーです。</div>
+            <div className="text-base font-semibold">{dateView === "list" ? "空き状況から選択" : "日付を選択"}</div>
+            <div className="text-sm text-ink-500">
+              {dateView === "list"
+                ? `${selectedStoreName} の空き状況一覧です。`
+                : `${selectedStoreName} のカレンダーです。`}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 rounded-xl border border-line p-1">
+            <button
+              type="button"
+              onClick={() => changeDateView("calendar")}
+              className="rounded-lg px-3 py-2 text-sm font-medium"
+              style={
+                dateView === "calendar"
+                  ? { background: "var(--accentSoft)", color: "var(--accent)" }
+                  : { color: "#6B7280" }
+              }
+            >
+              カレンダー
+            </button>
+            <button
+              type="button"
+              onClick={() => changeDateView("list")}
+              className="rounded-lg px-3 py-2 text-sm font-medium"
+              style={
+                dateView === "list"
+                  ? { background: "var(--accentSoft)", color: "var(--accent)" }
+                  : { color: "#6B7280" }
+              }
+            >
+              空き状況一覧
+            </button>
           </div>
 
           <div className="flex items-center justify-between">
@@ -439,94 +607,128 @@ export default function BookingPage() {
             </button>
           </div>
 
-          <div className="grid grid-cols-7 gap-1 text-center text-xs text-ink-500">
-            {["日", "月", "火", "水", "木", "金", "土"].map((w) => (
-              <div key={w} className="py-1">
-                {w}
+          {dateView === "calendar" ? (
+            <>
+              <div className="grid grid-cols-7 gap-1 text-center text-xs text-ink-500">
+                {["日", "月", "火", "水", "木", "金", "土"].map((w) => (
+                  <div key={w} className="py-1">
+                    {w}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="grid grid-cols-7 gap-1">
-            {(() => {
-              const first = month.startOf("month");
-              const startDow = first.weekday % 7; // 0=Sun
-              const daysInMonth = month.daysInMonth ?? 31;
-              const cells = 42;
-              return Array.from({ length: cells }, (_, idx) => {
-                const dayNum = idx - startDow + 1;
-                const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
-                const ymd = inMonth ? month.set({ day: dayNum }).toISODate()! : "";
-                const meta = ymd ? daysByDate.get(ymd) : null;
-                const status = meta?.status ?? "full";
-                const symbol = status === "available" ? "○" : status === "limited" ? "△" : "×";
-                const isPast = ymd ? ymd < todayYmd : false;
-                const disabled = !inMonth || !ymd || isPast || (meta?.slotCount ?? 0) === 0;
-                const selected = ymd && selectedDate === ymd;
+              <div className="grid grid-cols-7 gap-1">
+                {(() => {
+                  const first = month.startOf("month");
+                  const startDow = first.weekday % 7; // 0=Sun
+                  const daysInMonth = month.daysInMonth ?? 31;
+                  const cells = 42;
+                  return Array.from({ length: cells }, (_, idx) => {
+                    const dayNum = idx - startDow + 1;
+                    const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+                    const ymd = inMonth ? month.set({ day: dayNum }).toISODate()! : "";
+                    const meta = ymd ? daysByDate.get(ymd) : null;
+                    const status = meta?.status ?? "full";
+                    const { symbol, color } = dayStatusMeta(status);
+                    const isPast = ymd ? ymd < todayYmd : false;
+                    const disabled = !inMonth || !ymd || isPast || (meta?.slotCount ?? 0) === 0;
+                    const selected = ymd && selectedDate === ymd;
 
-                const symbolColor =
-                  status === "available"
-                    ? "var(--ok)"
-                    : status === "limited"
-                    ? "var(--warn)"
-                    : "var(--muted)";
-
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        disabled={disabled || !selectedStoreId}
+                        onClick={() => goToDate(ymd)}
+                        className={[
+                          "aspect-square rounded-xl border p-2 text-left transition-colors",
+                          !inMonth ? "border-transparent bg-transparent" : "border-line bg-white",
+                          disabled && inMonth ? "opacity-50" : "hover:bg-[#F9FAFB]",
+                        ].join(" ")}
+                        style={
+                          selected
+                            ? { borderColor: "var(--accentBorder)", background: "var(--accentSoft)" }
+                            : undefined
+                        }
+                      >
+                        {inMonth ? (
+                          <div className="h-full flex flex-col justify-between">
+                            <div className="text-sm font-medium">{dayNum}</div>
+                            <div className="text-sm font-semibold" style={{ color }}>
+                              {symbol}
+                            </div>
+                          </div>
+                        ) : (
+                          <div />
+                        )}
+                      </button>
+                    );
+                  });
+                })()}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-xs text-ink-500">空きのある日だけ表示しています。時間を直接選ぶこともできます。</div>
+              {days !== null && listDays.length === 0 ? (
+                <div className="text-sm text-ink-700">この月は空き枠がありません。</div>
+              ) : null}
+              {listDays.map((d) => {
+                const { symbol, color } = dayStatusMeta(d.status);
+                const times = monthSlots?.[d.date];
                 return (
-                  <button
-                    key={idx}
-                    type="button"
-                    disabled={disabled || !selectedStoreId}
-                    onClick={() => {
-                      setSelectedDate(ymd);
-                      setSelectedSlotKey("");
-                      setMemberEmailInput("");
-                      setSessionType("store");
-                      setStep(3);
-                    }}
-                    className={[
-                      "aspect-square rounded-xl border p-2 text-left transition-colors",
-                      !inMonth ? "border-transparent bg-transparent" : "border-line bg-white",
-                      disabled && inMonth ? "opacity-50" : "hover:bg-[#F9FAFB]",
-                    ].join(" ")}
-                    style={
-                      selected
-                        ? { borderColor: "var(--accentBorder)", background: "var(--accentSoft)" }
-                        : undefined
-                    }
-                  >
-                    {inMonth ? (
-                      <div className="h-full flex flex-col justify-between">
-                        <div className="text-sm font-medium">{dayNum}</div>
-                        <div className="text-sm font-semibold" style={{ color: symbolColor }}>
-                          {symbol}
-                        </div>
+                  <div key={d.date} className="rounded-xl border border-line bg-white">
+                    <button
+                      type="button"
+                      onClick={() => goToDate(d.date)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    >
+                      <div className="text-sm font-semibold">{formatJstDateLabel(d.date)}</div>
+                      <div className="text-xs font-medium" style={{ color }}>
+                        {symbol} {d.slotCount}枠
                       </div>
-                    ) : (
-                      <div />
-                    )}
-                  </button>
+                    </button>
+                    <div className="flex flex-wrap gap-2 px-3 pb-3">
+                      {times === undefined && monthSlotsLoading ? (
+                        <div className="text-xs text-ink-500">時間を読み込み中…</div>
+                      ) : null}
+                      {(times ?? []).map((s) => (
+                        <button
+                          key={`${s.startAt}|${s.endAt}`}
+                          type="button"
+                          onClick={() => goToDate(d.date, s)}
+                          className="rounded-xl border px-3 py-2 text-sm font-medium"
+                          style={{ borderColor: "#E5E7EB", background: "#fff" }}
+                        >
+                          {formatJstTime(s.startAt)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 );
-              });
-            })()}
-          </div>
+              })}
+            </div>
+          )}
 
-          <div className="flex items-center gap-4 text-xs text-ink-500">
-            <div>
-              <span className="font-semibold" style={{ color: "var(--ok)" }}>
-                ○
-              </span>{" "}
-              空きあり（3枠以上）
+          {dateView === "calendar" ? (
+            <div className="flex items-center gap-4 text-xs text-ink-500">
+              <div>
+                <span className="font-semibold" style={{ color: "var(--ok)" }}>
+                  ○
+                </span>{" "}
+                空きあり（3枠以上）
+              </div>
+              <div>
+                <span className="font-semibold" style={{ color: "var(--warn)" }}>
+                  △
+                </span>{" "}
+                わずか（1〜2枠）
+              </div>
+              <div>
+                <span className="font-semibold">×</span> なし（0枠）
+              </div>
             </div>
-            <div>
-              <span className="font-semibold" style={{ color: "var(--warn)" }}>
-                △
-              </span>{" "}
-              わずか（1〜2枠）
-            </div>
-            <div>
-              <span className="font-semibold">×</span> なし（0枠）
-            </div>
-          </div>
+          ) : null}
 
           {days === null ? <div className="text-sm text-ink-500">読み込み中…</div> : null}
         </section>
@@ -547,7 +749,7 @@ export default function BookingPage() {
               type="button"
               onClick={() => {
                 setSessionType("store");
-                setStep(4);
+                goToTimeOrMember();
               }}
               className={[
                 "w-full rounded-xl border px-4 py-4 text-left transition-colors",
@@ -567,7 +769,7 @@ export default function BookingPage() {
               type="button"
               onClick={() => {
                 setSessionType("online");
-                setStep(4);
+                goToTimeOrMember();
               }}
               className={[
                 "w-full rounded-xl border px-4 py-4 text-left transition-colors",
@@ -650,28 +852,7 @@ export default function BookingPage() {
             />
             <button
               type="button"
-              onClick={async () => {
-                const v = validateMemberEmail(memberEmailInput);
-                if (!v.ok) {
-                  setError(v.message);
-                  return;
-                }
-                setBusy(true);
-                setError(null);
-                try {
-                  const info = await apiGet<{ member: { id: string; member_code: string; name: string } }>(
-                    `/api/booking-v2/member?email=${encodeURIComponent(v.email)}`
-                  );
-                  setMemberEmailInput(v.email.trim());
-                  setMemberName(info.member.name ?? "");
-                  setStep(6);
-                } catch (e: any) {
-                  setMemberName("");
-                  setError(e?.message ?? "会員情報の取得に失敗しました");
-                } finally {
-                  setBusy(false);
-                }
-              }}
+              onClick={() => void lookupMemberAndGoToConfirm()}
               disabled={busy}
               className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-white font-semibold disabled:opacity-60"
               style={{ background: "var(--accent)" }}
@@ -757,18 +938,8 @@ export default function BookingPage() {
             if (step === 3) return;
             if (step === 4 && selectedSlot) return setStep(5);
             if (step === 5) {
-              const v = validateMemberEmail(memberEmailInput);
-              if (!v.ok) {
-                setError(v.message);
-                return;
-              }
-              // ここで API を叩くと UX が重くなるため、会員名は Step5 の「次へ」で取得済みを前提にする
-              setMemberEmailInput(v.email.trim());
-              if (!memberName) {
-                setError("会員情報の取得に失敗しました。もう一度お試しください。");
-                return;
-              }
-              return setStep(6);
+              void lookupMemberAndGoToConfirm();
+              return;
             }
           }}
           disabled={

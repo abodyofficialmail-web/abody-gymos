@@ -126,6 +126,7 @@ export default function MemberPage() {
   const [changeTarget, setChangeTarget] = useState<MeResponse["reservations"][number] | null>(null);
   const [changeEligibility, setChangeEligibility] = useState<MemberRescheduleEligibility | null>(null);
   const [changeMonth, setChangeMonth] = useState(() => DateTime.now().setZone(TZ).startOf("month"));
+  const [changeDateView, setChangeDateView] = useState<"calendar" | "list">("calendar");
   const [changeDays, setChangeDays] = useState<AvailableDay[] | null>(null);
   const [changeSelectedDate, setChangeSelectedDate] = useState<string>("");
   const [changeSlots, setChangeSlots] = useState<Array<{ start_at: string; end_at: string }> | null>(null);
@@ -209,6 +210,19 @@ export default function MemberPage() {
     for (const d of changeDays ?? []) m.set(d.date, { slotCount: d.slotCount, status: d.status });
     return m;
   }, [changeDays]);
+
+  const changeListDays = useMemo(
+    () =>
+      (changeDays ?? []).filter(
+        (d) =>
+          !isCrossDayRescheduleDateDisabled({
+            ymd: d.date,
+            todayYmd,
+            slotCount: d.slotCount,
+          })
+      ),
+    [changeDays, todayYmd]
+  );
 
   const resetChangeModal = () => {
     setChangeTarget(null);
@@ -696,6 +710,29 @@ export default function MemberPage() {
 
                   {changeEligibility.mode === "cross_day" ? (
                     <div className="space-y-3">
+                      <div className="grid grid-cols-2 rounded-xl border border-slate-200 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setChangeDateView("calendar")}
+                          className={[
+                            "rounded-lg px-3 py-2 text-sm font-medium",
+                            changeDateView === "calendar" ? "bg-slate-900 text-white" : "text-slate-600",
+                          ].join(" ")}
+                        >
+                          カレンダー
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChangeDateView("list")}
+                          className={[
+                            "rounded-lg px-3 py-2 text-sm font-medium",
+                            changeDateView === "list" ? "bg-slate-900 text-white" : "text-slate-600",
+                          ].join(" ")}
+                        >
+                          空き状況一覧
+                        </button>
+                      </div>
+
                       <div className="flex items-center justify-between">
                         <button
                           type="button"
@@ -714,64 +751,98 @@ export default function MemberPage() {
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500">
-                        {["日", "月", "火", "水", "木", "金", "土"].map((w) => (
-                          <div key={w} className="py-1">
-                            {w}
+                      {changeDateView === "calendar" ? (
+                        <>
+                          <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500">
+                            {["日", "月", "火", "水", "木", "金", "土"].map((w) => (
+                              <div key={w} className="py-1">
+                                {w}
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
 
-                      <div className="grid grid-cols-7 gap-1">
-                        {(() => {
-                          const first = changeMonth.startOf("month");
-                          const startDow = first.weekday % 7;
-                          const daysInMonth = changeMonth.daysInMonth ?? 31;
-                          return Array.from({ length: 42 }, (_, idx) => {
-                            const dayNum = idx - startDow + 1;
-                            const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
-                            const ymd = inMonth ? changeMonth.set({ day: dayNum }).toISODate()! : "";
-                            const meta = ymd ? changeDaysByDate.get(ymd) : null;
-                            const status = meta?.status ?? "full";
-                            const symbol = status === "available" ? "○" : status === "limited" ? "△" : "×";
-                            const disabled =
-                              !inMonth ||
-                              isCrossDayRescheduleDateDisabled({
-                                ymd,
-                                todayYmd,
-                                slotCount: meta?.slotCount ?? 0,
+                          <div className="grid grid-cols-7 gap-1">
+                            {(() => {
+                              const first = changeMonth.startOf("month");
+                              const startDow = first.weekday % 7;
+                              const daysInMonth = changeMonth.daysInMonth ?? 31;
+                              return Array.from({ length: 42 }, (_, idx) => {
+                                const dayNum = idx - startDow + 1;
+                                const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+                                const ymd = inMonth ? changeMonth.set({ day: dayNum }).toISODate()! : "";
+                                const meta = ymd ? changeDaysByDate.get(ymd) : null;
+                                const status = meta?.status ?? "full";
+                                const symbol = status === "available" ? "○" : status === "limited" ? "△" : "×";
+                                const disabled =
+                                  !inMonth ||
+                                  isCrossDayRescheduleDateDisabled({
+                                    ymd,
+                                    todayYmd,
+                                    slotCount: meta?.slotCount ?? 0,
+                                  });
+                                const selected = ymd && changeSelectedDate === ymd;
+
+                                return (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    disabled={disabled}
+                                    onClick={() => {
+                                      setChangeSelectedDate(ymd);
+                                      setChangeSlots(null);
+                                    }}
+                                    className={[
+                                      "aspect-square rounded-xl border p-2 text-left transition-colors",
+                                      !inMonth ? "border-transparent bg-transparent" : "border-slate-200 bg-white",
+                                      disabled && inMonth ? "opacity-50" : "hover:bg-slate-50",
+                                      selected ? "border-slate-900 bg-slate-100" : "",
+                                    ].join(" ")}
+                                  >
+                                    {inMonth ? (
+                                      <div className="flex h-full flex-col justify-between">
+                                        <div className="text-sm font-medium">{dayNum}</div>
+                                        <div className="text-sm font-semibold text-slate-600">{symbol}</div>
+                                      </div>
+                                    ) : (
+                                      <div />
+                                    )}
+                                  </button>
+                                );
                               });
-                            const selected = ymd && changeSelectedDate === ymd;
-
+                            })()}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-2">
+                          {changeDays !== null && changeListDays.length === 0 ? (
+                            <div className="text-sm text-slate-600">この月は空き枠がありません。</div>
+                          ) : null}
+                          {changeListDays.map((d) => {
+                            const symbol =
+                              d.status === "available" ? "○" : d.status === "limited" ? "△" : "×";
+                            const selected = changeSelectedDate === d.date;
                             return (
                               <button
-                                key={idx}
+                                key={d.date}
                                 type="button"
-                                disabled={disabled}
                                 onClick={() => {
-                                  setChangeSelectedDate(ymd);
+                                  setChangeSelectedDate(d.date);
                                   setChangeSlots(null);
                                 }}
                                 className={[
-                                  "aspect-square rounded-xl border p-2 text-left transition-colors",
-                                  !inMonth ? "border-transparent bg-transparent" : "border-slate-200 bg-white",
-                                  disabled && inMonth ? "opacity-50" : "hover:bg-slate-50",
-                                  selected ? "border-slate-900 bg-slate-100" : "",
+                                  "flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left",
+                                  selected ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50",
                                 ].join(" ")}
                               >
-                                {inMonth ? (
-                                  <div className="flex h-full flex-col justify-between">
-                                    <div className="text-sm font-medium">{dayNum}</div>
-                                    <div className="text-sm font-semibold text-slate-600">{symbol}</div>
-                                  </div>
-                                ) : (
-                                  <div />
-                                )}
+                                <span className="text-sm font-semibold">{formatDateLabel(d.date)}</span>
+                                <span className="text-xs font-medium text-slate-600">
+                                  {symbol} {d.slotCount}枠
+                                </span>
                               </button>
                             );
-                          });
-                        })()}
-                      </div>
+                          })}
+                        </div>
+                      )}
 
                       {changeDays === null ? <div className="text-sm text-slate-600">空き日を取得中…</div> : null}
                       {changeSelectedDate ? (
