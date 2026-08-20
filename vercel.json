@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/mid-month-low-booking-line",
       "schedule": "0 1 15 * *"
+    },
+    {
+      "path": "/api/cron/goal-hearing-monday-line",
+      "schedule": "0 22 * * 0"
     }
   ]
 }
