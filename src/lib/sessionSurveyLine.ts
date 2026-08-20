@@ -357,6 +357,7 @@ export async function sendNextBookingLineForInvite(
     memberCode: params.memberCode,
     lineChannelKey: params.lineChannelKey,
     storeName: params.storeName,
+    inviteToken: params.inviteId,
     bookingUrl: nextBookingPageUrlFromInviteToken(params.inviteId),
     offer,
   });

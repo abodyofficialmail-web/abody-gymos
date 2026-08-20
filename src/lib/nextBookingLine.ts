@@ -7,7 +7,14 @@ import {
   normalizeLineChannelKey,
   type LineChannelKey,
 } from "@/lib/lineChannel";
-import { nextBookingTargetCopy, type NextBookingOffer } from "@/lib/sessionSurveyNextBooking";
+import {
+  nextBookingTargetCopy,
+  type NextBookingOffer,
+  type SuggestedBookingSlot,
+} from "@/lib/sessionSurveyNextBooking";
+
+/** Flex carousel の上限は 12。枠カード + 末尾の「他の時間」用に残す */
+const SLOT_CARDS_MAX = 10;
 
 export function nextBookingPageUrl(query: string): string {
   const q = query.startsWith("?") ? query.slice(1) : query;
@@ -18,80 +25,244 @@ export function nextBookingPageUrlFromInviteToken(inviteToken: string): string {
   return nextBookingPageUrl(`token=${encodeURIComponent(inviteToken)}`);
 }
 
+export function nextBookingPageUrlForSlot(
+  inviteToken: string,
+  slot: Pick<SuggestedBookingSlot, "start_at" | "end_at">
+): string {
+  return nextBookingPageUrl(
+    new URLSearchParams({
+      token: inviteToken,
+      start_at: slot.start_at,
+      end_at: slot.end_at,
+    }).toString()
+  );
+}
+
+function absoluteAppPath(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
+  return `${getAppUrl()}${path}`;
+}
+
+function slotBubble(params: {
+  storeName: string;
+  slot: SuggestedBookingSlot;
+  bookingUrl: string;
+}): object {
+  return {
+    type: "bubble",
+    size: "kilo",
+    header: {
+      type: "box",
+      layout: "vertical",
+      backgroundColor: "#059669",
+      paddingAll: "16px",
+      contents: [
+        {
+          type: "text",
+          text: params.storeName,
+          size: "xs",
+          color: "#d1fae5",
+        },
+        {
+          type: "text",
+          text: params.slot.date_label,
+          weight: "bold",
+          size: "lg",
+          color: "#ffffff",
+          wrap: true,
+        },
+      ],
+    },
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "16px",
+      contents: [
+        {
+          type: "text",
+          text: params.slot.time_label,
+          weight: "bold",
+          size: "xl",
+          color: "#065f46",
+        },
+        {
+          type: "text",
+          text: params.slot.match_label || "空き枠",
+          size: "xs",
+          color: "#64748b",
+          wrap: true,
+        },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "12px",
+      contents: [
+        {
+          type: "button",
+          style: "primary",
+          color: "#059669",
+          height: "sm",
+          action: {
+            type: "uri",
+            label: "この枠で予約する",
+            uri: params.bookingUrl,
+          },
+        },
+      ],
+    },
+  };
+}
+
+function otherTimesBubble(bookingSiteUrl: string): object {
+  return {
+    type: "bubble",
+    size: "kilo",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      paddingAll: "16px",
+      contents: [
+        {
+          type: "text",
+          text: "他の時間がいい場合",
+          weight: "bold",
+          size: "md",
+          color: "#0f172a",
+          wrap: true,
+        },
+        {
+          type: "text",
+          text: "予約サイトから日時を選べます。",
+          size: "sm",
+          color: "#64748b",
+          wrap: true,
+        },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "12px",
+      contents: [
+        {
+          type: "button",
+          style: "secondary",
+          height: "sm",
+          action: {
+            type: "uri",
+            label: "予約サイトを開く",
+            uri: bookingSiteUrl,
+          },
+        },
+      ],
+    },
+  };
+}
+
+function emptySlotsBubble(params: { bookingUrl: string; copy: string }): object {
+  return {
+    type: "bubble",
+    size: "mega",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        {
+          type: "text",
+          text: "次回のご予約",
+          weight: "bold",
+          size: "lg",
+          color: "#065f46",
+        },
+        {
+          type: "text",
+          text: `${params.copy}\nいま希望時間の空きが見つかりませんでした。`,
+          wrap: true,
+          size: "sm",
+          color: "#334155",
+        },
+        {
+          type: "button",
+          style: "primary",
+          color: "#059669",
+          height: "sm",
+          action: {
+            type: "uri",
+            label: "予約サイトを開く",
+            uri: params.bookingUrl,
+          },
+        },
+      ],
+    },
+  };
+}
+
 export function buildNextBookingFlexMessage(params: {
   storeName: string;
-  bookingUrl: string;
+  inviteToken: string;
+  bookingUrl?: string;
   offer: NextBookingOffer;
 }): object {
   const store = params.storeName.trim() || "店舗";
-  const slotLines = params.offer.slots.slice(0, 5).map((s) => `・${s.date_label} ${s.time_label}`);
-  const preferred = params.offer.preferred_labels.length
-    ? `希望時間: ${params.offer.preferred_labels.join(" / ")}`
-    : null;
+  const listUrl = params.bookingUrl ?? nextBookingPageUrlFromInviteToken(params.inviteToken);
+  const slots = params.offer.slots.slice(0, SLOT_CARDS_MAX);
 
-  const bodyContents: object[] = [
-    {
-      type: "text",
-      text: "次回のご予約",
-      weight: "bold",
-      size: "lg",
-      color: "#065f46",
-    },
-    {
-      type: "text",
-      text: `${nextBookingTargetCopy(params.offer.monthly_average)}\n${store}の空きです。`,
-      wrap: true,
-      size: "sm",
-      color: "#334155",
-    },
-  ];
-
-  if (preferred) {
-    bodyContents.push({
-      type: "text",
-      text: preferred,
-      wrap: true,
-      size: "xs",
-      color: "#64748b",
-    });
+  if (!slots.length) {
+    return {
+      type: "flex",
+      altText: "次回のご予約：いま希望時間の空きが見つかりませんでした",
+      contents: emptySlotsBubble({
+        bookingUrl: absoluteAppPath(params.offer.booking_url || "/booking"),
+        copy: nextBookingTargetCopy(params.offer.monthly_average),
+      }),
+    };
   }
 
-  if (slotLines.length) {
-    bodyContents.push({
-      type: "text",
-      text: slotLines.join("\n"),
-      wrap: true,
-      size: "sm",
-      color: "#1e293b",
-    });
-  }
-
-  bodyContents.push({
-    type: "button",
-    style: "primary",
-    color: "#059669",
-    height: "sm",
-    action: {
-      type: "uri",
-      label: "この場で予約する",
-      uri: params.bookingUrl,
-    },
-  });
+  const bubbles: object[] = slots.map((slot) =>
+    slotBubble({
+      storeName: store,
+      slot,
+      bookingUrl: nextBookingPageUrlForSlot(params.inviteToken, slot),
+    })
+  );
+  bubbles.push(otherTimesBubble(absoluteAppPath(params.offer.booking_url || listUrl)));
 
   return {
     type: "flex",
-    altText: "次回のご予約：通いやすい時間の空きからこの場で確定できます",
+    altText: "次回のご予約：カードを横にスライドして、通いやすい空き枠からこの場で確定できます",
     contents: {
-      type: "bubble",
-      size: "mega",
-      body: {
-        type: "box",
-        layout: "vertical",
-        spacing: "md",
-        contents: bodyContents,
-      },
+      type: "carousel",
+      contents: bubbles,
     },
   };
+}
+
+export function buildNextBookingLineMessages(params: {
+  storeName: string;
+  inviteToken: string;
+  bookingUrl?: string;
+  offer: NextBookingOffer;
+}): object[] {
+  const store = params.storeName.trim() || "店舗";
+  const preferred = params.offer.preferred_labels.length
+    ? `\n希望時間: ${params.offer.preferred_labels.join(" / ")}`
+    : "";
+  const intro =
+    params.offer.slots.length > 0
+      ? `${nextBookingTargetCopy(params.offer.monthly_average)}\n${store}の空きです。カードを横にスライドして、希望の枠をお選びください。${preferred}`
+      : `${nextBookingTargetCopy(params.offer.monthly_average)}\n${store}の希望時間に、いま空きが見つかりませんでした。`;
+
+  return [
+    { type: "text", text: intro },
+    buildNextBookingFlexMessage(params),
+  ];
 }
 
 async function linePushMessages(token: string, to: string, messages: object[]): Promise<boolean> {
@@ -116,11 +287,13 @@ export async function pushNextBookingInviteLine(params: {
   memberCode?: string | null;
   lineChannelKey?: string | null;
   storeName: string;
-  bookingUrl: string;
+  inviteToken: string;
+  bookingUrl?: string;
   offer: NextBookingOffer;
 }): Promise<boolean> {
-  const flex = buildNextBookingFlexMessage({
+  const messages = buildNextBookingLineMessages({
     storeName: params.storeName,
+    inviteToken: params.inviteToken,
     bookingUrl: params.bookingUrl,
     offer: params.offer,
   });
@@ -150,7 +323,7 @@ export async function pushNextBookingInviteLine(params: {
     tried.add(token);
     const reachable = await lineMemberProfileReachable(token, params.lineUserId);
     if (!reachable) continue;
-    const sent = await linePushMessages(token, params.lineUserId, [flex]);
+    const sent = await linePushMessages(token, params.lineUserId, messages);
     if (sent) return true;
   }
 

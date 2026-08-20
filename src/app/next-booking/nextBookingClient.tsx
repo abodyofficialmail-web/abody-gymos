@@ -15,6 +15,25 @@ type SuggestedSlot = {
   match_label: string;
 };
 
+function slotFromQuery(startAt: string, endAt: string): SuggestedSlot {
+  const start = new Date(startAt);
+  const end = new Date(endAt);
+  const dateLabel = Number.isNaN(start.getTime())
+    ? startAt
+    : start.toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "short" });
+  const time = (d: Date) =>
+    Number.isNaN(d.getTime())
+      ? ""
+      : d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return {
+    start_at: startAt,
+    end_at: endAt,
+    date_label: dateLabel,
+    time_label: `${time(start)}〜${time(end)}`.replace(/^〜|〜$/g, "") || startAt,
+    match_label: "ご指定の枠",
+  };
+}
+
 type NextBookingOffer = {
   eligible: boolean;
   monthly_average: number;
@@ -53,6 +72,13 @@ export default function NextBookingPage() {
     const data = json as Payload;
     setPayload(data);
     setOffer(data.next_booking);
+    const params = new URLSearchParams(window.location.search);
+    const startAt = params.get("start_at");
+    const endAt = params.get("end_at");
+    if (startAt && endAt && data.next_booking.eligible) {
+      const found = data.next_booking.slots.find((s) => s.start_at === startAt && s.end_at === endAt);
+      setPending(found ?? slotFromQuery(startAt, endAt));
+    }
   }, []);
 
   useEffect(() => {
