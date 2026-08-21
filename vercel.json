@@ -22,7 +22,7 @@
     },
     {
       "path": "/api/cron/session-end-next-booking",
-      "schedule": "*/10 * * * *"
+      "schedule": "* * * * *"
     },
     {
       "path": "/api/cron/mid-month-low-booking-line",

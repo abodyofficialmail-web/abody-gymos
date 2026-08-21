@@ -4,9 +4,9 @@ import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { upsertSessionSurveyInvite, sendNextBookingLineForInvite } from "@/lib/sessionSurveyLine";
 
 const TZ = "Asia/Tokyo";
-/** 終了の 5〜15 分後に送る（10分間隔 cron で拾う） */
-const WINDOW_MIN = 5;
-const WINDOW_MAX = 15;
+/** 終了の約1分後に送る（1分間隔 cron で拾う） */
+const WINDOW_MIN = 1;
+const WINDOW_MAX = 3;
 
 function mustCronAuth(req: Request): boolean {
   const reportSecret = process.env.REPORT_CRON_SECRET?.trim();
@@ -79,7 +79,7 @@ type ReservationRow = {
 };
 
 /**
- * セッション終了 5〜15 分後に、対象会員へ次回予約カードを送る。
+ * セッション終了の約1分後に、対象会員へ次回予約カードを送る。
  */
 export async function GET(req: Request) {
   try {
