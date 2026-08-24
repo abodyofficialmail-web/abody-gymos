@@ -1,0 +1,65 @@
+name: Sync Trainer Shifts
+
+# シフト同期（status=draft のみ・予約サイト非公開）
+# 必要な Secrets: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "YYYY-MM (現在は 2026-09 のみ)"
+        required: true
+        default: "2026-09"
+        type: choice
+        options:
+          - "2026-09"
+      dry_run:
+        description: "dry-run（DB更新しない）"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: sync-shifts-${{ github.event.inputs.month }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Preflight
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${NEXT_PUBLIC_SUPABASE_URL:-}" || { echo "missing NEXT_PUBLIC_SUPABASE_URL"; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "missing SUPABASE_SERVICE_ROLE_KEY"; exit 1; }
+
+      - name: Sync shifts (draft)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          SCRIPT="scripts/sync-final-shifts-${{ github.event.inputs.month }}.mjs"
+          test -f "$SCRIPT" || { echo "script not found: $SCRIPT"; exit 1; }
+          ARGS=()
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          node "$SCRIPT" "${ARGS[@]}"
