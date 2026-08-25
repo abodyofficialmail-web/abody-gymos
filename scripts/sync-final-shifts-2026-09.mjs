@@ -44,17 +44,30 @@ const RYO_SCHEDULE = [
 // 9/20以降 りょう 新宿（指定シフトを店舗変更・9/23含む）
 const RYO_SHINJUKU = new Set(["2026-09-22", "2026-09-23", "2026-09-24", "2026-09-26", "2026-09-28", "2026-09-30"]);
 
-// 恵比寿: 平日16-22 / 土曜休 / 日曜11-17
-// W2-W3 shuffle + 枠数補強（ベース以外の店舗）
-const SHUFFLE = [
-  ["2026-09-08", "ひろむ", "恵比寿", "16:00", "22:00"], ["2026-09-09", "ひろむ", "恵比寿", "16:00", "22:00"],
-  ["2026-09-10", "せいや", "恵比寿", "16:00", "22:00"], ["2026-09-11", "ひろむ", "恵比寿", "16:00", "22:00"],
-  ["2026-09-17", "せいや", "恵比寿", "16:00", "22:00"], ["2026-09-18", "せいや", "恵比寿", "16:00", "22:00"],
-  ["2026-09-25", "せいや", "恵比寿", "16:00", "22:00"],
-  ["2026-09-21", "ゆうと", "恵比寿", "16:00", "22:00"],
+// 恵比寿: 平日16-22 / 土曜休 / 日曜11-17 / ~190枠
+const EBISU_SHIFTS = [
+  ["2026-09-01", "ひろむ", "16:00", "22:00"],
+  ["2026-09-08", "ひろむ", "16:00", "22:00"],
+  ["2026-09-09", "ひろむ", "16:00", "22:00"],
+  ["2026-09-10", "せいや", "16:00", "22:00"],
+  ["2026-09-11", "ひろむ", "16:00", "22:00"],
+  ["2026-09-15", "ゆうと", "16:00", "22:00"],
+  ["2026-09-16", "ゆうと", "16:00", "22:00"],
+  ["2026-09-17", "ゆうと", "16:00", "22:00"],
+  ["2026-09-17", "せいや", "16:00", "22:00"],
+  ["2026-09-18", "ゆうと", "16:00", "22:00"],
+  ["2026-09-18", "せいや", "16:00", "22:00"],
+  ["2026-09-21", "ゆうと", "16:00", "22:00"],
+  ["2026-09-22", "ゆうと", "16:00", "22:00"],
+  ["2026-09-23", "ゆうと", "16:00", "22:00"],
+  ["2026-09-24", "ゆうと", "16:00", "22:00"],
+  ["2026-09-25", "ゆうと", "16:00", "22:00"],
+  ["2026-09-25", "せいや", "16:00", "22:00"],
+  ["2026-09-29", "ゆうと", "16:00", "22:00"],
+  ["2026-09-30", "ゆうと", "16:00", "22:00"],
 ];
-function hasShuffle(date, trainer) {
-  return SHUFFLE.some(([d, t]) => d === date && t === trainer);
+function hasEbisuShift(date, trainer) {
+  return EBISU_SHIFTS.some(([d, t]) => d === date && t === trainer);
 }
 
 function norm(s) {
@@ -136,18 +149,9 @@ function buildRows() {
     rows.push(row(date, start, end, "たけはる", "桜木町"));
   }
 
-  // ゆうと 恵比寿 9/15-（平日16-22のみ。土曜休・日曜はゆうと休みのためなし）
-  const yutoEbisu = [
-    ["2026-09-15", "16:00", "22:00"], ["2026-09-16", "16:00", "22:00"], ["2026-09-17", "16:00", "22:00"],
-    ["2026-09-18", "16:00", "22:00"],
-    ["2026-09-22", "16:00", "22:00"], ["2026-09-23", "16:00", "22:00"], ["2026-09-24", "16:00", "22:00"],
-    ["2026-09-25", "16:00", "22:00"],
-    ["2026-09-29", "16:00", "22:00"], ["2026-09-30", "16:00", "22:00"],
-  ];
-  for (const [date, start, end] of yutoEbisu) {
-    if (YUTO_OFF.has(date)) continue;
-    if (hasShuffle(date, "ゆうと")) continue;
-    rows.push(row(date, start, end, "ゆうと", "恵比寿"));
+  // 恵比寿（平日16-22 / 土曜休 / ~190枠・EBISU_SHIFTS が正）
+  for (const [date, trainer, start, end] of EBISU_SHIFTS) {
+    rows.push(row(date, start, end, trainer, "恵比寿"));
   }
 
   // ゆうと 新宿 9/15-（恵比寿と同日不可・こうへい日はAMのみ）
@@ -159,7 +163,7 @@ function buildRows() {
   ];
   for (const [date, start, end] of yutoShinjuku) {
     if (YUTO_OFF.has(date)) continue;
-    if (hasShuffle(date, "ゆうと")) continue;
+    if (hasEbisuShift(date, "ゆうと")) continue;
     rows.push(row(date, start, end, "ゆうと", "新宿"));
   }
 
@@ -183,7 +187,7 @@ function buildRows() {
   ];
   for (const [date, start, end] of seiyaUeno) {
     if (SEIYA_OFF.has(date)) continue;
-    if (hasShuffle(date, "せいや")) continue;
+    if (hasEbisuShift(date, "せいや")) continue;
     const endCap = SEIYA_PARTIAL[date] ?? end;
     rows.push(row(date, start, endCap, "せいや", "上野"));
   }
@@ -213,16 +217,9 @@ function buildRows() {
   ];
   for (const [date, start, end] of hiromuUeno) {
     if (HIRO_OFF.has(date)) continue;
-    if (hasShuffle(date, "ひろむ")) continue;
+    if (hasEbisuShift(date, "ひろむ")) continue;
     rows.push(row(date, start, end, "ひろむ", "上野"));
   }
-
-  // shuffle
-  for (const [date, trainer, store, start, end] of SHUFFLE) {
-    rows.push(row(date, start, end, trainer, store));
-  }
-
-  // りょう 9/23新宿・ひろむ新宿シャッフルは上で反映済み
 
   return rows;
 }
