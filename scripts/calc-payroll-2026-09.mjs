@@ -143,6 +143,8 @@ async function loadDbOverrides() {
   const storeIdByName = Object.fromEntries((stores ?? []).map((s) => [s.name, s.id]));
   const trainerIdByName = Object.fromEntries((trainers ?? []).map((t) => [t.display_name, t.id]));
 
+  const transportDump = {};
+
   for (const t of trainers ?? []) {
     const cfg = TRAINER_CONFIG[t.display_name];
     if (!cfg) continue;
@@ -154,9 +156,14 @@ async function loadDbOverrides() {
     const tid = trainerIdByName[name];
     if (!tid) continue;
     const { data: tc } = await supabase.from("trainer_transport_costs").select("store_id, cost").eq("trainer_id", tid);
+    TRAINER_CONFIG[name].transportByStore = {};
     for (const row of tc ?? []) {
       TRAINER_CONFIG[name].transportByStore[row.store_id] = Number(row.cost ?? 0);
     }
+    transportDump[name] = (tc ?? []).map((row) => ({
+      store: Object.entries(storeIdByName).find(([, id]) => id === row.store_id)?.[0] ?? row.store_id,
+      cost: Number(row.cost ?? 0),
+    }));
     const { data: ex } = await supabase.from("trainer_expenses").select("title, amount, type").eq("trainer_id", tid);
     TRAINER_CONFIG[name].expenses = ex ?? [];
     const monthlyFixed = (ex ?? []).find((e) => e.type === "monthly" && Number(e.amount) > 0);
@@ -165,7 +172,11 @@ async function loadDbOverrides() {
     }
   }
 
-  return { source: "db", storeIdByName, trainerIdByName };
+  return { source: "db", storeIdByName, trainerIdByName, transportDump };
+}
+
+function storeNameById() {
+  return Object.fromEntries(Object.entries(STORE_IDS).map(([n, id]) => [id, n]));
 }
 
 function rowsForTrainer(allRows, name) {
@@ -183,6 +194,7 @@ function rowsForTrainer(allRows, name) {
 async function main() {
   const meta = await loadDbOverrides();
   const allRows = buildRows();
+  const nameById = storeNameById();
   const targetNames = ["ゆうと", "たけはる", "ひろむ", "りょう", "せいや", "こうへい"];
   const results = [];
 
@@ -224,6 +236,18 @@ async function main() {
         ? fixedYen + payroll.transportYen + payroll.expensesYen + payroll.passYen
         : payroll.totalYen + extraBonusYen;
 
+    const storeVisits = {};
+    for (const s of shifts) {
+      const sn = nameById[s.store_id] ?? s.store_id;
+      const k = `${s.shift_date}|${sn}`;
+      storeVisits[k] = (cfg.transportByStore[s.store_id] ?? 0);
+    }
+    const transportBreakdown = {};
+    for (const [k, cost] of Object.entries(storeVisits)) {
+      const store = k.split("|")[1];
+      transportBreakdown[store] = (transportBreakdown[store] ?? 0) + cost;
+    }
+
     results.push({
       name,
       type: cfg.type,
@@ -233,6 +257,8 @@ async function main() {
       fixedMonthlyYen: cfg.fixedMonthlyYen,
       workYen: cfg.type === "契約社員" ? fixedYen : payroll.workYen,
       transportYen: payroll.transportYen,
+      transportBreakdown,
+      transportRates: meta.transportDump?.[name] ?? [],
       expensesYen: payroll.expensesYen,
       bonusYen: cfg.type === "契約社員" ? 0 : payroll.bonusYen,
       bonusDays: cfg.type === "契約社員" ? [] : payroll.bonusDays,
@@ -249,6 +275,7 @@ async function main() {
       {
         month: "2026-09",
         configSource: meta.source,
+        transportConfig: meta.transportDump ?? null,
         note:
           meta.source === "fallback"
             ? "交通費・経費・定期代はDB未接続のため0。本番は node --env-file=.env.local で再実行してください。"
