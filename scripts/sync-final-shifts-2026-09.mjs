@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { fileURLToPath } from "url";
 
 /**
  * 2026-09 シフト同期（draft のみ・予約サイト非公開）
@@ -29,7 +30,7 @@ const DAIKI_TAKE_SHINJUKU_DAYS = new Set(["2026-09-01", "2026-09-03", "2026-09-0
 const SHINJUKU_TRAINING_DAYS = ["2026-09-02", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14"];
 
 // たけはる 桜木町: 1日おきにAM(10-13)削除→16時開始（中抜け1回=+1h換算）
-const TAKE_SAKURA_AM_OFF = new Set([
+export const TAKE_SAKURA_AM_OFF = new Set([
   "2026-09-16", "2026-09-17", "2026-09-19", "2026-09-21", "2026-09-25", "2026-09-29",
 ]);
 const TAKE_SAKURA_PM_END = { "2026-09-21": "21:00" };
@@ -169,7 +170,7 @@ function row(date, start, end, trainer, store, break_minutes = 0) {
   };
 }
 
-function buildRows() {
+export function buildRows() {
   const rows = [];
 
   // こうへい 新宿
@@ -435,7 +436,11 @@ async function main() {
   console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: payload.length, status: "draft", ...summary }, null, 2));
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+export { summarize, effectiveStoreSlots, validateNoTrainerOverlap };
