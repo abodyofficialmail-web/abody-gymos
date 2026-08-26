@@ -46,10 +46,12 @@ const RYO_SCHEDULE = [
   ["2026-09-27", "09:00", "15:00"], ["2026-09-28", "09:00", "20:00"], ["2026-09-29", "10:00", "16:00"],
   ["2026-09-30", "14:00", "21:30"],
 ];
-// りょう 新宿: 桜木町過剰分を移動（8月比+10%≈490枠に合わせる・9/16以降はたけはると2ブース優先）
+// りょう 新宿: 桜木町過剰分を移動（8月比+10%≈490枠・9/16以降はたけはると2ブース優先）
+// ※9/15までの研修時間帯と重なる日は buildRows 内で桜木町へ自動退避
 const RYO_SHINJUKU = new Set([
   "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06",
   "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-12", "2026-09-13", "2026-09-17",
+  "2026-09-21", "2026-09-28",
 ]);
 
 // ゆうと: 月140h / 9/15以降は恵比寿ベース / 9/14まで恵比寿は研修兼ね4日程度
@@ -82,6 +84,21 @@ function hasEbisuShift(date, trainer) {
 
 function overlaps(start, end, blockStart, blockEnd) {
   return toMinutes(start) < toMinutes(blockEnd) && toMinutes(end) > toMinutes(blockStart);
+}
+
+/** 9/15までの新宿研修: ゆうと・たけはるが同時にいる時間帯 */
+function shinjukuTrainingBlocks(date) {
+  if (date > "2026-09-15" || !SHINJUKU_TRAINING_DAYS.includes(date)) return [];
+  if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) return [];
+  const blocks = [["10:00", "13:00"]];
+  if (!KOHEI_DAYS.has(date)) {
+    blocks.push(["16:00", "22:00"]);
+  }
+  return blocks;
+}
+
+function conflictsShinjukuTraining(date, start, end) {
+  return shinjukuTrainingBlocks(date).some(([bs, be]) => overlaps(start, end, bs, be));
 }
 
 function hasEbisuOverlap(date, trainer, start, end) {
@@ -119,9 +136,10 @@ function row(date, start, end, trainer, store, break_minutes = 0) {
 function buildRows() {
   const rows = [];
 
-  // りょう（基本桜木町・過剰分は新宿へ）
+  // りょう（基本桜木町・過剰分は新宿へ。9/15まで研修時間帯は桜木町へ退避）
   for (const [date, start, end] of RYO_SCHEDULE) {
-    const store = RYO_SHINJUKU.has(date) ? "新宿" : "桜木町";
+    let store = RYO_SHINJUKU.has(date) ? "新宿" : "桜木町";
+    if (store === "新宿" && conflictsShinjukuTraining(date, start, end)) store = "桜木町";
     rows.push(row(date, start, end, "りょう", store));
   }
 
@@ -130,12 +148,13 @@ function buildRows() {
     rows.push(row(date, "17:00", "22:00", "こうへい", "新宿"));
   }
 
-  // だいき 新宿 9-13（水曜除外）
+  // だいき 新宿 9-13（水曜除外・研修時間帯と重複する日は除外）
   for (const date of DAIKI_DAYS) {
+    if (conflictsShinjukuTraining(date, "09:00", "13:00")) continue;
     rows.push(row(date, "09:00", "13:00", "だいき", "新宿"));
   }
 
-  // 9/1-14 新宿研修: ゆうと・たけはる 同時間（ゆうと恵比寿4日はPMを恵比寿へ）
+  // 9/1-14 新宿研修: ゆうと・たけはる 同時間（こうへい日はPMなし・恵比寿4日はゆうとPMなし）
   for (const date of SHINJUKU_TRAINING_DAYS) {
     if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) continue;
     rows.push(row(date, "10:00", "13:00", "ゆうと", "新宿"));
@@ -242,6 +261,7 @@ function buildRows() {
   ];
   for (const [date, start, end] of hiromuShinjuku) {
     if (HIRO_OFF.has(date)) continue;
+    if (conflictsShinjukuTraining(date, start, end)) continue;
     rows.push(row(date, start, end, "ひろむ", "新宿"));
   }
 
