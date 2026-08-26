@@ -24,7 +24,9 @@ const HIRO_OFF = new Set([
 const KOHEI_DAYS = new Set(["2026-09-02", "2026-09-09", "2026-09-17", "2026-09-24", "2026-09-29"]);
 // だいき 新宿 09-13 — 9/7はたけはる9-18へ振替
 const DAIKI_DAYS = ["2026-09-06", "2026-09-13", "2026-09-14"];
-const SHINJUKU_TRAINING_DAYS = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14"];
+// 9/1,3,4: だいき+たけはる 新宿（ゆうとは恵比寿16-22へ振替）
+const DAIKI_TAKE_SHINJUKU_DAYS = new Set(["2026-09-01", "2026-09-03", "2026-09-04"]);
+const SHINJUKU_TRAINING_DAYS = ["2026-09-02", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14"];
 
 // たけはる 桜木町: 1日おきにAM(10-13)削除→16時開始（中抜け1回=+1h換算）
 const TAKE_SAKURA_AM_OFF = new Set([
@@ -39,7 +41,7 @@ const TAKE_SAKURA_DAYS = [
 const TAKE_SHINJUKU_EXTRA = [["2026-09-07", "09:00", "18:00"]];
 
 // たけはる 新宿研修: AMを10-16に延長（+3h×3日=+9h）
-const TAKE_SHINJUKU_AM_EXTENDED = new Set(["2026-09-02", "2026-09-04", "2026-09-09"]);
+const TAKE_SHINJUKU_AM_EXTENDED = new Set(["2026-09-02", "2026-09-09"]);
 
 const SEIYA_OFF = new Set([
   "2026-09-01", "2026-09-05", "2026-09-08", "2026-09-09", "2026-09-12",
@@ -69,11 +71,13 @@ const RYO_SHINJUKU = new Set([
   "2026-09-21", "2026-09-28",
 ]);
 
-// ゆうと: 月140h / 9/15以降は恵比寿ベース
-const YUTO_EBISU_EARLY = new Set(); // 研修中はたけはると新宿PMを同期（恵比寿振替なし）
+// ゆうと: 月150h前後 / 9/1,3,4は恵比寿16-22 / 9/15以降は恵比寿ベース / それ以外の研修中はたけはると新宿で同時間
 
 // 恵比寿: 平日16-22 / 土曜休 / 日曜11-17 / ~190枠
 const EBISU_SHIFTS = [
+  ["2026-09-01", "ゆうと", "16:00", "22:00"],
+  ["2026-09-03", "ゆうと", "16:00", "22:00"],
+  ["2026-09-04", "ゆうと", "16:00", "22:00"],
   ["2026-09-09", "ひろむ", "16:00", "22:00"],
   ["2026-09-13", "せいや", "11:00", "17:00"],
   ["2026-09-15", "ゆうと", "16:00", "22:00"],
@@ -97,9 +101,17 @@ function overlaps(start, end, blockStart, blockEnd) {
   return toMinutes(start) < toMinutes(blockEnd) && toMinutes(end) > toMinutes(blockStart);
 }
 
-/** 9/15までの新宿研修: ゆうと・たけはるが同時にいる時間帯 */
+/** 9/15までの新宿研修: ゆうと・たけはる または だいき・たけはるが同時にいる時間帯 */
 function shinjukuTrainingBlocks(date) {
-  if (date > "2026-09-15" || !SHINJUKU_TRAINING_DAYS.includes(date)) return [];
+  if (date > "2026-09-15") return [];
+
+  if (DAIKI_TAKE_SHINJUKU_DAYS.has(date)) {
+    if (TAKE_OFF.has(date)) return [];
+    const amEnd = date === "2026-09-04" ? "16:00" : "13:00";
+    return [["10:00", amEnd], ["16:00", "22:00"]];
+  }
+
+  if (!SHINJUKU_TRAINING_DAYS.includes(date)) return [];
   if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) return [];
   const blocks = [["10:00", "13:00"]];
   if (!KOHEI_DAYS.has(date)) {
@@ -168,7 +180,17 @@ function buildRows() {
     rows.push(row(date, "09:00", "13:00", "だいき", "新宿"));
   }
 
-  // 9/1-14 新宿研修: ゆうと・たけはる 同時間（こうへい日はPMなし）
+  // 9/1,3,4: だいき+たけはる 新宿（ゆうとは恵比寿16-22）
+  for (const date of DAIKI_TAKE_SHINJUKU_DAYS) {
+    if (TAKE_OFF.has(date)) continue;
+    const amEnd = date === "2026-09-04" ? "16:00" : "13:00";
+    rows.push(row(date, "10:00", amEnd, "だいき", "新宿"));
+    rows.push(row(date, "10:00", amEnd, "たけはる", "新宿"));
+    rows.push(row(date, "16:00", "22:00", "だいき", "新宿"));
+    rows.push(row(date, "16:00", "22:00", "たけはる", "新宿"));
+  }
+
+  // 9/2-14 新宿研修: ゆうと・たけはる 同時間（こうへい日はPMなし）
   for (const date of SHINJUKU_TRAINING_DAYS) {
     if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) continue;
     const amEnd = TAKE_SHINJUKU_AM_EXTENDED.has(date) ? "16:00" : "13:00";
