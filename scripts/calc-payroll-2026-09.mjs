@@ -165,10 +165,13 @@ async function loadDbOverrides() {
       cost: Number(row.cost ?? 0),
     }));
     const { data: ex } = await supabase.from("trainer_expenses").select("title, amount, type").eq("trainer_id", tid);
-    TRAINER_CONFIG[name].expenses = ex ?? [];
     const monthlyFixed = (ex ?? []).find((e) => e.type === "monthly" && Number(e.amount) > 0);
-    if (monthlyFixed && TRAINER_CONFIG[name].type === "契約社員" && TRAINER_CONFIG[name].fixedMonthlyYen == null) {
+    if (monthlyFixed && TRAINER_CONFIG[name].type === "契約社員") {
+      // 契約社員の月額固定給は trainer_expenses(monthly) が正本。二重計上を避ける。
       TRAINER_CONFIG[name].fixedMonthlyYen = Number(monthlyFixed.amount);
+      TRAINER_CONFIG[name].expenses = (ex ?? []).filter((e) => e.type !== "monthly");
+    } else {
+      TRAINER_CONFIG[name].expenses = ex ?? [];
     }
   }
 
@@ -231,9 +234,18 @@ async function main() {
       }
     }
 
+    // 契約社員: 月額固定給 + 交通費 + 日次経費のみ + 定期代（月額経費は固定給に含む）
+    const contractExpensesYen =
+      cfg.type === "契約社員"
+        ? Math.round(
+            payroll.uniqueDays *
+              (cfg.expenses ?? []).filter((e) => e.type === "daily").reduce((s, e) => s + Number(e.amount ?? 0), 0),
+          )
+        : payroll.expensesYen;
+
     const totalYen =
       cfg.type === "契約社員"
-        ? fixedYen + payroll.transportYen + payroll.expensesYen + payroll.passYen
+        ? fixedYen + payroll.transportYen + contractExpensesYen + payroll.passYen
         : payroll.totalYen + extraBonusYen;
 
     const storeVisits = {};
@@ -259,7 +271,7 @@ async function main() {
       transportYen: payroll.transportYen,
       transportBreakdown,
       transportRates: meta.transportDump?.[name] ?? [],
-      expensesYen: payroll.expensesYen,
+      expensesYen: cfg.type === "契約社員" ? contractExpensesYen : payroll.expensesYen,
       bonusYen: cfg.type === "契約社員" ? 0 : payroll.bonusYen,
       bonusDays: cfg.type === "契約社員" ? [] : payroll.bonusDays,
       passYen: payroll.passYen,
