@@ -69,16 +69,12 @@ const RYO_SHINJUKU = new Set([
   "2026-09-21", "2026-09-28",
 ]);
 
-// ゆうと: 月140h / 9/15以降は恵比寿ベース / 9/14まで恵比寿は研修兼ね4日程度
-const YUTO_EBISU_EARLY = new Set(["2026-09-03", "2026-09-04", "2026-09-10", "2026-09-11"]);
+// ゆうと: 月140h / 9/15以降は恵比寿ベース
+const YUTO_EBISU_EARLY = new Set(); // 研修中はたけはると新宿PMを同期（恵比寿振替なし）
 
 // 恵比寿: 平日16-22 / 土曜休 / 日曜11-17 / ~190枠
 const EBISU_SHIFTS = [
-  ["2026-09-03", "ゆうと", "16:00", "22:00"],
-  ["2026-09-04", "ゆうと", "16:00", "22:00"],
   ["2026-09-09", "ひろむ", "16:00", "22:00"],
-  ["2026-09-10", "ゆうと", "16:00", "22:00"],
-  ["2026-09-11", "ゆうと", "16:00", "22:00"],
   ["2026-09-13", "せいや", "11:00", "17:00"],
   ["2026-09-15", "ゆうと", "16:00", "22:00"],
   ["2026-09-16", "ゆうと", "16:00", "22:00"],
@@ -172,15 +168,14 @@ function buildRows() {
     rows.push(row(date, "09:00", "13:00", "だいき", "新宿"));
   }
 
-  // 9/1-14 新宿研修: ゆうと・たけはる 同時間（こうへい日はPMなし・恵比寿4日はゆうとPMなし）
+  // 9/1-14 新宿研修: ゆうと・たけはる 同時間（こうへい日はPMなし）
   for (const date of SHINJUKU_TRAINING_DAYS) {
     if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) continue;
-    rows.push(row(date, "10:00", "13:00", "ゆうと", "新宿"));
-    rows.push(row(date, "10:00", TAKE_SHINJUKU_AM_EXTENDED.has(date) ? "16:00" : "13:00", "たけはる", "新宿"));
+    const amEnd = TAKE_SHINJUKU_AM_EXTENDED.has(date) ? "16:00" : "13:00";
+    rows.push(row(date, "10:00", amEnd, "ゆうと", "新宿"));
+    rows.push(row(date, "10:00", amEnd, "たけはる", "新宿"));
     if (!KOHEI_DAYS.has(date)) {
-      if (!YUTO_EBISU_EARLY.has(date)) {
-        rows.push(row(date, "16:00", "22:00", "ゆうと", "新宿"));
-      }
+      rows.push(row(date, "16:00", "22:00", "ゆうと", "新宿"));
       rows.push(row(date, "16:00", "22:00", "たけはる", "新宿"));
     }
   }
