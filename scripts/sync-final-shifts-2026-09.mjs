@@ -36,6 +36,9 @@ const TAKE_SAKURA_DAYS = [
   "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28", "2026-09-29", "2026-09-30",
 ];
 
+// たけはる 新宿研修: AMを10-16に延長（+3h×3日=+9h）
+const TAKE_SHINJUKU_AM_EXTENDED = new Set(["2026-09-02", "2026-09-04", "2026-09-09"]);
+
 const SEIYA_OFF = new Set([
   "2026-09-01", "2026-09-05", "2026-09-08", "2026-09-09", "2026-09-12",
   "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-19", "2026-09-21",
@@ -171,7 +174,7 @@ function buildRows() {
   for (const date of SHINJUKU_TRAINING_DAYS) {
     if (TAKE_OFF.has(date) || YUTO_OFF.has(date)) continue;
     rows.push(row(date, "10:00", "13:00", "ゆうと", "新宿"));
-    rows.push(row(date, "10:00", "13:00", "たけはる", "新宿"));
+    rows.push(row(date, "10:00", TAKE_SHINJUKU_AM_EXTENDED.has(date) ? "16:00" : "13:00", "たけはる", "新宿"));
     if (!KOHEI_DAYS.has(date)) {
       if (!YUTO_EBISU_EARLY.has(date)) {
         rows.push(row(date, "16:00", "22:00", "ゆうと", "新宿"));
