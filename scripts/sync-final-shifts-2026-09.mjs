@@ -47,7 +47,7 @@ const RYO_SCHEDULE = [
   ["2026-09-30", "14:00", "21:30"],
 ];
 // りょう 新宿: 桜木町過剰分を移動（8月比+10%≈490枠・9/16以降はたけはると2ブース優先）
-// ※9/15までの研修時間帯と重なる日は buildRows 内で桜木町へ自動退避
+// ※新宿は単一ブース。他トレーナーと重なる日は buildRows 内で桜木町へ自動退避
 const RYO_SHINJUKU = new Set([
   "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06",
   "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-12", "2026-09-13", "2026-09-17",
@@ -101,6 +101,16 @@ function conflictsShinjukuTraining(date, start, end) {
   return shinjukuTrainingBlocks(date).some(([bs, be]) => overlaps(start, end, bs, be));
 }
 
+/** 新宿（単一ブース）で既存シフトと時間帯が重なるか */
+function hasShinjukuOverlap(rows, date, start, end) {
+  return rows.some(
+    (r) =>
+      r.store_name === "新宿" &&
+      r.shift_date === date &&
+      overlaps(start, end, r.start_local.slice(0, 5), r.end_local.slice(0, 5)),
+  );
+}
+
 function hasEbisuOverlap(date, trainer, start, end) {
   return EBISU_SHIFTS.some(
     ([d, t, bs, be]) => d === date && t === trainer && overlaps(start, end, bs, be),
@@ -135,13 +145,6 @@ function row(date, start, end, trainer, store, break_minutes = 0) {
 
 function buildRows() {
   const rows = [];
-
-  // りょう（基本桜木町・過剰分は新宿へ。9/15まで研修時間帯は桜木町へ退避）
-  for (const [date, start, end] of RYO_SCHEDULE) {
-    let store = RYO_SHINJUKU.has(date) ? "新宿" : "桜木町";
-    if (store === "新宿" && conflictsShinjukuTraining(date, start, end)) store = "桜木町";
-    rows.push(row(date, start, end, "りょう", store));
-  }
 
   // こうへい 新宿
   for (const date of KOHEI_DAYS) {
@@ -263,6 +266,13 @@ function buildRows() {
     if (HIRO_OFF.has(date)) continue;
     if (conflictsShinjukuTraining(date, start, end)) continue;
     rows.push(row(date, start, end, "ひろむ", "新宿"));
+  }
+
+  // りょう（基本桜木町・過剰分は新宿へ。新宿で他トレーナーと重なる日は桜木町へ退避）
+  for (const [date, start, end] of RYO_SCHEDULE) {
+    let store = RYO_SHINJUKU.has(date) ? "新宿" : "桜木町";
+    if (store === "新宿" && hasShinjukuOverlap(rows, date, start, end)) store = "桜木町";
+    rows.push(row(date, start, end, "りょう", store));
   }
 
   return rows;
