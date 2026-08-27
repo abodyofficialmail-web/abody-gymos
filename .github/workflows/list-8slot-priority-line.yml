@@ -2,6 +2,11 @@ name: List 8slot Priority LINE Targets
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - cursor/aug-expense-ratio-7588
+    paths:
+      - "scripts/list-8slot-priority-line-targets.mjs"
 
 jobs:
   list:
