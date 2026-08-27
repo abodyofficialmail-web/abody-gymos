@@ -1,7 +1,4 @@
-/**
- * 8コマ先取り案内LINE送信対象リスト（scripts/send-june-low-booking-line.mjs）
- * node --env-file=.env.local scripts/list-8slot-priority-line-targets.mjs
- */
+/** 8コマ先取り案内LINE送信対象リスト（scripts/send-june-low-booking-line.mjs） */
 import { createClient } from "@supabase/supabase-js";
 
 const MEMBER_CODES = [
