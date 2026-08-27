@@ -9,6 +9,14 @@ const MIN_SLOTS = 2;
 const TZ = "Asia/Tokyo";
 const SLOT_MIN = 30;
 
+/** 8コマ先取り優先（6月低予約フォロー対象）scripts/send-june-low-booking-line.mjs と同期 */
+const EXCLUDE_PRIORITY_8_CODES = new Set([
+  "EBI006", "EBI012", "EBI026", "EBI024", "EBI009", "EBI021", "EBI010", "EBI015", "EBI031",
+  "SAK009", "SAK043", "SAK033", "SAK049", "SAK050", "SAK044", "SAK025", "SAK028", "SAK017", "SAK030",
+  "UEN052", "UEN053", "UEN042", "UEN001", "UEN033", "UEN058", "UEN051", "UEN049", "UEN031",
+  "UEN009", "UEN039", "UEN002",
+]);
+
 function slotCount(startAt, endAt) {
   const ms = new Date(endAt).getTime() - new Date(startAt).getTime();
   if (ms <= 0) return 0;
@@ -99,6 +107,7 @@ async function main() {
     if (slotTotal < MIN_SLOTS) continue;
 
     const m = memberById[memberId];
+    if (EXCLUDE_PRIORITY_8_CODES.has(String(m?.member_code ?? "").toUpperCase())) continue;
     const homeStore = storeNameById[m?.store_id] ?? null;
 
     const bookings = resList
@@ -135,7 +144,8 @@ async function main() {
     JSON.stringify(
       {
         month: MONTH,
-        criteria: `予約枠（30分単位）が ${MIN_SLOTS} 以上（キャンセル除外・会員のみ）`,
+        criteria: `予約枠（30分単位）が ${MIN_SLOTS} 以上（キャンセル除外・会員のみ・8コマ先取り優先者除外）`,
+        excludedPriority8Count: EXCLUDE_PRIORITY_8_CODES.size,
         memberCount: results.length,
         members: results,
       },
