@@ -41,13 +41,27 @@ async function main() {
   const monthStart = `${MONTH}-01T00:00:00+09:00`;
   const monthEnd = `${MONTH}-30T23:59:59+09:00`;
 
+  const selectWithBlocks =
+    "id, member_id, store_id, trainer_id, start_at, end_at, status, blocks_capacity, session_type";
+  const selectLegacy = "id, member_id, store_id, trainer_id, start_at, end_at, status, session_type";
+
   let { data: reservations, error } = await supabase
     .from("reservations")
-    .select("id, member_id, store_id, trainer_id, start_at, end_at, status, blocks_capacity, session_type")
+    .select(selectWithBlocks)
     .gte("start_at", monthStart)
     .lte("start_at", monthEnd)
     .not("member_id", "is", null);
 
+  if (error?.message?.match(/blocks_capacity|does not exist|column/i)) {
+    const second = await supabase
+      .from("reservations")
+      .select(selectLegacy)
+      .gte("start_at", monthStart)
+      .lte("start_at", monthEnd)
+      .not("member_id", "is", null);
+    reservations = second.data;
+    error = second.error;
+  }
   if (error) throw error;
 
   const active = (reservations ?? []).filter(
