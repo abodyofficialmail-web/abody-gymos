@@ -2,6 +2,11 @@ name: Compare 8slot Lists
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - cursor/compare-8slot-lists-7588
+    paths:
+      - "scripts/compare-8slot-lists.mjs"
 
 jobs:
   compare:
