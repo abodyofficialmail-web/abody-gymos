@@ -113,6 +113,13 @@ async function loadMeta(sb, memberId, yearMonth) {
   }
 }
 
+function generatedTodayJst(meta, now) {
+  const raw = meta?.generatedAt;
+  if (!raw) return false;
+  const g = DateTime.fromISO(String(raw), { zone: TZ });
+  return g.isValid && g.hasSame(now, "day");
+}
+
 function persistOne(code, yearMonth) {
   const r = spawnSync(process.execPath, [GEN, `--code=${code}`, `--month=${yearMonth}`, "--persist"], {
     cwd: ROOT,
@@ -253,8 +260,10 @@ async function main() {
     for (let i = 0; i < eligible.length; i++) {
       const t = eligible[i];
       const existing = await loadMeta(sb, t.id, yearMonth);
-      if (existing?.pagePaths?.length) {
-        console.log(`[persist ${i + 1}/${eligible.length}] ${t.member_code} already persisted`);
+      const refresh = process.argv.includes("--refresh");
+      // 同日の再実行は再開用にスキップ。前日以前の事前生成は月末に上書きする。
+      if (existing?.pagePaths?.length && !refresh && generatedTodayJst(existing, now0)) {
+        console.log(`[persist ${i + 1}/${eligible.length}] ${t.member_code} already persisted today`);
         status.persisted += 1;
         results.push({
           code: t.member_code,
