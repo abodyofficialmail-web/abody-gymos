@@ -29,3 +29,4 @@ jobs:
         run: |
           node scripts/list-trainer-display-billing-members.mjs
           node scripts/fetch-trainer-visibility-price.mjs
+          node scripts/probe-trainer-visibility-tables.mjs
