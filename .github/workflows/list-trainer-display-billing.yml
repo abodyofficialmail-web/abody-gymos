@@ -21,4 +21,10 @@ jobs:
       - env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/list-trainer-display-billing-members.mjs
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          TRAINER_VISIBILITY_PASS_PRICE_ID: ${{ secrets.TRAINER_VISIBILITY_PASS_PRICE_ID }}
+          TRAINER_VISIBILITY_PASS_AMOUNT: ${{ secrets.TRAINER_VISIBILITY_PASS_AMOUNT }}
+          NEXT_PUBLIC_TRAINER_VISIBILITY_PASS_PRICE_YEN: ${{ secrets.NEXT_PUBLIC_TRAINER_VISIBILITY_PASS_PRICE_YEN }}
+        run: |
+          node scripts/list-trainer-display-billing-members.mjs
+          node scripts/fetch-trainer-visibility-price.mjs
