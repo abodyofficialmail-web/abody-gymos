@@ -46,6 +46,8 @@ async function main() {
       passStatus: m.trainer_visibility_pass_status,
       periodEnd: m.trainer_visibility_pass_current_period_end,
       hasStripeSubscription: Boolean(m.trainer_visibility_stripe_subscription_id),
+      stripeSubscriptionId: m.trainer_visibility_stripe_subscription_id ?? null,
+      stripeCustomerId: m.trainer_visibility_stripe_customer_id ?? null,
     }))
     .sort((a, b) => a.memberCode.localeCompare(b.memberCode));
 
