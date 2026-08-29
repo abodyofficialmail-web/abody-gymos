@@ -1,4 +1,4 @@
-/** 担当トレーナー表示パスの課金金額を Stripe から取得 */
+/** 担当トレーナー表示パスの課金金額を Stripe から取得（GH Actions） */
 import { createClient } from "@supabase/supabase-js";
 
 async function fetchStripeSubscription(subscriptionId, stripeKey) {

@@ -7,6 +7,7 @@ on:
       - cursor/aug-expense-ratio-7588
     paths:
       - "scripts/list-trainer-display-billing-members.mjs"
+      - "scripts/fetch-trainer-visibility-price.mjs"
 
 jobs:
   list:
