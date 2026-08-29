@@ -43,9 +43,7 @@ async function main() {
 
   const { data: activeMembers } = await supabase
     .from("members")
-    .select(
-      "member_code, name, display_name, trainer_visibility_pass_status, trainer_visibility_stripe_subscription_id, trainer_visibility_stripe_customer_id",
-    )
+    .select("*")
     .eq("trainer_visibility_pass_status", "active");
 
   const out = {
