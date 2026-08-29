@@ -16,9 +16,51 @@ async function main() {
     /trainer|display|billing|subscription|addon|option|plan|fee|charge|課金/i.test(c),
   );
 
-  const now = new Date().toISOString();
+  // 担当トレーナー表示パス（Stripe）課金会員
+  const { data: billingMembers, error: billingErr } = await supabase
+    .from("members")
+    .select(
+      "id, member_code, name, display_name, email, membership_status, store_id, trainer_visibility_pass_status, trainer_visibility_pass_current_period_end, trainer_visibility_stripe_subscription_id",
+    )
+    .not("trainer_visibility_pass_status", "is", null);
+  if (billingErr) throw billingErr;
 
-  // 未来予約で trainer_id 指定がある会員
+  const { data: stores } = await supabase.from("stores").select("id, name");
+  const storeName = Object.fromEntries((stores ?? []).map((s) => [s.id, s.name]));
+
+  const statusCounts = {};
+  for (const m of billingMembers ?? []) {
+    const st = m.trainer_visibility_pass_status ?? "(null)";
+    statusCounts[st] = (statusCounts[st] ?? 0) + 1;
+  }
+
+  const activeStatuses = new Set(["active", "trialing", "past_due"]);
+  const paying = (billingMembers ?? [])
+    .filter((m) => activeStatuses.has(String(m.trainer_visibility_pass_status ?? "").toLowerCase()))
+    .map((m) => ({
+      memberCode: m.member_code,
+      name: m.display_name || m.name,
+      email: m.email,
+      store: storeName[m.store_id] ?? null,
+      membershipStatus: m.membership_status,
+      passStatus: m.trainer_visibility_pass_status,
+      periodEnd: m.trainer_visibility_pass_current_period_end,
+      hasStripeSubscription: Boolean(m.trainer_visibility_stripe_subscription_id),
+    }))
+    .sort((a, b) => a.memberCode.localeCompare(b.memberCode));
+
+  const allWithPass = (billingMembers ?? [])
+    .map((m) => ({
+      memberCode: m.member_code,
+      name: m.display_name || m.name,
+      store: storeName[m.store_id] ?? null,
+      membershipStatus: m.membership_status,
+      passStatus: m.trainer_visibility_pass_status,
+      periodEnd: m.trainer_visibility_pass_current_period_end,
+    }))
+    .sort((a, b) => a.memberCode.localeCompare(b.memberCode));
+
+  const now = new Date().toISOString();
   const { data: futureWithTrainer } = await supabase
     .from("reservations")
     .select("member_id, trainer_id, start_at, store_id, status")
@@ -70,6 +112,11 @@ async function main() {
         note: "担当トレーナー表示システムの課金フラグは members テーブルに見当たりません",
         memberColumns,
         trainerRelatedColumns: trainerRelatedCols,
+        passStatusCounts: statusCounts,
+        activePayingCount: paying.length,
+        activePayingMembers: paying,
+        allWithPassStatusCount: allWithPass.length,
+        allWithPassStatus: allWithPass,
         membersWithFutureTrainerAssigned: membersWithTrainerFuture.length,
         membersEverHadTrainerAssignedReservation: everTrainerMemberIds.size,
         futureTrainerAssignedMembers: membersWithTrainerFuture,
