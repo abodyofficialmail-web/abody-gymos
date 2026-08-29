@@ -1,21 +1,9 @@
+import { buildWeightProgressRows } from "@/lib/weightProgress/buildWeightProgress";
+import type { WeightPredictSex } from "@/lib/weightProgress/predictNextMax";
 import type { MonthlyProgressReport, PartRatio, WeightProgressRow } from "./types";
+import { parseMenu } from "./parseMenu";
 
-export function parseMenu(content: string): { name: string; sets: number[] }[] {
-  const exercises: { name: string; sets: number[] }[] = [];
-  let cur: { name: string; sets: number[] } | null = null;
-  for (const line of String(content || "").split("\n")) {
-    const em = line.match(/^■\s*(.+)$/);
-    if (em) {
-      cur = { name: em[1].trim(), sets: [] };
-      exercises.push(cur);
-      continue;
-    }
-    if (!cur) continue;
-    const sm = line.match(/(\d+(?:\.\d+)?)\s*kg/);
-    if (sm) cur.sets.push(Number(sm[1]));
-  }
-  return exercises.filter((e) => e.name && e.name !== "その他");
-}
+export { parseMenu } from "./parseMenu";
 
 export function parseFeedback(content: string): string {
   const lines = String(content || "").split("\n");
@@ -67,63 +55,19 @@ type Note = { date: string; content: string; trainer_id?: string | null };
 type Reservation = { start_at: string; end_at: string; trainer_id?: string | null; status?: string };
 type Survey = { rating: number | null; session_date?: string | null };
 
-export function buildWeightRows(notes: Note[], yearMonth: string, prevYm: string): WeightProgressRow[] {
-  type Acc = {
-    exercise: string;
-    firstMax: number;
-    firstDate: string;
-    prevMonthMax: number | null;
-    monthMax: number | null;
-    julySets: number;
-  };
-  const map = new Map<string, Acc>();
-  for (const n of notes) {
-    const isMonth = n.date.startsWith(yearMonth);
-    const isPrev = n.date.startsWith(prevYm);
-    for (const ex of parseMenu(n.content)) {
-      const kgs = ex.sets.filter((x) => x > 0);
-      if (!kgs.length) continue;
-      const maxKg = Math.max(...kgs);
-      if (!map.has(ex.name)) {
-        map.set(ex.name, {
-          exercise: ex.name,
-          firstMax: maxKg,
-          firstDate: n.date,
-          prevMonthMax: null,
-          monthMax: null,
-          julySets: 0,
-        });
-      }
-      const p = map.get(ex.name)!;
-      if (isPrev) p.prevMonthMax = Math.max(p.prevMonthMax || 0, maxKg);
-      if (isMonth) {
-        p.monthMax = Math.max(p.monthMax || 0, maxKg);
-        p.julySets += ex.sets.length;
-      }
-    }
-  }
-  return [...map.values()]
-    .filter((p) => p.monthMax != null)
-    .map((p) => {
-      const monthMax = p.monthMax!;
-      const vsFirst = Math.round((monthMax - p.firstMax) * 10) / 10;
-      const vsPrev =
-        p.prevMonthMax != null ? Math.round((monthMax - p.prevMonthMax) * 10) / 10 : null;
-      const growthPct =
-        p.firstMax > 0 ? Math.round(((monthMax - p.firstMax) / p.firstMax) * 1000) / 10 : 0;
-      return {
-        exercise: p.exercise,
-        firstMax: p.firstMax,
-        firstDate: p.firstDate,
-        prevMonthMax: p.prevMonthMax,
-        monthMax,
-        vsPrev,
-        vsFirst,
-        growthPct,
-        julySets: p.julySets,
-      };
-    })
-    .sort((a, b) => b.vsFirst - a.vsFirst || b.julySets - a.julySets);
+export function buildWeightRows(
+  notes: Note[],
+  yearMonth: string,
+  _prevYm: string,
+  profile: { sex?: WeightPredictSex; bodyWeightKg?: number | null; heightCm?: number | null; ageYears?: number | null } = {}
+): WeightProgressRow[] {
+  // 月次レポートは「その月に実施した種目」のみ（従来互換）
+  return buildWeightProgressRows(notes, yearMonth, {
+    sex: profile.sex ?? null,
+    bodyWeightKg: profile.bodyWeightKg ?? null,
+    heightCm: profile.heightCm ?? null,
+    ageYears: profile.ageYears ?? null,
+  }).filter((r) => r.hasCurrentMonth);
 }
 
 export function buildPartRatios(notes: Note[], yearMonth: string): PartRatio[] {
@@ -250,11 +194,15 @@ export type BuildReportInput = {
     after: MonthlyProgressReport["photos"]["after"];
   };
   ai: MonthlyProgressReport["ai"];
+  profile?: {
+    sex?: WeightPredictSex;
+    bodyWeightKg?: number | null;
+  };
 };
 
 export function assembleReport(input: BuildReportInput): MonthlyProgressReport {
   const bounds = ymParts(input.yearMonth);
-  const weightRows = buildWeightRows(input.notes, input.yearMonth, bounds.prev);
+  const weightRows = buildWeightRows(input.notes, input.yearMonth, bounds.prev, input.profile);
   const partRatios = buildPartRatios(input.notes, input.yearMonth);
   const topExercises = [...weightRows]
     .sort((a, b) => b.julySets - a.julySets)

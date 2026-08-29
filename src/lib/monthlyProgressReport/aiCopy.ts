@@ -146,12 +146,20 @@ export function generateAiCopy(input: AiInput): MonthlyProgressReport["ai"] {
     }`,
   };
 
-  const nextTarget = best ? Math.round((best.monthMax + 2.5) * 2) / 2 : 0;
+  const nextTarget =
+    best?.nextTarget != null
+      ? best.nextTarget
+      : best
+        ? Math.round((best.monthMax + 2.5) * 2) / 2
+        : 0;
   const goals = [
     best
       ? {
           title: `${best.exercise} ${nextTarget}kg`,
-          detail: `フォームを崩さない範囲で +2.5kg を狙う`,
+          detail:
+            best.nextReason != null
+              ? `今月${best.monthMax}kg → 来月${nextTarget}kg（${best.nextReason}）`
+              : `フォームを崩さない範囲で +2.5kg を狙う`,
           target: `${nextTarget}kg`,
         }
       : { title: "基礎種目の重量更新", detail: "主要種目で自己ベスト更新", target: "更新" },

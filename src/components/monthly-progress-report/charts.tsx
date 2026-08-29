@@ -55,11 +55,17 @@ export function PartPieChart({ data }: { data: MonthlyProgressReport["partRatios
   );
 }
 
-export function WeightTable({ rows }: { rows: MonthlyProgressReport["weightRows"] }) {
+export function WeightTable({
+  rows,
+  nextMonthLabel = "来月",
+}: {
+  rows: MonthlyProgressReport["weightRows"];
+  nextMonthLabel?: string;
+}) {
   return (
     <SectionCard title="主要種目の重量推移">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-xs">
+        <table className="w-full min-w-[760px] text-left text-xs">
           <thead>
             <tr className="border-b border-abody-line text-abody-muted">
               <th className="py-2 font-medium">種目</th>
@@ -69,6 +75,7 @@ export function WeightTable({ rows }: { rows: MonthlyProgressReport["weightRows"
               <th className="py-2 font-medium">先月比</th>
               <th className="py-2 font-medium">初回比</th>
               <th className="py-2 font-medium">伸び率</th>
+              <th className="py-2 font-medium text-emerald-700">{nextMonthLabel}目標</th>
             </tr>
           </thead>
           <tbody>
@@ -80,6 +87,12 @@ export function WeightTable({ rows }: { rows: MonthlyProgressReport["weightRows"
                 <td className="bg-abody-gold-soft/50 font-semibold text-abody-gold">{r.monthMax}kg</td>
                 <td className={deltaClass(r.vsPrev)}>
                   {r.vsPrev == null ? "—" : `${r.vsPrev > 0 ? "↗ +" : r.vsPrev < 0 ? "↘ " : ""}${r.vsPrev}kg`}
+                  {r.vsPrevPct != null ? (
+                    <div className="text-[10px] opacity-80">
+                      ({r.vsPrevPct > 0 ? "+" : ""}
+                      {r.vsPrevPct}%)
+                    </div>
+                  ) : null}
                 </td>
                 <td className={deltaClass(r.vsFirst)}>
                   {r.vsFirst > 0 ? "+" : ""}
@@ -88,6 +101,22 @@ export function WeightTable({ rows }: { rows: MonthlyProgressReport["weightRows"
                 <td className={deltaClass(r.growthPct)}>
                   {r.growthPct > 0 ? "+" : ""}
                   {r.growthPct}%
+                </td>
+                <td className="font-semibold text-emerald-800">
+                  {r.nextTarget != null ? (
+                    <>
+                      {r.nextTarget}kg
+                      {r.nextDelta != null ? (
+                        <div className={`text-[10px] font-medium ${deltaClass(r.nextDelta)}`}>
+                          {r.nextDelta > 0 ? "+" : ""}
+                          {r.nextDelta}kg
+                          {r.nextGrowthPct != null ? ` / ${r.nextGrowthPct > 0 ? "+" : ""}${r.nextGrowthPct}%` : ""}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </td>
               </tr>
             ))}

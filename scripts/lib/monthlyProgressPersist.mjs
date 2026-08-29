@@ -30,7 +30,7 @@ export async function persistMonthlyProgressReport(sb, params) {
       contentType: "image/jpeg",
       upsert: true,
     });
-    if (error) throw error;
+    if (error) throw new Error(`upload ${storagePath}: ${error.message}`);
     pagePaths.push(storagePath);
   }
 
@@ -40,7 +40,7 @@ export async function persistMonthlyProgressReport(sb, params) {
       contentType: "application/pdf",
       upsert: true,
     });
-    if (error) throw error;
+    if (error) throw new Error(`upload ${pdfPath}: ${error.message}`);
   }
 
   const meta = {

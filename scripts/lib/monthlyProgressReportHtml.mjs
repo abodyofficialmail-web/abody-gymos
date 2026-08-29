@@ -176,29 +176,29 @@ function photoUnavailableHtml() {
           )
           .join("")}
       </div>
-      <div class="unavailable-msg">体型写真なしのため分析不可</div>
+      <div class="unavailable-msg">店舗での体型写真がまだないため比較できません。次回セッションで撮影すると、来月以降のレポートに反映されます。</div>
     </div>
   </section>`;
 }
 
-/** 最古 / 先月 / 今月 の3時点比較 */
+/** 最古 / 前回 / 最新。空の列は出さない */
 function photoTimelineHtml(oldest, previous, current) {
   const cols = [
-    { set: oldest, role: "最古", fallback: "最古" },
-    { set: previous, role: "先月", fallback: "先月" },
-    { set: current, role: "今月", fallback: "今月" },
-  ];
+    { set: oldest, role: oldest?.roleLabel || "最古" },
+    { set: previous, role: previous?.roleLabel || "前回" },
+    { set: current, role: current?.roleLabel || "最新" },
+  ].filter((c) => c.set);
+  if (cols.length <= 1) {
+    const only = cols[0]?.set;
+    if (!only) return photoUnavailableHtml();
+    return photoRecordHtml(only);
+  }
   const rows = [
     { key: "frontUrl", label: "正面" },
     { key: "sideUrl", label: "側面" },
     { key: "backUrl", label: "背面" },
   ];
-  const legend = cols
-    .map((c) => {
-      if (!c.set) return `${c.fallback}：—`;
-      return `${c.role}（${c.set.label}）`;
-    })
-    .join("　／　");
+  const legend = cols.map((c) => `${c.role}（${c.set.label}）`).join("　／　");
 
   return `<section class="card ba-card">
     <h3>体型比較</h3>
@@ -209,7 +209,7 @@ function photoTimelineHtml(oldest, previous, current) {
           const shots = cols
             .map((c, idx) => {
               const url = c.set?.angles?.[r.key] || null;
-              const cap = c.set ? `${c.role}` : c.fallback;
+              const cap = c.role;
               const arrow =
                 idx < cols.length - 1
                   ? `<div class="ba-arrow">→</div>`
@@ -256,10 +256,16 @@ function photoAnglesHtml(set, title) {
 }
 
 function photoRecordHtml(record) {
+  if (!record) return photoUnavailableHtml();
+  const isGoal = record.roleLabel === "ヒアリング";
   return `<section class="card">
-    <h3>体型写真</h3>
-    <p class="muted" style="margin-bottom:8px">記録日 ${esc(record.label)}（比較用の現在写真は未登録のため、この写真で姿勢分析）</p>
-    ${photoAnglesHtml(record, `体型記録（${record.label}）`)}
+    <h3>${isGoal ? "目標写真" : "体型写真"}</h3>
+    <p class="muted" style="margin-bottom:8px">${
+      isGoal
+        ? "店舗の体型写真がないため、目標ヒアリング時の写真を掲載しています。比較は次回撮影後に表示されます。"
+        : `記録日 ${esc(record.label)}（比較用の別時点写真がまだないため、この写真で姿勢分析）`
+    }</p>
+    ${photoAnglesHtml(record, isGoal ? "目標ヒアリング写真" : `体型記録（${record.label}）`)}
   </section>`;
 }
 
@@ -344,20 +350,34 @@ function page2(report) {
 }
 
 function page3(report) {
-  const { weightRows, ai, partRatios, topExercises, volumeTrend, trainer } = report;
+  const { weightRows, ai, partRatios, topExercises, volumeTrend, trainer, meta } = report;
+  const nextLabel = meta?.nextMonthLabel || "来月";
   const rows = weightRows
     .slice(0, 6)
     .map((r) => {
       const vsPrev =
         r.vsPrev == null ? "—" : `${r.vsPrev > 0 ? "↗ +" : r.vsPrev < 0 ? "↘ " : ""}${r.vsPrev}kg`;
+      const vsPrevPct =
+        r.vsPrevPct == null ? "" : `<div class="tiny">(${r.vsPrevPct > 0 ? "+" : ""}${r.vsPrevPct}%)</div>`;
+      const next =
+        r.nextTarget == null
+          ? "—"
+          : `${r.nextTarget}kg${
+              r.nextDelta != null
+                ? `<div class="tiny ${r.nextDelta > 0 ? "up" : ""}">${r.nextDelta > 0 ? "+" : ""}${r.nextDelta}kg${
+                    r.nextGrowthPct != null ? ` / ${r.nextGrowthPct > 0 ? "+" : ""}${r.nextGrowthPct}%` : ""
+                  }</div>`
+                : ""
+            }`;
       return `<tr>
         <td>${esc(r.exercise)}</td>
         <td>${r.firstMax}kg</td>
         <td>${r.prevMonthMax != null ? `${r.prevMonthMax}kg` : "—"}</td>
         <td class="hi">${r.monthMax}kg</td>
-        <td class="${r.vsPrev > 0 ? "up" : r.vsPrev < 0 ? "down" : ""}">${vsPrev}</td>
+        <td class="${r.vsPrev > 0 ? "up" : r.vsPrev < 0 ? "down" : ""}">${vsPrev}${vsPrevPct}</td>
         <td class="${r.vsFirst > 0 ? "up" : r.vsFirst < 0 ? "down" : ""}">${r.vsFirst > 0 ? "+" : ""}${r.vsFirst}kg</td>
         <td class="${r.growthPct > 0 ? "up" : r.growthPct < 0 ? "down" : ""}">${r.growthPct > 0 ? "+" : ""}${r.growthPct}%</td>
+        <td class="up">${next}</td>
       </tr>`;
     })
     .join("");
@@ -395,7 +415,7 @@ function page3(report) {
     <section class="card">
       <h3>主要種目の重量推移</h3>
       <table>
-        <thead><tr><th>種目</th><th>初回最高</th><th>先月最高</th><th>今月最高</th><th>先月比</th><th>初回比</th><th>伸び率</th></tr></thead>
+        <thead><tr><th>種目</th><th>初回最高</th><th>先月最高</th><th>今月最高</th><th>先月比</th><th>初回比</th><th>伸び率</th><th>${esc(nextLabel)}目標</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </section>
@@ -545,6 +565,7 @@ const CSS = `
   td.hi { background: #F5EFE3; color: ${GOLD}; font-weight: 700; }
   .up { color: #047857; font-weight: 600; }
   .down { color: #e11d48; font-weight: 600; }
+  .tiny { font-size: 9px; font-weight: 500; opacity: 0.85; margin-top: 1px; }
   .facts { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
   .facts > div { border: 1px solid #E8E4DC; border-radius: 8px; padding: 8px; font-size: 12px; }
   .top { margin-bottom: 8px; }
@@ -570,7 +591,8 @@ const CSS = `
   .ba-row { background: #2f3338; border-radius: 12px; padding: 8px 10px; }
   .ba-angle { text-align: center; color: ${GOLD}; font-size: 13px; font-weight: 700; margin-bottom: 6px; letter-spacing: .06em; }
   .ba-pair { display: grid; grid-template-columns: 1fr 22px 1fr; gap: 4px; align-items: center; }
-  .ba-triple { display: grid; grid-template-columns: 1fr 16px 1fr 16px 1fr; gap: 2px; align-items: center; }
+  .ba-triple { display: flex; gap: 4px; align-items: center; }
+  .ba-triple .ba-shot { flex: 1; min-width: 0; }
   .ba-arrow { text-align: center; color: ${GOLD}; font-size: 16px; font-weight: 700; }
   .ba-shot img, .ba-shot .photo-empty { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; object-position: center center; border-radius: 8px; display: block; background: #111; }
   .ba-cap { text-align: center; font-size: 10px; color: #ccc; margin-top: 3px; font-weight: 600; line-height: 1.25; }
@@ -658,7 +680,7 @@ export function renderMonthlyProgressPageHtml(report, pageIndex) {
     .page1 .ba-row { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px !important; }
     .page1 .ba-angle { font-size: 13px !important; margin-bottom: 3px !important; flex-shrink: 0; }
     .page1 .ba-pair { flex: 1; min-height: 0; grid-template-columns: 1fr 20px 1fr !important; align-items: center !important; }
-    .page1 .ba-triple { flex: 1; min-height: 0; grid-template-columns: 1fr 12px 1fr 12px 1fr !important; align-items: center !important; }
+    .page1 .ba-triple { flex: 1; min-height: 0; display: flex !important; align-items: center !important; }
     .page1 .ba-arrow { font-size: 14px !important; }
     .page1 .ba-cap { font-size: 10px !important; }
     .page1 .ba-cap-sub { font-size: 8px !important; }

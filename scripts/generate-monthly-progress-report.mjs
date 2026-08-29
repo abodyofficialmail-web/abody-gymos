@@ -22,6 +22,7 @@ import { fileURLToPath } from "url";
 import { renderMonthlyProgressHtml, renderMonthlyProgressPageHtml, MONTHLY_PROGRESS_PAGE_TITLES, A4_PORTRAIT } from "./lib/monthlyProgressReportHtml.mjs";
 import { persistMonthlyProgressReport, markLineSent, createDeliveryUrls } from "./lib/monthlyProgressPersist.mjs";
 import { sendMonthlyProgressLineLocal } from "./lib/sendMonthlyProgressLineLocal.mjs";
+import { predictNextMax } from "./lib/predictNextMax.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -47,20 +48,27 @@ function resolveChromePath() {
 }
 
 const CHROME = resolveChromePath();
-const CHROME_EXTRA_ARGS =
-  process.env.CI || process.platform === "linux"
-    ? [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-software-rasterizer",
-        "--allow-file-access-from-files",
-        "--font-render-hinting=none",
-      ]
-    : [];
+const CHROME_EXTRA_ARGS = [
+  "--allow-file-access-from-files",
+  ...(process.env.CI || process.platform === "linux"
+    ? ["--no-sandbox", "--disable-dev-shm-usage", "--disable-software-rasterizer", "--font-render-hinting=none"]
+    : []),
+];
 
 function arg(name, fallback = null) {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : fallback;
+}
+
+function currentYearMonthJst() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  return `${y}-${m}`;
 }
 
 function loadEnv() {
@@ -138,11 +146,12 @@ function tenureMonths(joinedAt, asOf) {
   return Math.max(1, months);
 }
 
-function buildWeightRows(notes, yearMonth, prevYm) {
+function buildWeightRows(notes, yearMonth, prevYm, profile = {}) {
   const map = new Map();
   for (const n of notes) {
-    const isMonth = n.date.startsWith(yearMonth);
-    const isPrev = n.date.startsWith(prevYm);
+    const ym = String(n.date).slice(0, 7);
+    const isMonth = ym === yearMonth;
+    const isPrev = ym === prevYm;
     for (const ex of parseMenu(n.content)) {
       const kgs = ex.sets.filter((x) => x > 0);
       if (!kgs.length) continue;
@@ -155,6 +164,7 @@ function buildWeightRows(notes, yearMonth, prevYm) {
           prevMonthMax: null,
           monthMax: null,
           julySets: 0,
+          monthlyMaxes: new Map(),
         });
       }
       const p = map.get(ex.name);
@@ -163,6 +173,7 @@ function buildWeightRows(notes, yearMonth, prevYm) {
         p.monthMax = Math.max(p.monthMax || 0, maxKg);
         p.julySets += ex.sets.length;
       }
+      p.monthlyMaxes.set(ym, Math.max(p.monthlyMaxes.get(ym) || 0, maxKg));
     }
   }
   return [...map.values()]
@@ -172,7 +183,43 @@ function buildWeightRows(notes, yearMonth, prevYm) {
       const vsFirst = Math.round((monthMax - p.firstMax) * 10) / 10;
       const vsPrev = p.prevMonthMax != null ? Math.round((monthMax - p.prevMonthMax) * 10) / 10 : null;
       const growthPct = p.firstMax > 0 ? Math.round(((monthMax - p.firstMax) / p.firstMax) * 1000) / 10 : 0;
-      return { ...p, monthMax, vsFirst, vsPrev, growthPct };
+      const vsPrevPct =
+        p.prevMonthMax != null && p.prevMonthMax > 0
+          ? Math.round(((monthMax - p.prevMonthMax) / p.prevMonthMax) * 1000) / 10
+          : null;
+      const monthlyChrono = [...p.monthlyMaxes.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .filter(([ym]) => ym <= yearMonth)
+        .slice(-6)
+        .map(([, kg]) => kg);
+      const pred = predictNextMax({
+        exercise: p.exercise,
+        firstMax: p.firstMax,
+        monthMax,
+        prevMonthMax: p.prevMonthMax,
+        monthlyMaxes: monthlyChrono,
+        setsThisMonth: p.julySets,
+        sex: profile.sex ?? null,
+        bodyWeightKg: profile.bodyWeightKg ?? null,
+        heightCm: profile.heightCm ?? null,
+        ageYears: profile.ageYears ?? null,
+      });
+      return {
+        exercise: p.exercise,
+        firstMax: p.firstMax,
+        firstDate: p.firstDate,
+        prevMonthMax: p.prevMonthMax,
+        monthMax,
+        vsFirst,
+        vsPrev,
+        vsPrevPct,
+        growthPct,
+        julySets: p.julySets,
+        nextTarget: pred.nextTarget,
+        nextDelta: pred.nextDelta,
+        nextGrowthPct: pred.nextGrowthPct,
+        nextReason: pred.reason,
+      };
     })
     .sort((a, b) => b.vsFirst - a.vsFirst || b.julySets - a.julySets);
 }
@@ -230,9 +277,10 @@ function generateAi(input) {
     back: /背中|下部/.test(fbText),
     squat: /スクワット|安定/.test(fbText),
   };
-  const nextTarget = best ? Math.round((best.monthMax + 2.5) * 2) / 2 : null;
+  const nextTarget = best?.nextTarget != null ? best.nextTarget : best ? Math.round((best.monthMax + 2.5) * 2) / 2 : null;
   const second = improved[1];
-  const secondTarget = second ? Math.round((second.monthMax + 2.5) * 2) / 2 : null;
+  const secondTarget =
+    second?.nextTarget != null ? second.nextTarget : second ? Math.round((second.monthMax + 2.5) * 2) / 2 : null;
   const squat = input.weightRows.find((r) => /スクワット/.test(r.exercise));
   const squatTarget = squat ? Math.round(((squat.monthMax || squat.firstMax) + 2.5) * 2) / 2 : null;
   const overallAnalysisFallback = best
@@ -277,14 +325,18 @@ function generateAi(input) {
   if (best && nextTarget != null) {
     weightGoals.push({
       title: `${best.exercise} ${nextTarget}kg`,
-      detail: `今月${best.monthMax}kg → ${input.nextMonthLabel}は+2.5kgを狙い、${nextTarget}kg到達を目指します`,
+      detail: best.nextReason
+        ? `今月${best.monthMax}kg → ${input.nextMonthLabel}は${nextTarget}kg（${best.nextReason}）`
+        : `今月${best.monthMax}kg → ${input.nextMonthLabel}は${nextTarget}kg到達を目指します`,
       target: `${nextTarget}kg`,
     });
   }
   if (second && secondTarget != null && second.exercise !== best?.exercise) {
     weightGoals.push({
       title: `${second.exercise} ${secondTarget}kg`,
-      detail: `今月${second.monthMax}kgから+2.5kg。フォームを崩さない範囲で更新`,
+      detail: second.nextReason
+        ? `今月${second.monthMax}kg → ${secondTarget}kg（${second.nextReason}）`
+        : `今月${second.monthMax}kgから更新。フォームを崩さない範囲で挑戦`,
       target: `${secondTarget}kg`,
     });
   }
@@ -383,12 +435,65 @@ function generateAi(input) {
   };
 }
 
-async function toDataUriFromLocalOrSigned(localPath, signedUrl) {
-  if (localPath && fs.existsSync(localPath)) {
-    const buf = fs.readFileSync(localPath);
-    return `data:image/jpeg;base64,${buf.toString("base64")}`;
+const PHOTO_EMBED_MAX_PX = 720;
+const PHOTO_EMBED_QUALITY = 72;
+
+function compressJpegFile(srcPath, destPath, maxPx = PHOTO_EMBED_MAX_PX, quality = PHOTO_EMBED_QUALITY) {
+  const py = `
+from PIL import Image
+im = Image.open(${JSON.stringify(srcPath)}).convert("RGB")
+w, h = im.size
+max_px = ${Number(maxPx)}
+if max(w, h) > max_px:
+    scale = max_px / float(max(w, h))
+    im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC))
+im.save(${JSON.stringify(destPath)}, "JPEG", quality=${Number(quality)}, optimize=True)
+`;
+  const r = spawnSync("python3", ["-c", py], { encoding: "utf8" });
+  if (r.status !== 0 || !fs.existsSync(destPath)) {
+    throw new Error(`compressJpegFile failed: ${r.stderr || r.stdout || "unknown"}`);
   }
-  return signedUrl;
+}
+
+function normalizeStoragePath(raw) {
+  let pathKey = String(raw || "").trim();
+  if (!pathKey) return "";
+  if (/^https?:\/\//i.test(pathKey)) return "";
+  pathKey = pathKey.replace(/^\/+/, "");
+  if (pathKey.startsWith(`${PHOTO_BUCKET}/`)) pathKey = pathKey.slice(PHOTO_BUCKET.length + 1);
+  try {
+    pathKey = decodeURIComponent(pathKey);
+  } catch {
+    // keep
+  }
+  return pathKey;
+}
+
+async function toEmbeddedPhoto(localPath, signedUrl, destPath) {
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    if (localPath && fs.existsSync(localPath)) {
+      compressJpegFile(localPath, destPath);
+    } else if (signedUrl) {
+      const rawPath = `${destPath}.src`;
+      const res = await fetch(signedUrl);
+      if (!res.ok) throw new Error(`download ${res.status}`);
+      fs.writeFileSync(rawPath, Buffer.from(await res.arrayBuffer()));
+      compressJpegFile(rawPath, destPath);
+      try {
+        fs.unlinkSync(rawPath);
+      } catch {
+        // ignore
+      }
+    } else {
+      return null;
+    }
+    if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 32) return null;
+    return `data:image/jpeg;base64,${fs.readFileSync(destPath).toString("base64")}`;
+  } catch (e) {
+    console.warn("photo embed failed:", destPath, e?.message || e);
+    return null;
+  }
 }
 
 /** Cursorによる体型写真の姿勢読取結果 */
@@ -623,6 +728,47 @@ async function buildReport(sb, memberCode, yearMonth) {
     .eq("member_id", m.id)
     .order("date");
 
+  const { data: hearing } = await sb
+    .from("goal_hearing_responses")
+    .select("sex, current_weight_kg, height_cm, age_years, birth_date, goal_photo_paths")
+    .eq("member_id", m.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  let bodyWeightKg = hearing?.current_weight_kg != null ? Number(hearing.current_weight_kg) : null;
+  if (!(bodyWeightKg > 0)) {
+    for (const n of [...(notes || [])].reverse()) {
+      const wm =
+        String(n.content || "").match(/体重\s*\(kg\)\s*[:：]\s*(\d+(?:\.\d+)?)/i) ||
+        String(n.content || "").match(/体重\s*[:：]\s*(\d+(?:\.\d+)?)\s*kg/i);
+      if (wm) {
+        const w = Number(wm[1]);
+        if (w > 0 && w < 300) {
+          bodyWeightKg = w;
+          break;
+        }
+      }
+    }
+  }
+  let ageYears = hearing?.age_years != null ? Number(hearing.age_years) : null;
+  if (!(ageYears > 0) && hearing?.birth_date) {
+    const d = new Date(`${hearing.birth_date}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      const asOf = new Date();
+      let age = asOf.getFullYear() - d.getFullYear();
+      const mm = asOf.getMonth() - d.getMonth();
+      if (mm < 0 || (mm === 0 && asOf.getDate() < d.getDate())) age -= 1;
+      if (age > 0 && age < 120) ageYears = age;
+    }
+  }
+  const weightProfile = {
+    sex: hearing?.sex === "female" || hearing?.sex === "male" ? hearing.sex : null,
+    bodyWeightKg: bodyWeightKg > 0 ? bodyWeightKg : null,
+    heightCm: hearing?.height_cm != null && Number(hearing.height_cm) > 0 ? Number(hearing.height_cm) : null,
+    ageYears: ageYears > 0 ? ageYears : null,
+  };
+
   const { data: surveys } = await sb
     .from("session_survey_responses")
     .select("rating, session_date, created_at")
@@ -645,31 +791,38 @@ async function buildReport(sb, memberCode, yearMonth) {
     .eq("member_id", m.id)
     .order("photo_date", { ascending: true });
 
+  const photoCacheDir = path.join(ROOT, "tmp/monthly-progress-reports", memberCode, "photos");
+  fs.mkdirSync(photoCacheDir, { recursive: true });
+
+  async function signedOrNull(storagePath) {
+    if (!storagePath) return null;
+    const { data, error } = await sb.storage.from(PHOTO_BUCKET).createSignedUrl(storagePath, 60 * 60 * 24);
+    if (error) {
+      console.warn("signed url failed:", storagePath, error.message);
+      return null;
+    }
+    return data?.signedUrl || null;
+  }
+
   async function angleUrls(row) {
     const date = row.photo_date;
-    const localFront = path.join(ROOT, "tmp/monthly-progress-reports", memberCode, "photos", `${date}-front.jpg`);
-    const localBack = path.join(ROOT, "tmp/monthly-progress-reports", memberCode, "photos", `${date}-back.jpg`);
+    const localFront = path.join(photoCacheDir, `${date}-front.jpg`);
+    const localBack = path.join(photoCacheDir, `${date}-back.jpg`);
     const localSide =
       [
-        path.join(ROOT, "tmp/monthly-progress-reports", memberCode, "photos", `${date}-side_left.jpg`),
-        path.join(ROOT, "tmp/monthly-progress-reports", memberCode, "photos", `${date}-side_right.jpg`),
+        path.join(photoCacheDir, `${date}-side_left.jpg`),
+        path.join(photoCacheDir, `${date}-side_right.jpg`),
       ].find((p) => fs.existsSync(p)) || null;
 
-    const frontSigned = row.front_path
-      ? (await sb.storage.from(PHOTO_BUCKET).createSignedUrl(row.front_path, 60 * 60 * 24)).data?.signedUrl
-      : null;
-    const backSigned = row.back_path
-      ? (await sb.storage.from(PHOTO_BUCKET).createSignedUrl(row.back_path, 60 * 60 * 24)).data?.signedUrl
-      : null;
+    const frontSigned = await signedOrNull(row.front_path);
+    const backSigned = await signedOrNull(row.back_path);
     const sidePath = row.side_left_path || row.side_right_path;
-    const sideSigned = sidePath
-      ? (await sb.storage.from(PHOTO_BUCKET).createSignedUrl(sidePath, 60 * 60 * 24)).data?.signedUrl
-      : null;
+    const sideSigned = await signedOrNull(sidePath);
 
     return {
-      frontUrl: await toDataUriFromLocalOrSigned(localFront, frontSigned),
-      backUrl: await toDataUriFromLocalOrSigned(localBack, backSigned),
-      sideUrl: await toDataUriFromLocalOrSigned(localSide, sideSigned),
+      frontUrl: await toEmbeddedPhoto(localFront, frontSigned, path.join(photoCacheDir, `${date}-front.embed.jpg`)),
+      backUrl: await toEmbeddedPhoto(localBack, backSigned, path.join(photoCacheDir, `${date}-back.embed.jpg`)),
+      sideUrl: await toEmbeddedPhoto(localSide, sideSigned, path.join(photoCacheDir, `${date}-side.embed.jpg`)),
     };
   }
 
@@ -688,30 +841,29 @@ async function buildReport(sb, memberCode, yearMonth) {
     };
   }
 
-  /** 最古 / 先月 / 今月 の3時点を選ぶ */
+  /** 最古 / 中間 / 最新。今月分が無くても最新写真を使う */
   function pickPhotoRows(rows, ym) {
     if (!rows?.length) return { oldest: null, previous: null, current: null };
     const [y, mo] = ym.split("-").map(Number);
     const prevYm = mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, "0")}`;
 
     const oldest = rows[0];
+    const latest = rows[rows.length - 1];
     const inMonth = rows.filter((r) => String(r.photo_date).startsWith(ym));
-    const current = inMonth.length ? inMonth[inMonth.length - 1] : null;
+    const current = inMonth.length ? inMonth[inMonth.length - 1] : latest;
     const inPrev = rows.filter((r) => String(r.photo_date).startsWith(prevYm));
     let previous = inPrev.length ? inPrev[inPrev.length - 1] : null;
 
-    // 先月が無い場合は「最古より後〜今月より前」の最新を中間として使う
-    if (!previous) {
+    if (!previous || (current && previous.photo_date === current.photo_date)) {
       const mid = rows.filter((r) => {
         const d = String(r.photo_date);
         if (oldest && d === oldest.photo_date) return false;
         if (current && d === current.photo_date) return false;
-        return d < `${ym}-01`;
+        return true;
       });
       if (mid.length) previous = mid[mid.length - 1];
     }
 
-    // 同一日付の重複を避ける
     if (previous && oldest && previous.photo_date === oldest.photo_date) previous = null;
     if (previous && current && previous.photo_date === current.photo_date) previous = null;
     if (oldest && current && oldest.photo_date === current.photo_date && !previous) {
@@ -722,8 +874,11 @@ async function buildReport(sb, memberCode, yearMonth) {
 
   const picked = pickPhotoRows(photoRows || [], yearMonth);
   const oldest = await toPhotoSet(picked.oldest, "最古");
-  const previous = await toPhotoSet(picked.previous, "先月");
-  const current = await toPhotoSet(picked.current, "今月");
+  const previous = await toPhotoSet(picked.previous, "前回");
+  const current = await toPhotoSet(
+    picked.current,
+    picked.current && String(picked.current.photo_date).startsWith(yearMonth) ? "今月" : "最新"
+  );
   // 互換: before=最古 / after=今月（なければ中間や最古）
   const before = oldest;
   const after = current || previous || oldest;
@@ -732,10 +887,33 @@ async function buildReport(sb, memberCode, yearMonth) {
   if (distinctDates.length === 1 && oldest) {
     record = oldest;
   }
+  if (!oldest && !previous && !current) {
+    const rawGoals = Array.isArray(hearing?.goal_photo_paths)
+      ? hearing.goal_photo_paths.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
+    const urls = [];
+    for (let i = 0; i < Math.min(3, rawGoals.length); i++) {
+      const key = normalizeStoragePath(rawGoals[i]);
+      const signed = key ? await signedOrNull(key) : /^https?:\/\//i.test(rawGoals[i]) ? rawGoals[i] : null;
+      urls.push(await toEmbeddedPhoto(null, signed, path.join(photoCacheDir, `goal-${i}.embed.jpg`)));
+    }
+    if (urls.some(Boolean)) {
+      record = {
+        photoDate: `${yearMonth}-01`,
+        label: "目標ヒアリング",
+        roleLabel: "ヒアリング",
+        angles: {
+          frontUrl: urls[0] || null,
+          sideUrl: urls[1] || null,
+          backUrl: urls[2] || null,
+        },
+      };
+    }
+  }
   const hasTimeline = [oldest, previous, current].filter(Boolean).length >= 2;
   const hasComparison = hasTimeline;
 
-  const weightRows = buildWeightRows(notes || [], yearMonth, bounds.prev);
+  const weightRows = buildWeightRows(notes || [], yearMonth, bounds.prev, weightProfile);
   const partRatios = buildPartRatios(notes || [], yearMonth);
   const volumeTrend = buildVolumeTrend(notes || [], yearMonth);
   const topExercises = [...weightRows]
@@ -868,10 +1046,11 @@ async function buildReport(sb, memberCode, yearMonth) {
       current,
       before,
       after,
-      record: distinctDates.length <= 1 ? record || oldest : null,
+      record: record || (distinctDates.length <= 1 ? oldest : null),
       hasComparison,
       hasTimeline,
       hasAny: hasAnyPhoto,
+      source: oldest || previous || current ? "body" : record?.roleLabel === "ヒアリング" ? "goal" : "none",
     },
     metrics: {
       visitCount: (reservations || []).length,
@@ -947,34 +1126,44 @@ im.save(${JSON.stringify(jpgPath)}, "JPEG", quality=${Number(quality)}, optimize
 }
 
 function chromeShot(htmlPath, pngPath, w, h, scale = MYPAGE_SHOT_SCALE) {
-  try {
-    if (fs.existsSync(pngPath)) fs.unlinkSync(pngPath);
-  } catch {
-    // ignore
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      try {
+        if (fs.existsSync(pngPath)) fs.unlinkSync(pngPath);
+      } catch {
+        // ignore
+      }
+      const r = spawnSync(
+        CHROME,
+        [
+          ...CHROME_EXTRA_ARGS,
+          "--headless=new",
+          "--disable-gpu",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-extensions",
+          "--disable-background-networking",
+          `--window-size=${w},${h}`,
+          `--screenshot=${pngPath}`,
+          "--hide-scrollbars",
+          `--force-device-scale-factor=${scale}`,
+          `--virtual-time-budget=${8000 * attempt}`,
+          htmlPath,
+        ],
+        { encoding: "utf8", timeout: 45000 + attempt * 20000, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024 }
+      );
+      if (r.error && r.error.code === "ETIMEDOUT") throw new Error(`Shot timeout: ${pngPath}`);
+      if (r.status !== 0 || !fs.existsSync(pngPath)) {
+        throw new Error(`Shot failed: ${r.stderr || r.stdout || r.error?.message || "unknown"}`);
+      }
+      return;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`chromeShot ${path.basename(pngPath)} retry ${attempt}/3:`, e.message);
+    }
   }
-  const r = spawnSync(
-    CHROME,
-    [
-      ...CHROME_EXTRA_ARGS,
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-extensions",
-      "--disable-background-networking",
-      `--window-size=${w},${h}`,
-      `--screenshot=${pngPath}`,
-      "--hide-scrollbars",
-      `--force-device-scale-factor=${scale}`,
-      "--virtual-time-budget=8000",
-      htmlPath,
-    ],
-    { encoding: "utf8", timeout: 45000, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024 }
-  );
-  if (r.error && r.error.code === "ETIMEDOUT") {
-    throw new Error(`Shot timeout: ${pngPath}`);
-  }
-  if (r.status !== 0 || !fs.existsSync(pngPath)) throw new Error(`Shot failed: ${r.stderr || r.stdout || r.error?.message || "unknown"}`);
+  throw lastErr;
 }
 
 /** 下部の白余白をトリムしてコンテンツを大きく見せる */
@@ -1037,11 +1226,35 @@ async function uploadLineFallbackImages(sb, code, yearMonth, pageImagePaths) {
   return imageUrls;
 }
 
+function renderPages(report, outDir, scale, jpegQuality, pdfQuality) {
+  const pageImagePaths = [];
+  const { width: shotW, height: shotH } = A4_PORTRAIT;
+  const outW = shotW * scale;
+  const outH = shotH * scale;
+  for (let i = 0; i < 4; i++) {
+    const pageHtmlPath = path.join(outDir, `page-${i + 1}.html`);
+    const pagePngPath = path.join(outDir, `page-${i + 1}.png`);
+    const pageJpgPath = path.join(outDir, `page-${i + 1}.jpg`);
+    fs.writeFileSync(pageHtmlPath, renderMonthlyProgressPageHtml(report, i));
+    chromeShot(`file://${pageHtmlPath}`, pagePngPath, shotW, shotH, scale);
+    pngToJpeg(pagePngPath, pageJpgPath, outW, outH, jpegQuality);
+    pageImagePaths.push(pageJpgPath);
+  }
+  const pdfPath = path.join(outDir, `${report.member.memberCode}-${report.meta.yearMonth}-monthly-progress.pdf`);
+  pdfFromJpegPages(pageImagePaths, pdfPath, pdfQuality);
+  return { pageImagePaths, pdfPath };
+}
+
+function isSizeError(err) {
+  const msg = String(err?.message || err || "");
+  return /maximum allowed size|payload too large|entity too large|413/i.test(msg);
+}
+
 async function main() {
   loadEnv();
   const code = (arg("code", "SAK038") || "SAK038").toUpperCase();
   const sendToArg = arg("send-to", null);
-  const yearMonth = arg("month", "2026-07");
+  const yearMonth = arg("month", currentYearMonthJst());
   const dryRun = process.argv.includes("--dry-run");
   const persist = process.argv.includes("--persist") || Boolean(sendToArg);
   const confirmSend = process.argv.includes("--confirm-send");
@@ -1056,44 +1269,51 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   const htmlPath = path.join(outDir, "report.html");
-  const pdfPath = path.join(outDir, `${code}-${yearMonth}-monthly-progress.pdf`);
   const jsonPath = path.join(outDir, "report.json");
 
   fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2));
   fs.writeFileSync(htmlPath, renderMonthlyProgressHtml(report));
 
-  // A4縦を 2x で撮影 → 高品質JPEG → マイページ用PDF
-  const pageImagePaths = [];
-  const { width: shotW, height: shotH } = A4_PORTRAIT;
-  const outW = shotW * MYPAGE_SHOT_SCALE;
-  const outH = shotH * MYPAGE_SHOT_SCALE;
-  for (let i = 0; i < 4; i++) {
-    const pageHtmlPath = path.join(outDir, `page-${i + 1}.html`);
-    const pagePngPath = path.join(outDir, `page-${i + 1}.png`);
-    const pageJpgPath = path.join(outDir, `page-${i + 1}.jpg`);
-    fs.writeFileSync(pageHtmlPath, renderMonthlyProgressPageHtml(report, i));
-    chromeShot(`file://${pageHtmlPath}`, pagePngPath, shotW, shotH, MYPAGE_SHOT_SCALE);
-    pngToJpeg(pagePngPath, pageJpgPath, outW, outH, MYPAGE_JPEG_QUALITY);
-    pageImagePaths.push(pageJpgPath);
+  let scale = MYPAGE_SHOT_SCALE;
+  let jpegQuality = MYPAGE_JPEG_QUALITY;
+  let pdfQuality = MYPAGE_PDF_JPEG_QUALITY;
+  let { pageImagePaths, pdfPath } = renderPages(report, outDir, scale, jpegQuality, pdfQuality);
+  if (fs.statSync(pdfPath).size > 15 * 1024 * 1024) {
+    console.warn("pdf large, rerender at lower quality:", fs.statSync(pdfPath).size);
+    scale = 1;
+    jpegQuality = 72;
+    pdfQuality = 70;
+    ({ pageImagePaths, pdfPath } = renderPages(report, outDir, scale, jpegQuality, pdfQuality));
   }
-  pdfFromJpegPages(pageImagePaths, pdfPath);
 
   let persisted = null;
   if (persist) {
-    persisted = await persistMonthlyProgressReport(sb, {
-      memberId: report.member.id,
-      memberCode: code,
-      name: report.member.name,
-      yearMonth,
-      yearMonthLabel: report.meta.yearMonthLabel,
-      visitCount: report.metrics.visitCount,
-      abodyScore: report.metrics.abodyScore,
-      overallGrade: report.metrics.overallGrade,
-      storeName: report.member.storeName,
-      pageJpgBuffers: pageImagePaths.map((p) => fs.readFileSync(p)),
-      pdfBuffer: fs.readFileSync(pdfPath),
-      quality: { scale: MYPAGE_SHOT_SCALE, jpeg: MYPAGE_JPEG_QUALITY },
-    });
+    const persistOnce = () =>
+      persistMonthlyProgressReport(sb, {
+        memberId: report.member.id,
+        memberCode: code,
+        name: report.member.name,
+        yearMonth,
+        yearMonthLabel: report.meta.yearMonthLabel,
+        visitCount: report.metrics.visitCount,
+        abodyScore: report.metrics.abodyScore,
+        overallGrade: report.metrics.overallGrade,
+        storeName: report.member.storeName,
+        pageJpgBuffers: pageImagePaths.map((p) => fs.readFileSync(p)),
+        pdfBuffer: fs.readFileSync(pdfPath),
+        quality: { scale, jpeg: jpegQuality },
+      });
+    try {
+      persisted = await persistOnce();
+    } catch (e) {
+      if (!isSizeError(e) || scale <= 1) throw e;
+      console.warn("persist size error, retry compact:", e.message);
+      scale = 1;
+      jpegQuality = 68;
+      pdfQuality = 65;
+      ({ pageImagePaths, pdfPath } = renderPages(report, outDir, scale, jpegQuality, pdfQuality));
+      persisted = await persistOnce();
+    }
     console.log("persisted to member-reports:", persisted.storagePrefix);
   }
 
@@ -1116,6 +1336,8 @@ async function main() {
         pdf: pdfPath,
         pages: pageImagePaths,
         hasPhotoComparison: report.photos.hasComparison,
+        hasAnyPhoto: report.photos.hasAny,
+        photoSource: report.photos.source || null,
         trainer: report.trainer?.displayName || null,
         persisted: Boolean(persisted),
         publicPdfUrl,

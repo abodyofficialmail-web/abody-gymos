@@ -190,7 +190,8 @@ function writeStatus(statusPath, status) {
 
 async function main() {
   loadEnv();
-  const yearMonth = arg("month", "2026-07");
+  const now0 = DateTime.now().setZone(TZ);
+  const yearMonth = arg("month", now0.toFormat("yyyy-MM"));
   const confirmSend = process.argv.includes("--confirm-send");
   const dryRun = process.argv.includes("--dry-run") || !confirmSend;
   const phaseArg = (arg("phase", null) || "all").toLowerCase();
@@ -199,7 +200,6 @@ async function main() {
   const doPersist = !sendOnly;
   const doSend = !persistOnly;
   const sendAfterRaw = arg("send-after", null);
-  const now0 = DateTime.now().setZone(TZ);
   let sendAfter = null;
   if (sendAfterRaw) {
     const m = String(sendAfterRaw).match(/^(\d{1,2}):(\d{2})$/);

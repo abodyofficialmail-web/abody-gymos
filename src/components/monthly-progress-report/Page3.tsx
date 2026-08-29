@@ -17,7 +17,7 @@ export function Page3({ report }: { report: MonthlyProgressReport }) {
       />
 
       <div className="mb-4">
-        <WeightTable rows={weightRows} />
+        <WeightTable rows={weightRows} nextMonthLabel={meta.nextMonthLabel} />
       </div>
 
       <SectionCard title="AI分析" className="mb-4">
