@@ -8,6 +8,8 @@ on:
     paths:
       - "scripts/list-trainer-display-billing-members.mjs"
       - "scripts/fetch-trainer-visibility-price.mjs"
+      - "scripts/probe-trainer-visibility-tables.mjs"
+      - ".github/workflows/list-trainer-display-billing.yml"
 
 jobs:
   list:

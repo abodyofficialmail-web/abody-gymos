@@ -48,6 +48,7 @@ async function main() {
 
   const out = {
     activeCount: activeMembers?.length ?? 0,
+    activeMemberRecords: (activeMembers ?? []).map(({ line_user_id, ...rest }) => rest),
     stripeConfigured: Boolean(stripeKey),
     priceFromEnv: {
       TRAINER_VISIBILITY_PASS_PRICE_ID: process.env.TRAINER_VISIBILITY_PASS_PRICE_ID ?? null,

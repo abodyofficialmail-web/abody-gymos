@@ -1,4 +1,4 @@
-/** Supabase内の trainer_visibility 関連テーブル・設定を探索 */
+/** Supabase内の trainer_visibility 関連テーブル・設定を探索（GH Actions） */
 import { createClient } from "@supabase/supabase-js";
 
 async function main() {
