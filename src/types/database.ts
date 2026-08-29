@@ -894,6 +894,183 @@ export interface Database {
         };
         Relationships: [];
       };
+      store_marketing_accounts: {
+        Row: {
+          store_id: string;
+          instagram_username: string | null;
+          instagram_user_id: string | null;
+          meta_ad_account_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          store_id: string;
+          instagram_username?: string | null;
+          instagram_user_id?: string | null;
+          meta_ad_account_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          store_id?: string;
+          instagram_username?: string | null;
+          instagram_user_id?: string | null;
+          meta_ad_account_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      line_follow_events: {
+        Row: {
+          id: string;
+          line_channel_key: string;
+          store_id: string | null;
+          line_user_id: string;
+          event_type: "follow" | "unfollow";
+          followed_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          line_channel_key: string;
+          store_id?: string | null;
+          line_user_id: string;
+          event_type: "follow" | "unfollow";
+          followed_at: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          line_channel_key?: string;
+          store_id?: string | null;
+          line_user_id?: string;
+          event_type?: "follow" | "unfollow";
+          followed_at?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      instagram_follower_snapshots: {
+        Row: {
+          id: string;
+          store_id: string;
+          snapshot_date: string;
+          followers_count: number;
+          source: "meta_api" | "manual";
+          captured_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          snapshot_date: string;
+          followers_count: number;
+          source?: "meta_api" | "manual";
+          captured_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          snapshot_date?: string;
+          followers_count?: number;
+          source?: "meta_api" | "manual";
+          captured_at?: string;
+        };
+        Relationships: [];
+      };
+      line_follower_snapshots: {
+        Row: {
+          id: string;
+          store_id: string;
+          line_channel_key: string;
+          snapshot_date: string;
+          followers_count: number;
+          blocks: number | null;
+          source: string;
+          captured_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          line_channel_key: string;
+          snapshot_date: string;
+          followers_count: number;
+          blocks?: number | null;
+          source?: string;
+          captured_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          line_channel_key?: string;
+          snapshot_date?: string;
+          followers_count?: number;
+          blocks?: number | null;
+          source?: string;
+          captured_at?: string;
+        };
+        Relationships: [];
+      };
+      meta_ads_daily_insights: {
+        Row: {
+          id: string;
+          store_id: string;
+          insight_date: string;
+          spend: number;
+          impressions: number | null;
+          clicks: number | null;
+          reach: number | null;
+          source: "meta_api" | "manual";
+          raw: Record<string, unknown> | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          insight_date: string;
+          spend?: number;
+          impressions?: number | null;
+          clicks?: number | null;
+          reach?: number | null;
+          source?: "meta_api" | "manual";
+          raw?: Record<string, unknown> | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          insight_date?: string;
+          spend?: number;
+          impressions?: number | null;
+          clicks?: number | null;
+          reach?: number | null;
+          source?: "meta_api" | "manual";
+          raw?: Record<string, unknown> | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      marketing_report_dispatches: {
+        Row: {
+          id: string;
+          report_kind: "daily" | "weekly";
+          period_key: string;
+          sent_at: string;
+        };
+        Insert: {
+          id?: string;
+          report_kind: "daily" | "weekly";
+          period_key: string;
+          sent_at?: string;
+        };
+        Update: {
+          id?: string;
+          report_kind?: "daily" | "weekly";
+          period_key?: string;
+          sent_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {};
     Functions: {};

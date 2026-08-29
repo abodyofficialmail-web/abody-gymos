@@ -3,6 +3,8 @@ import { createHmac, timingSafeEqual } from "crypto";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendGoalHearingInviteForMember } from "@/lib/goalHearingInviteSend";
+import { recordLineFollowEvent } from "@/lib/marketing/lineFollowEvents";
+import type { LineChannelKey } from "@/lib/lineChannel";
 import {
   opsKindLabel,
   parseTrainerOpsCommand,
@@ -25,6 +27,7 @@ type LineWebhookBody = {
   destination?: string;
   events?: Array<{
     type: string;
+    timestamp?: number;
     replyToken?: string;
     source?: { type?: string; userId?: string };
     message?: { type?: string; text?: string };
@@ -320,6 +323,23 @@ export async function POST(request: Request) {
 
   const events = body.events ?? [];
   for (const event of events) {
+    if (event.type === "follow" || event.type === "unfollow") {
+      const userId = event.source?.userId;
+      if (userId) {
+        try {
+          await recordLineFollowEvent({
+            supabase,
+            channelKey: channelKey as LineChannelKey,
+            lineUserId: userId,
+            eventType: event.type === "unfollow" ? "unfollow" : "follow",
+            timestampMs: event.timestamp ?? null,
+          });
+        } catch (e) {
+          console.error("line follow event record failed", e);
+        }
+      }
+      continue;
+    }
     if (event.type !== "message") continue;
     if (event.message?.type !== "text") continue;
 

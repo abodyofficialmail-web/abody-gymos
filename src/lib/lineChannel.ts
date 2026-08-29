@@ -1,5 +1,7 @@
 export type LineChannelKey = "default" | "ueno" | "sakuragicho" | "shinjuku" | "fukuoka";
 
+export const LINE_CHANNEL_KEYS: LineChannelKey[] = ["default", "ueno", "sakuragicho", "shinjuku", "fukuoka"];
+
 export function normalizeLineChannelKey(raw: unknown): LineChannelKey | null {
   const k = String(raw ?? "");
   if (k === "default" || k === "ueno" || k === "sakuragicho" || k === "shinjuku" || k === "fukuoka") return k;
@@ -32,6 +34,15 @@ export function lineChannelLabel(key: LineChannelKey | null | undefined): string
   if (key === "shinjuku") return "新宿公式LINE";
   if (key === "fukuoka") return "福岡公式LINE";
   return "恵比寿公式LINE";
+}
+
+export function storeNameForLineChannelKey(key: LineChannelKey | null | undefined): string | null {
+  if (key === "ueno") return "上野";
+  if (key === "sakuragicho") return "桜木町";
+  if (key === "shinjuku") return "新宿";
+  if (key === "fukuoka") return "福岡";
+  if (key === "default") return "恵比寿";
+  return null;
 }
 
 export function lineChannelTokenForStoreName(storeName: string): string | null {
