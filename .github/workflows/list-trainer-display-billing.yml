@@ -1,0 +1,34 @@
+name: List Trainer Display Billing
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/aug-expense-ratio-7588
+    paths:
+      - "scripts/list-trainer-display-billing-members.mjs"
+      - "scripts/fetch-trainer-visibility-price.mjs"
+      - "scripts/probe-trainer-visibility-tables.mjs"
+      - ".github/workflows/list-trainer-display-billing.yml"
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --legacy-peer-deps
+      - env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          TRAINER_VISIBILITY_PASS_PRICE_ID: ${{ secrets.TRAINER_VISIBILITY_PASS_PRICE_ID }}
+          TRAINER_VISIBILITY_PASS_AMOUNT: ${{ secrets.TRAINER_VISIBILITY_PASS_AMOUNT }}
+          NEXT_PUBLIC_TRAINER_VISIBILITY_PASS_PRICE_YEN: ${{ secrets.NEXT_PUBLIC_TRAINER_VISIBILITY_PASS_PRICE_YEN }}
+        run: |
+          node scripts/list-trainer-display-billing-members.mjs
+          node scripts/fetch-trainer-visibility-price.mjs
+          node scripts/probe-trainer-visibility-tables.mjs
