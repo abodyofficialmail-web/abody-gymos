@@ -12,7 +12,7 @@ const MONTH = "2026-09";
 const TZ = "Asia/Tokyo";
 const SLOT_STEP_MIN = 30;
 const MTG_DURATION_MIN = 60;
-const SEARCH_START = 9 * 60; // 09:00
+const SEARCH_START = 8 * 60; // 08:00
 const SEARCH_END = 21 * 60; // 21:00開始まで
 
 /** コア従業員（シフト設計と同期） */
@@ -166,6 +166,7 @@ async function main() {
     }
   }
   nearMiss.sort((a, b) => b.count - a.count || a.date.localeCompare(b.date));
+  const perfectDays = nearMiss.filter((d) => d.count === SHIFT_REQUIRED.length);
 
   console.log(
     JSON.stringify(
@@ -187,6 +188,7 @@ async function main() {
         totalSlotOptions: uniqueSlots.length,
         futureSlotOptions: futureSlots.length,
         nearMissTop10: nearMiss.slice(0, 10),
+        perfectDayCount: perfectDays.length,
         slots: futureSlots,
         byDate,
       },
