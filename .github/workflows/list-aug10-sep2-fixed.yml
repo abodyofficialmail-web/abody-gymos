@@ -1,0 +1,29 @@
+name: List Aug10 Sep2 Fixed
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/aug10-sep2-members-7588
+    paths:
+      - "scripts/list-aug10-sep2plus-members.mjs"
+      - ".github/workflows/list-aug10-sep2-fixed.yml"
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --legacy-peer-deps
+      - env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/list-aug10-sep2plus-members.mjs
