@@ -5,6 +5,7 @@
  * node --env-file=.env.local scripts/find-mtg-slots-2026-09.mjs
  */
 import { createClient } from "@supabase/supabase-js";
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const MONTH = "2026-09";
 const EXCLUDE = new Set(["こうへい"]);
@@ -60,22 +61,6 @@ function formatRange(startMin, endMin) {
 function dayOfWeek(ymd) {
   const [y, m, d] = ymd.split("-").map(Number);
   return ["日", "月", "火", "水", "木", "金", "土"][new Date(y, m - 1, d).getDay()];
-}
-
-async function fetchAll(supabase, table, select, apply) {
-  const page = 1000;
-  let from = 0;
-  const out = [];
-  for (;;) {
-    let q = supabase.from(table).select(select).range(from, from + page - 1);
-    if (apply) q = apply(q);
-    const { data, error } = await q;
-    if (error) throw error;
-    out.push(...(data ?? []));
-    if (!data || data.length < page) break;
-    from += page;
-  }
-  return out;
 }
 
 const MONTH_START = `${MONTH}-01T00:00:00+09:00`;
@@ -134,13 +119,19 @@ async function main() {
     addBusy(r.trainer_name, r.shift_date, toMinutes(r.start_local), toMinutes(r.end_local), "shift");
   }
 
-  const reservations = await fetchAll(supabase, "reservations", "trainer_id, start_at, end_at, status", (q) =>
-    q
-      .in("trainer_id", trainerIds)
-      .gte("start_at", MONTH_START)
-      .lt("start_at", MONTH_END)
-      .neq("status", "cancelled"),
+  const reservationsResult = await fetchAllChecked(
+    supabase,
+    "reservations",
+    "trainer_id, start_at, end_at, status",
+    (q) =>
+      q
+        .in("trainer_id", trainerIds)
+        .gte("start_at", MONTH_START)
+        .lt("start_at", MONTH_END)
+        .neq("status", "cancelled"),
+    "reservations.september.trainers",
   );
+  const reservations = reservationsResult.rows;
 
   let reservationCount = 0;
   for (const r of reservations) {

@@ -7,6 +7,7 @@ on:
       - cursor/aug10-sep2-members-7588
     paths:
       - "scripts/list-aug10-sep2plus-members.mjs"
+      - "scripts/lib/supabaseFetchAll.mjs"
       - ".github/workflows/list-aug10-sep2-fixed.yml"
 
 jobs:

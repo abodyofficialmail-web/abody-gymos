@@ -3,6 +3,7 @@
  * node --env-file=.env.local scripts/list-aug10-sep2plus-members.mjs
  */
 import { createClient } from "@supabase/supabase-js";
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const MIN_AUG_SESSIONS = 10;
 const MIN_SEP_SLOTS = 2;
@@ -13,22 +14,6 @@ const AUG_START = "2026-08-01T00:00:00+09:00";
 const AUG_END = "2026-09-01T00:00:00+09:00";
 const SEP_START = "2026-09-01T00:00:00+09:00";
 const SEP_END = "2026-10-01T00:00:00+09:00";
-
-async function fetchAll(supabase, table, select, apply) {
-  const page = 1000;
-  let from = 0;
-  const out = [];
-  for (;;) {
-    let q = supabase.from(table).select(select).range(from, from + page - 1);
-    if (apply) q = apply(q);
-    const { data, error } = await q;
-    if (error) throw error;
-    out.push(...(data ?? []));
-    if (!data || data.length < page) break;
-    from += page;
-  }
-  return out;
-}
 
 function slotCount(startAt, endAt) {
   const ms = new Date(endAt).getTime() - new Date(startAt).getTime();
@@ -48,17 +33,31 @@ function localDateTime(iso) {
   }).format(new Date(iso));
 }
 
-async function fetchReservations(supabase, rangeStart, rangeEnd) {
+async function fetchReservations(supabase, rangeStart, rangeEnd, label) {
   const select =
     "id, member_id, store_id, trainer_id, start_at, end_at, status, session_type";
 
-  return fetchAll(supabase, "reservations", select, (q) =>
-    q
-      .gte("start_at", rangeStart)
-      .lt("start_at", rangeEnd)
-      .neq("status", "cancelled")
-      .not("member_id", "is", null),
+  return fetchAllChecked(
+    supabase,
+    "reservations",
+    select,
+    (q) =>
+      q
+        .gte("start_at", rangeStart)
+        .lt("start_at", rangeEnd)
+        .neq("status", "cancelled")
+        .not("member_id", "is", null),
+    label,
   );
+}
+
+function countByStore(results) {
+  const breakdown = {};
+  for (const r of results) {
+    const store = r.homeStore ?? "不明";
+    breakdown[store] = (breakdown[store] ?? 0) + 1;
+  }
+  return breakdown;
 }
 
 async function main() {
@@ -71,24 +70,28 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const [augReservations, sepReservations] = await Promise.all([
-    fetchReservations(supabase, AUG_START, AUG_END),
-    fetchReservations(supabase, SEP_START, SEP_END),
+  const [augResult, sepResult, membersResult, storesResult, trainersResult] = await Promise.all([
+    fetchReservations(supabase, AUG_START, AUG_END, "reservations.august"),
+    fetchReservations(supabase, SEP_START, SEP_END, "reservations.september"),
+    fetchAllChecked(
+      supabase,
+      "members",
+      "id, member_code, display_name, name, store_id, membership_status",
+      undefined,
+      "members",
+    ),
+    fetchAllChecked(supabase, "stores", "id, name", undefined, "stores"),
+    fetchAllChecked(supabase, "trainers", "id, display_name", undefined, "trainers"),
   ]);
 
-  const fetched = {
-    august: augReservations.length,
-    september: sepReservations.length,
-  };
+  const augReservations = augResult.rows;
+  const sepReservations = sepResult.rows;
 
-  if (fetched.august === 1000) {
-    console.error("fetch失敗: august が1000件で打ち切られています（ページング不足）");
-    process.exit(1);
-  }
-  if (fetched.september === 1000) {
-    console.error("fetch失敗: september が1000件で打ち切られています（ページング不足）");
-    process.exit(1);
-  }
+  const fetched = {
+    august: { count: augResult.count, fetched: augResult.fetched },
+    september: { count: sepResult.count, fetched: sepResult.fetched },
+    members: { count: membersResult.count, fetched: membersResult.fetched },
+  };
 
   const augByMember = new Map();
   for (const r of augReservations) {
@@ -112,18 +115,9 @@ async function main() {
     return sepSlots >= MIN_SEP_SLOTS;
   });
 
-  const allMembers = await fetchAll(
-    supabase,
-    "members",
-    "id, member_code, display_name, name, store_id, membership_status",
-  );
-  const memberById = Object.fromEntries(allMembers.map((m) => [m.id, m]));
-
-  const stores = await fetchAll(supabase, "stores", "id, name");
-  const storeNameById = Object.fromEntries(stores.map((s) => [s.id, s.name]));
-
-  const trainers = await fetchAll(supabase, "trainers", "id, display_name");
-  const trainerNameById = Object.fromEntries(trainers.map((t) => [t.id, t.display_name]));
+  const memberById = Object.fromEntries(membersResult.rows.map((m) => [m.id, m]));
+  const storeNameById = Object.fromEntries(storesResult.rows.map((s) => [s.id, s.name]));
+  const trainerNameById = Object.fromEntries(trainersResult.rows.map((t) => [t.id, t.display_name]));
 
   const results = candidateIds.map((memberId) => {
     const augList = augByMember.get(memberId) ?? [];
@@ -162,6 +156,8 @@ async function main() {
       String(a.memberCode).localeCompare(String(b.memberCode)),
   );
 
+  const storeBreakdown = countByStore(results);
+
   console.log(
     JSON.stringify(
       {
@@ -171,6 +167,7 @@ async function main() {
           september: `2026-09 予約 ${MIN_SEP_SLOTS}枠以上（30分単位・SQLでキャンセル除外）`,
         },
         memberCount: results.length,
+        storeBreakdown,
         members: results,
       },
       null,
@@ -186,6 +183,11 @@ async function main() {
       `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.augSessionCount} | ${r.sepSlotCount} | ${r.sepReservationCount} |`,
     );
   });
+
+  console.log("\n--- 店舗別 ---");
+  for (const [store, n] of Object.entries(storeBreakdown).sort((a, b) => b[1] - a[1])) {
+    console.log(`${store}: ${n}`);
+  }
 }
 
 main().catch((e) => {

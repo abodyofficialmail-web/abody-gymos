@@ -1,0 +1,54 @@
+---
+description: Supabase/PostgREST 1000件上限対策。DB抽出スクリプトは必ず fetchAllChecked を使う。
+globs: scripts/**/*.mjs
+alwaysApply: false
+---
+
+# Supabase ページング取得ルール
+
+PostgREST（Supabase JS）は **1回の select が最大1000件**。ページングなしの単発 `.select()` は取りこぼしの原因になる。
+
+## 必須
+
+- 予約・会員など **複数行テーブル** は `scripts/lib/supabaseFetchAll.mjs` の **`fetchAllChecked`** を使う
+- **単発 `.select()` 禁止**
+- 実行時ログに **`count` と `fetched`** を出す（`fetchAllChecked` の戻り値）
+- **`count !== fetched` なら失敗**（throw / exit 1）
+
+## 使い方
+
+```javascript
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+
+const { rows, count, fetched } = await fetchAllChecked(
+  supabase,
+  "reservations",
+  "id, member_id, start_at, end_at, status",
+  (q) =>
+    q
+      .gte("start_at", "2026-08-01T00:00:00+09:00")
+      .lt("start_at", "2026-09-01T00:00:00+09:00")
+      .neq("status", "cancelled")
+      .not("member_id", "is", null),
+  "reservations.august",
+);
+
+console.log(JSON.stringify({ count, fetched }));
+```
+
+## 期間（JST）
+
+- 月範囲は `gte(月初)` + `lt(翌月初)` を使う（`lte(月末23:59)` は使わない）
+
+## キャンセル除外
+
+- JS 側 filter ではなく SQL `.neq("status", "cancelled")`
+
+## 正常値の目安（2026-09-01 時点）
+
+| ラベル | count / fetched |
+|--------|-----------------|
+| 8月予約（有効・会員） | 約 1143 |
+| 9月予約（有効・会員） | 約 482 |
+
+`fetched` が **1000 ちょうど** のときはページング不足の疑い（`fetchAllChecked` なら count 不一致で検出される）。
