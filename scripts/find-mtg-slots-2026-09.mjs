@@ -8,6 +8,8 @@ import { createClient } from "@supabase/supabase-js";
 
 const MONTH = "2026-09";
 const EXCLUDE = new Set(["こうへい"]);
+/** MTG参加者（こうへい除くコアトレーナー） */
+const TARGET_TRAINERS = ["ゆうと", "たけはる", "ひろむ", "せいや", "りょう", "だいき"];
 const TZ = "Asia/Tokyo";
 const SLOT_STEP_MIN = 30;
 const MTG_DURATION_MIN = 60;
@@ -89,9 +91,12 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const { data: allTrainers } = await supabase.from("trainers").select("id, display_name");
-  const trainers = (allTrainers ?? []).filter((t) => !EXCLUDE.has(t.display_name));
-  const targetNames = trainers.map((t) => t.display_name).sort();
+  const { data: allTrainers } = await supabase
+    .from("trainers")
+    .select("id, display_name")
+    .in("display_name", TARGET_TRAINERS);
+  const trainers = (allTrainers ?? []).filter((t) => TARGET_TRAINERS.includes(t.display_name));
+  const targetNames = TARGET_TRAINERS.filter((n) => trainers.some((t) => t.display_name === n));
   const trainerIdByName = Object.fromEntries(trainers.map((t) => [t.display_name, t.id]));
   const trainerNameById = Object.fromEntries(trainers.map((t) => [t.id, t.display_name]));
   const trainerIds = trainers.map((t) => t.id).filter(Boolean);
