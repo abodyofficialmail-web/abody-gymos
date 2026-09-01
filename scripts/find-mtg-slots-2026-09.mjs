@@ -1,11 +1,10 @@
 /**
  * 9月: こうへい除く全員が1時間オンラインMTG可能な日時を列挙
- * シフト（buildRows計画）+ DB予約 + trainer_events を考慮
+ * DBシフト + DB予約 + trainer_events を考慮
  *
  * node --env-file=.env.local scripts/find-mtg-slots-2026-09.mjs
  */
 import { createClient } from "@supabase/supabase-js";
-import { buildRows } from "./sync-final-shifts-2026-09.mjs";
 
 const MONTH = "2026-09";
 const EXCLUDE = new Set(["こうへい"]);
@@ -90,18 +89,13 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const planRows = buildRows().filter((r) => !EXCLUDE.has(r.trainer_name));
-  const targetNames = [...new Set(planRows.map((r) => r.trainer_name))].sort();
+  const { data: allTrainers } = await supabase.from("trainers").select("id, display_name");
+  const trainers = (allTrainers ?? []).filter((t) => !EXCLUDE.has(t.display_name));
+  const targetNames = trainers.map((t) => t.display_name).sort();
+  const trainerIdByName = Object.fromEntries(trainers.map((t) => [t.display_name, t.id]));
+  const trainerNameById = Object.fromEntries(trainers.map((t) => [t.id, t.display_name]));
+  const trainerIds = trainers.map((t) => t.id).filter(Boolean);
 
-  const { data: trainers } = await supabase
-    .from("trainers")
-    .select("id, display_name")
-    .in("display_name", targetNames);
-  const trainerIdByName = Object.fromEntries((trainers ?? []).map((t) => [t.display_name, t.id]));
-  const trainerNameById = Object.fromEntries((trainers ?? []).map((t) => [t.id, t.display_name]));
-  const trainerIds = targetNames.map((n) => trainerIdByName[n]).filter(Boolean);
-
-  // DBシフト（draft含む・休憩ブロック除外）で計画を上書き補完
   const { data: dbShifts } = await supabase
     .from("trainer_shifts")
     .select("trainer_id, shift_date, start_local, end_local, status, is_break")
@@ -111,17 +105,14 @@ async function main() {
     .neq("status", "draft")
     .eq("is_break", false);
 
-  const useDbShifts = (dbShifts ?? []).length > 0;
-  const shiftSource = useDbShifts ? "db_confirmed" : "buildRows_plan";
+  const shiftSource = (dbShifts ?? []).length > 0 ? "db_confirmed" : "none";
 
-  const shiftRows = useDbShifts
-    ? (dbShifts ?? []).map((s) => ({
-        trainer_name: trainerNameById[s.trainer_id],
-        shift_date: s.shift_date,
-        start_local: s.start_local,
-        end_local: s.end_local,
-      }))
-    : planRows;
+  const shiftRows = (dbShifts ?? []).map((s) => ({
+    trainer_name: trainerNameById[s.trainer_id],
+    shift_date: s.shift_date,
+    start_local: s.start_local,
+    end_local: s.end_local,
+  }));
 
   const busyByTrainerDay = new Map(); // key: name|date -> intervals[]
 
