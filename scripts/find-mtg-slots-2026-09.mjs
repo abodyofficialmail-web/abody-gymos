@@ -1,7 +1,7 @@
 /**
  * 9月: 1時間オンラインMTG候補
  * - 参加者: こうへい以外（コア6名）
- * - 条件: だいき以外の従業員（ゆうと・たけはる・ひろむ・せいや・りょう・こうへい）が全員シフトイン
+ * - 条件: 参加者のうちだいき以外（ゆうと・たけはる・ひろむ・せいや・りょう）が全員シフトイン
  *
  * node --env-file=.env.local scripts/find-mtg-slots-2026-09.mjs
  */
@@ -19,8 +19,8 @@ const SEARCH_END = 21 * 60; // 21:00開始まで
 const CORE_EMPLOYEES = ["ゆうと", "たけはる", "ひろむ", "せいや", "りょう", "こうへい", "だいき"];
 /** MTG参加者: こうへい除く */
 const MTG_PARTICIPANTS = CORE_EMPLOYEES.filter((n) => n !== "こうへい");
-/** シフトイン必須: だいき除く */
-const SHIFT_REQUIRED = CORE_EMPLOYEES.filter((n) => n !== "だいき");
+/** シフトイン必須: 参加者のうちだいき除く（5名） */
+const SHIFT_REQUIRED = MTG_PARTICIPANTS.filter((n) => n !== "だいき");
 
 const MONTH_START = `${MONTH}-01T00:00:00+09:00`;
 const MONTH_END = "2026-10-01T00:00:00+09:00";
@@ -148,6 +148,25 @@ async function main() {
     if (!byDate[key].includes(s.time)) byDate[key].push(s.time);
   }
 
+  const nearMiss = [];
+  for (let day = 1; day <= 30; day++) {
+    const ymd = `${MONTH}-${String(day).padStart(2, "0")}`;
+    let best = { count: 0, time: null, missing: SHIFT_REQUIRED };
+    for (let start = SEARCH_START; start + MTG_DURATION_MIN <= 22 * 60; start += SLOT_STEP_MIN) {
+      if (start > SEARCH_END) break;
+      const end = start + MTG_DURATION_MIN;
+      const on = SHIFT_REQUIRED.filter((name) => isShiftedIn(name, ymd, start, end));
+      const missing = SHIFT_REQUIRED.filter((name) => !isShiftedIn(name, ymd, start, end));
+      if (on.length > best.count) {
+        best = { count: on.length, time: formatRange(start, end), missing };
+      }
+    }
+    if (best.count > 0) {
+      nearMiss.push({ date: ymd, dow: dayOfWeek(ymd), ...best });
+    }
+  }
+  nearMiss.sort((a, b) => b.count - a.count || a.date.localeCompare(b.date));
+
   console.log(
     JSON.stringify(
       {
@@ -167,6 +186,7 @@ async function main() {
         searchWindow: "09:00-21:00開始 (1時間枠)",
         totalSlotOptions: uniqueSlots.length,
         futureSlotOptions: futureSlots.length,
+        nearMissTop10: nearMiss.slice(0, 10),
         slots: futureSlots,
         byDate,
       },
@@ -175,7 +195,7 @@ async function main() {
     ),
   );
 
-  console.log("\n--- 候補日時（だいき以外全員シフトイン・こうへい除く6名参加・今日以降） ---");
+  console.log("\n--- 候補日時（参加者5名シフトイン・だいき/こうへいは条件外・今日以降） ---");
   for (const [dateLabel, times] of Object.entries(byDate)) {
     console.log(`\n### ${dateLabel}`);
     for (const t of times) console.log(`- ${t}`);
