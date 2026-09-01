@@ -9,6 +9,9 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 const MIN_SEP_SLOTS = 3;
 const SLOT_MIN = 30;
 
+const AUG_START = "2026-08-01T00:00:00+09:00";
+const AUG_END = "2026-09-01T00:00:00+09:00";
+
 const SEP_FETCH_START = "2026-09-01T00:00:00+09:00";
 const SEP_FETCH_END = "2026-10-01T00:00:00+09:00";
 /** 枠数カウント対象: 9/2 0:00 〜 9/30（9/1は除外） */
@@ -63,7 +66,19 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const [sepResult, membersResult, storesResult] = await Promise.all([
+  const [augResult, sepResult, membersResult, storesResult] = await Promise.all([
+    fetchAllChecked(
+      supabase,
+      "reservations",
+      "id, member_id, store_id, start_at, end_at, status",
+      (q) =>
+        q
+          .gte("start_at", AUG_START)
+          .lt("start_at", AUG_END)
+          .neq("status", "cancelled")
+          .not("member_id", "is", null),
+      "reservations.august",
+    ),
     fetchAllChecked(
       supabase,
       "reservations",
@@ -85,6 +100,11 @@ async function main() {
     ),
     fetchAllChecked(supabase, "stores", "id, name", undefined, "stores"),
   ]);
+
+  const augCountByMember = new Map();
+  for (const r of augResult.rows) {
+    augCountByMember.set(r.member_id, (augCountByMember.get(r.member_id) ?? 0) + 1);
+  }
 
   const sepByMember = new Map();
   for (const r of sepResult.rows) {
@@ -111,6 +131,7 @@ async function main() {
           memberCode: String(m?.member_code ?? "").toUpperCase(),
           displayName: m?.display_name ?? m?.name ?? "—",
           homeStore: storeNameById[m?.store_id] ?? null,
+          augSessionCount: augCountByMember.get(memberId) ?? 0,
           sep1Slots,
           sep2to30Slots,
           sepTotalSlots,
@@ -124,6 +145,7 @@ async function main() {
       memberCode: String(m?.member_code ?? "").toUpperCase(),
       displayName: m?.display_name ?? m?.name ?? "—",
       homeStore: storeNameById[m?.store_id] ?? null,
+      augSessionCount: augCountByMember.get(memberId) ?? 0,
       sep2to30SlotCount: sep2to30Slots,
       sep2to30ReservationCount: countReservationsInRange(resList, COUNT_START, COUNT_END),
       sep1SlotCount: sep1Slots,
@@ -148,6 +170,7 @@ async function main() {
     JSON.stringify(
       {
         fetched: {
+          august: { count: augResult.count, fetched: augResult.fetched },
           september: { count: sepResult.count, fetched: sepResult.fetched },
           members: { count: membersResult.count, fetched: membersResult.fetched },
         },
@@ -186,11 +209,11 @@ async function main() {
   }
 
   console.log("\n--- 一覧（9/2〜9/30で3枠以上・8枠案内済み除外） ---");
-  console.log("| # | 会員コード | 氏名 | 所属店 | 9/2〜枠 | 9/2〜予約数 | 9/1枠 | 9月合計枠 |");
-  console.log("|---:|---|---|---|---:|---:|---:|---:|");
+  console.log("| # | 会員コード | 氏名 | 所属店 | 8月利用 | 9/2〜枠 | 9/2〜予約数 | 9/1枠 | 9月合計枠 |");
+  console.log("|---:|---|---|---|---:|---:|---:|---:|---:|");
   remaining.forEach((r, i) => {
     console.log(
-      `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.sep2to30SlotCount} | ${r.sep2to30ReservationCount} | ${r.sep1SlotCount} | ${r.sepTotalSlotCount} |`,
+      `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.augSessionCount} | ${r.sep2to30SlotCount} | ${r.sep2to30ReservationCount} | ${r.sep1SlotCount} | ${r.sepTotalSlotCount} |`,
     );
   });
 
