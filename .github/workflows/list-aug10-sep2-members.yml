@@ -2,12 +2,6 @@ name: List Aug10 Sep2+ Members
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - cursor/aug10-sep2-members-7588
-    paths:
-      - "scripts/list-aug10-sep2plus-members.mjs"
-      - ".github/workflows/list-aug10-sep2-members.yml"
 
 jobs:
   list:
