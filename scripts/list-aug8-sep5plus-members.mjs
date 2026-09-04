@@ -18,6 +18,14 @@ const SEP_FETCH_END = "2026-10-01T00:00:00+09:00";
 const COUNT_START = "2026-09-05T00:00:00+09:00";
 const COUNT_END = "2026-10-01T00:00:00+09:00";
 
+/** 8コマ先取り案内済み scripts/send-june-low-booking-line.mjs と同期 */
+const EXCLUDE_8SLOT_GUIDANCE_CODES = new Set([
+  "EBI006", "EBI012", "EBI026", "EBI024", "EBI009", "EBI021", "EBI010", "EBI015", "EBI031",
+  "SAK009", "SAK043", "SAK033", "SAK049", "SAK050", "SAK044", "SAK025", "SAK028", "SAK017", "SAK030",
+  "UEN052", "UEN053", "UEN042", "UEN001", "UEN033", "UEN058", "UEN051", "UEN049", "UEN031",
+  "UEN009", "UEN039", "UEN002",
+]);
+
 function slotCount(startAt, endAt) {
   const ms = new Date(endAt).getTime() - new Date(startAt).getTime();
   if (ms <= 0) return 0;
@@ -142,6 +150,9 @@ async function main() {
       String(a.memberCode).localeCompare(String(b.memberCode)),
   );
 
+  const excluded8slot = results.filter((m) => EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode));
+  const remaining = results.filter((m) => !EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode));
+
   console.log(
     JSON.stringify(
       {
@@ -153,9 +164,14 @@ async function main() {
         criteria: {
           august: `2026-08 ${MIN_AUG_SLOTS}枠以上（30分単位・キャンセル除外）`,
           september: `2026-09-05 〜 2026-09-30 ${MIN_SEP_RESERVATIONS}回以上予約（9/1〜9/4除外・キャンセル除外）`,
+          exclude: "8枠先取り案内済み31名（send-june-low-booking-line.mjs）",
         },
         memberCount: results.length,
-        storeBreakdown: countByStore(results),
+        excluded8slotGuidanceCount: excluded8slot.length,
+        remainingCount: remaining.length,
+        excluded8slotMembers: excluded8slot,
+        storeBreakdown: countByStore(remaining),
+        remainingMembers: remaining,
         members: results,
       },
       null,
@@ -165,20 +181,29 @@ async function main() {
 
   console.log("\n--- サマリー ---");
   console.log(`8月${MIN_AUG_SLOTS}枠以上 × 9/5〜9/30で${MIN_SEP_RESERVATIONS}回以上予約: ${results.length}名`);
+  console.log(`8枠案内済みで除外: ${excluded8slot.length}名`);
+  console.log(`最終: ${remaining.length}名`);
 
-  console.log("\n--- 一覧 ---");
+  if (excluded8slot.length) {
+    console.log("\n--- 8枠案内済みで除外 ---");
+    for (const m of excluded8slot) {
+      console.log(`${m.memberCode} ${m.displayName}`);
+    }
+  }
+
+  console.log("\n--- 一覧（8枠案内済み除外） ---");
   console.log(
     "| # | 会員コード | 氏名 | 所属店 | 8月枠 | 8月予約数 | 9/5〜予約数 | 9/5〜枠 | 9/1〜4予約 | 9月合計予約 | 9月合計枠 |",
   );
   console.log("|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|");
-  results.forEach((r, i) => {
+  remaining.forEach((r, i) => {
     console.log(
       `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.augSlotCount} | ${r.augReservationCount} | ${r.sep5to30ReservationCount} | ${r.sep5to30SlotCount} | ${r.sep1to4ReservationCount} | ${r.sepTotalReservationCount} | ${r.sepTotalSlotCount} |`,
     );
   });
 
   console.log("\n--- 店舗別 ---");
-  for (const [store, n] of Object.entries(countByStore(results)).sort((a, b) => b[1] - a[1])) {
+  for (const [store, n] of Object.entries(countByStore(remaining)).sort((a, b) => b[1] - a[1])) {
     console.log(`${store}: ${n}`);
   }
 }
