@@ -286,6 +286,7 @@ async function main() {
             });
             cancelResult.line = lineRes;
             console.log(`    LINE: ${lineRes.sent ? "送信" : lineRes.reason}`);
+            await new Promise((r) => setTimeout(r, 350));
           }
         }
       }
