@@ -101,7 +101,13 @@ function partitionKeepCancel(reservations) {
 
 async function pushLineCancel({ token, to, storeName, startAt, endAt }) {
   if (!token || !to) return { sent: false, reason: "no_token_or_to" };
-  const text = `【予約キャンセルのお知らせ】\n${storeName}\n${fmtJst(startAt)} 〜 ${fmtJst(endAt)}\n\n上記の予約をキャンセルいたしました。`;
+  const start = DateTime.fromISO(startAt, { setZone: true }).setZone("Asia/Tokyo");
+  const end = DateTime.fromISO(endAt, { setZone: true }).setZone("Asia/Tokyo");
+  const text = `【ご予約キャンセル】
+店舗：${storeName}
+日時：${start.setLocale("ja").toFormat("M月d日（ccc）")} ${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}
+
+またのご予約をお待ちしております。`;
   const res = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
@@ -117,12 +123,19 @@ async function pushLineCancel({ token, to, storeName, startAt, endAt }) {
   return { sent: true };
 }
 
-function lineTokenForStore(storeName) {
-  const n = String(storeName ?? "");
-  if (n.includes("上野")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO?.trim() || process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
-  if (n.includes("桜木")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO?.trim() || process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
-  if (n.includes("新宿")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU?.trim() || process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
-  if (n.includes("恵比寿")) return process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
+function lineTokenForMember(member, storeName) {
+  const key = String(member.line_channel_key ?? "").trim();
+  if (key === "ueno") return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO?.trim() || null;
+  if (key === "sakuragicho") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO?.trim() || null;
+  if (key === "shinjuku") return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU?.trim() || null;
+  if (key === "fukuoka") return process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA?.trim() || null;
+  if (key === "default") return process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
+
+  const code = String(member.member_code ?? "").toUpperCase();
+  if (code.startsWith("UEN")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_UENO?.trim() || null;
+  if (code.startsWith("SAK")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO?.trim() || null;
+  if (code.startsWith("SHI") || code.startsWith("SHJ")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU?.trim() || null;
+  if (code.startsWith("FUK")) return process.env.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA?.trim() || null;
   return process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || null;
 }
 
@@ -263,7 +276,7 @@ async function main() {
           console.log(`    ✓ キャンセル済`);
 
           if (sendLine && member.line_user_id) {
-            const token = lineTokenForStore(storeName);
+            const token = lineTokenForMember(member, storeName);
             const lineRes = await pushLineCancel({
               token,
               to: member.line_user_id,
