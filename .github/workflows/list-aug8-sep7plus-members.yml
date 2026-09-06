@@ -1,5 +1,9 @@
 name: List Aug8 Sep7+ Members
 
+# 60分通い放題除外に必要（未設定時は除外スキップ）:
+#   GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
+# ローカル .env.local と同じ値を GitHub Secrets に登録する
+
 on:
   workflow_dispatch:
   push:
