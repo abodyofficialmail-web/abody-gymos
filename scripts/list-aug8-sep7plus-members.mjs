@@ -1,6 +1,7 @@
 /**
  * 8月8枠以上 かつ 9/7〜9/30で3回以上予約の会員を抽出
  * 除外: 桜木町所属・8枠先取り案内済み31名・8月8回・60分通い放題プラン
+ * プラン取得: Sheets / Supabase / 本番API / snapshot JSON
  * node --env-file=.env.local scripts/list-aug8-sep7plus-members.mjs
  */
 import { createClient } from "@supabase/supabase-js";
