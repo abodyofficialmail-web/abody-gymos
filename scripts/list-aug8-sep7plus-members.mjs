@@ -1,10 +1,11 @@
 /**
  * 8月8枠以上 かつ 9/7〜9/30で3回以上予約の会員を抽出
- * 除外: 桜木町所属・8枠先取り案内済み31名
+ * 除外: 桜木町所属・8枠先取り案内済み31名・8月8回・60分通い放題プラン
  * node --env-file=.env.local scripts/list-aug8-sep7plus-members.mjs
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+import { fetchMemberPlansFromSheet, isUnlimited60Plan } from "./lib/fetchMemberPlansFromSheet.mjs";
 
 const MIN_AUG_SLOTS = 8;
 const MIN_SEP_RESERVATIONS = 3;
@@ -70,6 +71,8 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
+  const planByCode = await fetchMemberPlansFromSheet();
+
   const [augResult, sepResult, membersResult, storesResult] = await Promise.all([
     fetchAllChecked(
       supabase,
@@ -133,10 +136,14 @@ async function main() {
     if (sep7to30ReservationCount < MIN_SEP_RESERVATIONS) continue;
 
     const m = memberById[memberId];
+    const memberCode = String(m?.member_code ?? "").toUpperCase();
+    const planInfo = planByCode.get(memberCode);
     results.push({
-      memberCode: String(m?.member_code ?? "").toUpperCase(),
+      memberCode,
       displayName: m?.display_name ?? m?.name ?? "—",
       homeStore: storeNameById[m?.store_id] ?? null,
+      memberPlan: planInfo?.plan ?? null,
+      isUnlimited60Plan: planInfo?.isUnlimited60 ?? isUnlimited60Plan(planInfo?.plan),
       augSlotCount,
       augReservationCount: augList.length,
       sep7to30ReservationCount,
@@ -159,11 +166,13 @@ async function main() {
   const excludedAug8 = EXCLUDE_AUG_EXACTLY_8
     ? results.filter((m) => m.augReservationCount === 8)
     : [];
+  const excludedUnlimited60 = results.filter((m) => m.isUnlimited60Plan);
   const remaining = results.filter(
     (m) =>
       m.homeStore !== EXCLUDE_HOME_STORE &&
       !EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode) &&
-      !(EXCLUDE_AUG_EXACTLY_8 && m.augReservationCount === 8),
+      !(EXCLUDE_AUG_EXACTLY_8 && m.augReservationCount === 8) &&
+      !m.isUnlimited60Plan,
   );
 
   console.log(
@@ -181,16 +190,20 @@ async function main() {
             `${EXCLUDE_HOME_STORE}所属`,
             "8枠先取り案内済み31名（send-june-low-booking-line.mjs）",
             "8月ちょうど8回利用",
+            "60分通い放題プラン（Google Sheets C列 unlimited 等）",
           ],
         },
+        planSheetMembers: planByCode.size,
         memberCount: results.length,
         excludedSakuraCount: excludedSakura.length,
         excluded8slotGuidanceCount: excluded8slot.length,
         excludedAug8Count: excludedAug8.length,
+        excludedUnlimited60Count: excludedUnlimited60.length,
         remainingCount: remaining.length,
         excludedSakuraMembers: excludedSakura,
         excluded8slotMembers: excluded8slot,
         excludedAug8Members: excludedAug8,
+        excludedUnlimited60Members: excludedUnlimited60,
         storeBreakdown: countByStore(remaining),
         remainingMembers: remaining,
       },
@@ -204,6 +217,7 @@ async function main() {
   console.log(`${EXCLUDE_HOME_STORE}所属で除外: ${excludedSakura.length}名`);
   console.log(`8枠案内済みで除外: ${excluded8slot.length}名`);
   console.log(`8月8回利用で除外: ${excludedAug8.length}名`);
+  console.log(`60分通い放題で除外: ${excludedUnlimited60.length}名`);
   console.log(`最終: ${remaining.length}名`);
 
   if (excludedSakura.length) {
@@ -227,7 +241,14 @@ async function main() {
     }
   }
 
-  console.log("\n--- 一覧（桜木町・8枠案内済み・8月8回除外） ---");
+  if (excludedUnlimited60.length) {
+    console.log("\n--- 60分通い放題で除外 ---");
+    for (const m of excludedUnlimited60) {
+      console.log(`${m.memberCode} ${m.displayName} (${m.homeStore ?? "—"}) プラン:${m.memberPlan ?? "—"}`);
+    }
+  }
+
+  console.log("\n--- 一覧（全除外後） ---");
   console.log(
     "| # | 会員コード | 氏名 | 所属店 | 8月枠 | 8月予約数 | 9/7〜予約数 | 9/7〜枠 | 9/1〜6予約 | 9月合計予約 | 9月合計枠 |",
   );
