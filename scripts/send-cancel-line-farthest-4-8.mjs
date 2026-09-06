@@ -2,7 +2,7 @@
  * #4・#8 最遠日枠キャンセル分の LINE 再送（キャンセル済み予約向け）
  *
  *   node scripts/send-cancel-line-farthest-4-8.mjs --dry-run
- *   node scripts/send-cancel-line-farthest-4-8.mjs --confirm
+ *   node scripts/send-cancel-line-farthest-4-8.mjs --confirm  # resend-member-line-history 経由
  */
 import { createClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
