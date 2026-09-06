@@ -5,7 +5,7 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
-import { fetchMemberPlansFromSheet, isUnlimited60Plan } from "./lib/fetchMemberPlansFromSheet.mjs";
+import { fetchMemberPlans, isUnlimited60Plan } from "./lib/fetchMemberPlansFromSheet.mjs";
 
 const MIN_AUG_SLOTS = 8;
 const MIN_SEP_RESERVATIONS = 3;
@@ -71,7 +71,8 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const planByCode = await fetchMemberPlansFromSheet();
+  const { planByCode, source: planSource } = await fetchMemberPlans(supabase);
+  console.error(`会員プラン取得: ${planSource} (${planByCode.size}件)`);
 
   const [augResult, sepResult, membersResult, storesResult] = await Promise.all([
     fetchAllChecked(
@@ -193,6 +194,7 @@ async function main() {
             "60分通い放題プラン（Google Sheets C列 unlimited 等）",
           ],
         },
+        planSource,
         planSheetMembers: planByCode.size,
         memberCount: results.length,
         excludedSakuraCount: excludedSakura.length,

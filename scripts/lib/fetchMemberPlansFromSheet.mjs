@@ -70,7 +70,7 @@ export function isUnlimited60Plan(planRaw) {
 export async function fetchMemberPlansFromSheet() {
   const sheetId = process.env.GOOGLE_SHEET_ID?.trim();
   if (!sheetId) {
-    throw new Error("GOOGLE_SHEET_ID が未設定です");
+    return null;
   }
 
   const auth = getAuthClient();
@@ -94,4 +94,51 @@ export async function fetchMemberPlansFromSheet() {
   }
 
   return planByCode;
+}
+
+/**
+ * Supabase members.plan 等（存在する場合）
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ */
+async function fetchMemberPlansFromSupabase(supabase) {
+  for (const col of ["plan", "member_plan", "subscription_plan"]) {
+    const { data, error } = await supabase.from("members").select(`member_code, ${col}`);
+    if (error) continue;
+    const planByCode = new Map();
+    for (const row of data ?? []) {
+      const memberCode = String(row.member_code ?? "").trim().toUpperCase();
+      if (!memberCode) continue;
+      const plan = String(row[col] ?? "").trim();
+      planByCode.set(memberCode, {
+        plan,
+        isUnlimited60: isUnlimited60Plan(plan),
+      });
+    }
+    if (planByCode.size) return { planByCode, source: `members.${col}` };
+  }
+  return null;
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @returns {Promise<{ planByCode: Map<string, { plan: string, isUnlimited60: boolean }>, source: string }>}
+ */
+export async function fetchMemberPlans(supabase) {
+  if (process.env.GOOGLE_SHEET_ID?.trim()) {
+    try {
+      const planByCode = await fetchMemberPlansFromSheet();
+      if (planByCode?.size) {
+        return { planByCode, source: "google_sheets" };
+      }
+    } catch (e) {
+      console.warn("Google Sheets プラン取得失敗:", e?.message ?? e);
+    }
+  }
+
+  const fromDb = await fetchMemberPlansFromSupabase(supabase);
+  if (fromDb) return fromDb;
+
+  throw new Error(
+    "会員プランを取得できません。GOOGLE_SHEET_ID + Google認証を設定するか、members.plan 列をDBに追加してください。",
+  );
 }
