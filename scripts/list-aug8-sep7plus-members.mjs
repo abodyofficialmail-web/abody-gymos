@@ -71,8 +71,9 @@ async function main() {
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-  const { planByCode, source: planSource } = await fetchMemberPlans(supabase);
+  const { planByCode, source: planSource, warning: planWarning } = await fetchMemberPlans(supabase);
   console.error(`会員プラン取得: ${planSource} (${planByCode.size}件)`);
+  if (planWarning) console.error(`警告: ${planWarning}`);
 
   const [augResult, sepResult, membersResult, storesResult] = await Promise.all([
     fetchAllChecked(
@@ -195,6 +196,7 @@ async function main() {
           ],
         },
         planSource,
+        planWarning: planWarning ?? null,
         planSheetMembers: planByCode.size,
         memberCount: results.length,
         excludedSakuraCount: excludedSakura.length,

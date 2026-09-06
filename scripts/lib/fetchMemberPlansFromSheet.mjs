@@ -1,6 +1,8 @@
 /**
  * Google Sheets data!A:F から会員プランを取得（C列=プラン）
  * 'unlimited' / 60分通い放題 等 → 60分通い放題プラン
+ *
+ * 取得順: ローカルSheets → Supabase members.plan → 本番API → スナップショットJSON
  */
 import { google } from "googleapis";
 import fs from "fs";
@@ -8,6 +10,9 @@ import path from "path";
 
 const DATA_SHEET = "data";
 const MEMBERS_RANGE = `${DATA_SHEET}!A2:F`;
+const SNAPSHOT_PATH = path.join(process.cwd(), "scripts/data/member-plans.json");
+const DEFAULT_PRODUCTION_API =
+  process.env.MEMBER_PLANS_API_URL?.trim() || "https://abody-gymos.vercel.app";
 
 function loadCredentialsFromJson() {
   const jsonPath = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_PATH;
@@ -64,6 +69,20 @@ export function isUnlimited60Plan(planRaw) {
   return false;
 }
 
+function rowsToPlanMap(rows) {
+  const planByCode = new Map();
+  for (const row of rows) {
+    const memberCode = String(row.memberCode ?? row[0] ?? "").trim().toUpperCase();
+    if (!memberCode) continue;
+    const plan = String(row.plan ?? row[2] ?? "").trim();
+    planByCode.set(memberCode, {
+      plan,
+      isUnlimited60: isUnlimited60Plan(plan),
+    });
+  }
+  return planByCode;
+}
+
 /**
  * @returns {Promise<Map<string, { plan: string, isUnlimited60: boolean }>>}
  */
@@ -116,12 +135,56 @@ async function fetchMemberPlansFromSupabase(supabase) {
     }
     if (planByCode.size) return { planByCode, source: `members.${col}` };
   }
+
+  const { data: sample } = await supabase.from("members").select("*").limit(1);
+  if (sample?.[0]) {
+    console.error("members columns:", Object.keys(sample[0]).sort().join(", "));
+  }
+
   return null;
+}
+
+/** 本番 Vercel（Google Sheets 認証済み）経由 */
+async function fetchMemberPlansFromProductionApi() {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!serviceKey) return null;
+
+  const baseUrl = DEFAULT_PRODUCTION_API.replace(/\/$/, "");
+  const res = await fetch(`${baseUrl}/api/admin/member-plans`, {
+    headers: { "x-service-role-key": serviceKey },
+  });
+
+  if (!res.ok) {
+    console.warn(`本番API プラン取得失敗: HTTP ${res.status} (${baseUrl})`);
+    return null;
+  }
+
+  const body = await res.json();
+  if (!Array.isArray(body?.plans) || !body.plans.length) return null;
+
+  const planByCode = rowsToPlanMap(body.plans);
+  return { planByCode, source: `production_api:${baseUrl}` };
+}
+
+/** scripts/data/member-plans.json（export-member-plans-snapshot.mjs で更新） */
+function fetchMemberPlansFromSnapshot() {
+  if (!fs.existsSync(SNAPSHOT_PATH)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, "utf8"));
+    const rows = raw.plans ?? raw;
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const planByCode = rowsToPlanMap(rows);
+    if (!planByCode.size) return null;
+    return { planByCode, source: "snapshot_json" };
+  } catch (e) {
+    console.warn("スナップショット読み込み失敗:", e?.message ?? e);
+    return null;
+  }
 }
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
- * @returns {Promise<{ planByCode: Map<string, { plan: string, isUnlimited60: boolean }>, source: string }>}
+ * @returns {Promise<{ planByCode: Map<string, { plan: string, isUnlimited60: boolean }>, source: string, warning?: string }>}
  */
 export async function fetchMemberPlans(supabase) {
   if (process.env.GOOGLE_SHEET_ID?.trim()) {
@@ -138,7 +201,20 @@ export async function fetchMemberPlans(supabase) {
   const fromDb = await fetchMemberPlansFromSupabase(supabase);
   if (fromDb) return fromDb;
 
-  throw new Error(
-    "会員プランを取得できません。GOOGLE_SHEET_ID + Google認証を設定するか、members.plan 列をDBに追加してください。",
+  const fromApi = await fetchMemberPlansFromProductionApi();
+  if (fromApi) return fromApi;
+
+  const fromSnapshot = fetchMemberPlansFromSnapshot();
+  if (fromSnapshot) return fromSnapshot;
+
+  console.warn(
+    "会員プランを取得できませんでした。60分通い放題の除外はスキップされます。" +
+      " GOOGLE_SHEET_ID + 認証、members.plan 列、本番APIデプロイ、または scripts/data/member-plans.json を設定してください。",
   );
+
+  return {
+    planByCode: new Map(),
+    source: "unavailable",
+    warning: "plan_data_unavailable",
+  };
 }

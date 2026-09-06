@@ -54,6 +54,7 @@ export interface Database {
           line_channel_key?: string | null;
           is_active: boolean;
           reservation_reminder_line_enabled?: boolean;
+          plan?: "4" | "8" | "unlimited" | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
@@ -74,6 +75,7 @@ export interface Database {
           line_channel_key?: string | null;
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
+          plan?: "4" | "8" | "unlimited" | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
@@ -94,6 +96,7 @@ export interface Database {
           line_channel_key?: string | null;
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
+          plan?: "4" | "8" | "unlimited" | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
