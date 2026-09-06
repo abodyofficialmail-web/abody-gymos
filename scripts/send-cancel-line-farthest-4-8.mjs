@@ -73,17 +73,27 @@ async function main() {
   }
 
   console.log(`\nLINE送信 ${notifications.length}件 mode=${dryRun ? "dry-run" : "confirm"}`);
-  const res = await fetch(`${PRODUCTION_API.replace(/\/$/, "")}/api/admin/send-cancel-line`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-service-role-key": key,
-    },
-    body: JSON.stringify({ notifications, dry_run: dryRun }),
-  });
-  const body = await res.json().catch(() => ({}));
-  console.log(`API HTTP ${res.status}`, JSON.stringify(body, null, 2));
-  if (!res.ok) process.exit(1);
+
+  const endpoints = [
+    { url: `${PRODUCTION_API.replace(/\/$/, "")}/api/admin/resend-member-line-history`, body: { cancel_notifications: notifications, dry_run: dryRun } },
+    { url: `${PRODUCTION_API.replace(/\/$/, "")}/api/admin/send-cancel-line`, body: { notifications, dry_run: dryRun } },
+  ];
+
+  for (const { url, body } of endpoints) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-service-role-key": key,
+      },
+      body: JSON.stringify(body),
+    });
+    const parsed = await res.json().catch(() => ({}));
+    console.log(`${url} HTTP ${res.status}`, JSON.stringify(parsed, null, 2));
+    if (res.ok) return;
+    if (res.status !== 404) process.exit(1);
+  }
+  process.exit(1);
 }
 
 main().catch((e) => {
