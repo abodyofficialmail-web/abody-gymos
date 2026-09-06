@@ -5,7 +5,7 @@
  *   #8 UEN054 水谷友彦: 2枠
  *
  *   node scripts/cancel-farthest-slots-4-8.mjs --dry-run
- *   node scripts/cancel-farthest-slots-4-8.mjs --confirm
+ *   node scripts/cancel-farthest-slots-4-8.mjs --confirm  # LINE送信付き
  */
 import { createClient } from "@supabase/supabase-js";
 import { DateTime } from "luxon";
