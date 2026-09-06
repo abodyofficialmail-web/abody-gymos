@@ -151,21 +151,32 @@ async function batchUpdateMemberEmailsInData(
   });
   return memberIdToEmail.size;
 }
+function rowToMember(row: any[]): Member {
+  return {
+    memberId: String(row[0] || '').trim(),
+    name: String(row[1] || '').trim(),
+    plan: row[2] as '4' | '8' | 'unlimited',
+    pin: String(row[3] || '').trim(),
+    active: row[4] === 'TRUE' || row[4] === true || String(row[4] || '').toUpperCase() === 'TRUE',
+    email: String(row[5] || '').trim() || undefined,
+  };
+}
+
+/** data!A2:F の全会員（プラン含む） */
+export async function getAllMembersFromSheet(): Promise<Member[]> {
+  const rows = await getSheetValues(MEMBERS_RANGE);
+  return rows
+    .filter((row) => String(row[0] ?? '').trim())
+    .map((row) => rowToMember(row));
+}
+
 export async function getMember(memberId: string): Promise<Member | null> {
   try {
     const rows = await getSheetValues(MEMBERS_RANGE);
     for (const row of rows) {
       const rowMemberId = String(row[0] || '').trim();
       if (rowMemberId === memberId) {
-        const member = {
-          memberId: row[0],
-          name: row[1] || '',
-          plan: row[2] as '4' | '8' | 'unlimited',
-          pin: String(row[3] || '').trim(),
-          active: row[4] === 'TRUE' || row[4] === true || String(row[4] || '').toUpperCase() === 'TRUE',
-          email: String(row[5] || '').trim() || undefined,
-        };
-        return member;
+        return rowToMember(row);
       }
     }
     return null;
