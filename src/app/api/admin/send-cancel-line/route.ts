@@ -28,12 +28,25 @@ function messageForAdminCancel(params: { storeName: string; startAtUtcIso: strin
 またのご予約をお待ちしております。`;
 }
 
-const bodySchema = z.object({
-  reservation_ids: z.array(z.string().uuid()).min(1),
-  dry_run: z.boolean().optional(),
+const notificationSchema = z.object({
+  reservation_id: z.string().uuid(),
+  start_at: z.string().optional(),
+  end_at: z.string().optional(),
 });
 
-/** キャンセル済み予約のキャンセルLINEを送信（本番VercelのLINEトークン使用） */
+const bodySchema = z
+  .object({
+    reservation_ids: z.array(z.string().uuid()).optional(),
+    notifications: z.array(notificationSchema).optional(),
+    dry_run: z.boolean().optional(),
+  })
+  .refine((v) => (v.reservation_ids?.length ?? 0) > 0 || (v.notifications?.length ?? 0) > 0, {
+    message: "reservation_ids or notifications required",
+  });
+
+type LineTarget = { reservationId: string; startAt: string; endAt: string };
+
+/** キャンセルLINEを送信（本番VercelのLINEトークン使用） */
 export async function POST(req: Request) {
   try {
     if (!mustAuth(req)) return json({ error: "unauthorized" }, 401);
@@ -41,21 +54,33 @@ export async function POST(req: Request) {
     const parsed = bodySchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) return json({ error: "invalid_body", detail: parsed.error.flatten() }, 400);
 
+    const targets: LineTarget[] = [];
+    for (const id of parsed.data.reservation_ids ?? []) {
+      targets.push({ reservationId: id, startAt: "", endAt: "" });
+    }
+    for (const n of parsed.data.notifications ?? []) {
+      targets.push({
+        reservationId: n.reservation_id,
+        startAt: n.start_at ?? "",
+        endAt: n.end_at ?? "",
+      });
+    }
+
     const supabase = createSupabaseServiceClient();
     const results: Array<Record<string, unknown>> = [];
 
-    for (const reservationId of parsed.data.reservation_ids) {
+    for (const target of targets) {
       const { data: r, error } = await supabase
         .from("reservations")
         .select("id, member_id, store_id, start_at, end_at, status")
-        .eq("id", reservationId)
+        .eq("id", target.reservationId)
         .maybeSingle();
       if (error || !r) {
-        results.push({ reservation_id: reservationId, ok: false, error: error?.message ?? "not_found" });
+        results.push({ reservation_id: target.reservationId, ok: false, error: error?.message ?? "not_found" });
         continue;
       }
       if (!r.member_id) {
-        results.push({ reservation_id: reservationId, ok: false, error: "no_member" });
+        results.push({ reservation_id: target.reservationId, ok: false, error: "no_member" });
         continue;
       }
 
@@ -68,20 +93,30 @@ export async function POST(req: Request) {
       const storeName = store?.name ?? "—";
 
       if (!member?.line_user_id) {
-        results.push({ reservation_id: reservationId, ok: false, error: "no_line_user_id", member_code: member?.member_code });
+        results.push({ reservation_id: target.reservationId, ok: false, error: "no_line_user_id", member_code: member?.member_code });
         continue;
       }
 
       const line = linePushTokenForMemberRow(member, storeName);
       if (!line.token) {
-        results.push({ reservation_id: reservationId, ok: false, error: "no_line_token", member_code: member.member_code });
+        results.push({ reservation_id: target.reservationId, ok: false, error: "no_line_token", member_code: member.member_code });
         continue;
       }
 
-      const text = messageForAdminCancel({ storeName, startAtUtcIso: r.start_at, endAtUtcIso: r.end_at });
+      const startAt = target.startAt || r.start_at;
+      const endAt = target.endAt || r.end_at;
+      const text = messageForAdminCancel({ storeName, startAtUtcIso: startAt, endAtUtcIso: endAt });
 
       if (parsed.data.dry_run) {
-        results.push({ reservation_id: reservationId, ok: true, dry_run: true, member_code: member.member_code, storeName });
+        results.push({
+          reservation_id: target.reservationId,
+          ok: true,
+          dry_run: true,
+          member_code: member.member_code,
+          storeName,
+          start_at: startAt,
+          end_at: endAt,
+        });
         continue;
       }
 
@@ -95,10 +130,12 @@ export async function POST(req: Request) {
       });
       const body = await res.text().catch(() => "");
       results.push({
-        reservation_id: reservationId,
+        reservation_id: target.reservationId,
         ok: res.ok,
         member_code: member.member_code,
         storeName,
+        start_at: startAt,
+        end_at: endAt,
         status: res.status,
         body: body.slice(0, 200),
       });

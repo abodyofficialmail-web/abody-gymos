@@ -20,6 +20,7 @@ on:
       - cursor/cancel-sep7plus-keep-2slots-7588
     paths:
       - "scripts/cancel-sep7plus-keep-nearest-2slots.mjs"
+      - "scripts/cancel-farthest-slots-4-8.mjs"
       - "scripts/send-cancel-line-batch.mjs"
       - "src/app/api/admin/send-cancel-line/**"
       - ".github/workflows/cancel-sep7plus-keep-2slots.yml"
@@ -49,6 +50,14 @@ jobs:
           COMMIT_MSG="$(printf '%s' "${{ github.event.head_commit.message || '' }}" | tr '\n' ' ')"
           if [ "${{ github.event.inputs.send_line_only || 'false' }}" = "true" ] || printf '%s' "$COMMIT_MSG" | grep -qF '[send-cancel-line]'; then
             node scripts/send-cancel-line-batch.mjs --confirm
+            exit 0
+          fi
+          if printf '%s' "$COMMIT_MSG" | grep -qF '[cancel-farthest-4-8-confirm]'; then
+            node scripts/cancel-farthest-slots-4-8.mjs --confirm
+            exit 0
+          fi
+          if printf '%s' "$COMMIT_MSG" | grep -qF '[cancel-farthest-4-8]'; then
+            node scripts/cancel-farthest-slots-4-8.mjs --dry-run
             exit 0
           fi
           ARGS=()
