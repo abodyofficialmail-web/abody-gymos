@@ -26,8 +26,15 @@ function mustCronAuth(req: Request): boolean {
 
 const dateYmd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
+const cancelNotificationSchema = z.object({
+  reservation_id: z.string().uuid(),
+  start_at: z.string(),
+  end_at: z.string(),
+});
+
 const bodySchema = z.object({
-  member_code: z.string().min(1),
+  member_code: z.string().min(1).optional(),
+  cancel_notifications: z.array(cancelNotificationSchema).optional(),
   line_channel_key: z.enum(["default", "ueno", "sakuragicho", "shinjuku", "fukuoka"]).optional(),
   june: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   reservations_from: dateYmd.optional(),
@@ -39,6 +46,16 @@ const bodySchema = z.object({
   session_dates: z.array(dateYmd).optional(),
   dry_run: z.boolean().optional().default(false),
 });
+
+function messageForAdminCancel(params: { storeName: string; startAtUtcIso: string; endAtUtcIso: string }): string {
+  const start = DateTime.fromISO(params.startAtUtcIso).setZone(TZ);
+  const end = DateTime.fromISO(params.endAtUtcIso).setZone(TZ);
+  return `【ご予約キャンセル】
+店舗：${params.storeName}
+日時：${start.setLocale("ja").toFormat("M月d日（ccc）")} ${start.toFormat("HH:mm")}〜${end.toFormat("HH:mm")}
+
+またのご予約をお待ちしております。`;
+}
 
 export async function OPTIONS() {
   return jsonResponse({}, 200);
@@ -55,6 +72,62 @@ export async function POST(req: Request) {
       return jsonResponse({ error: "invalid_body", detail: parsed.error.flatten() }, 400);
     }
 
+    const supabase = createSupabaseServiceClient();
+
+    if (parsed.data.cancel_notifications?.length) {
+      const results: Array<Record<string, unknown>> = [];
+      for (const n of parsed.data.cancel_notifications) {
+        const { data: r, error: rErr } = await (supabase as any)
+          .from("reservations")
+          .select("id, member_id, store_id, start_at, end_at, status, members(member_code, line_user_id, line_channel_key), stores(name)")
+          .eq("id", n.reservation_id)
+          .maybeSingle();
+        if (rErr || !r) {
+          results.push({ reservation_id: n.reservation_id, ok: false, error: rErr?.message ?? "not_found" });
+          continue;
+        }
+        const member = r.members;
+        const storeName = r.stores?.name ?? "—";
+        if (!member?.line_user_id) {
+          results.push({ reservation_id: n.reservation_id, ok: false, error: "no_line_user_id" });
+          continue;
+        }
+        const text = messageForAdminCancel({
+          storeName,
+          startAtUtcIso: n.start_at,
+          endAtUtcIso: n.end_at,
+        });
+        if (parsed.data.dry_run) {
+          results.push({ reservation_id: n.reservation_id, ok: true, dry_run: true, member_code: member.member_code });
+          continue;
+        }
+        const push = await pushLineTextForMember({
+          toUserId: member.line_user_id,
+          text,
+          memberCode: member.member_code,
+          lineChannelKey: member.line_channel_key,
+          storeName,
+        });
+        results.push({
+          reservation_id: n.reservation_id,
+          ok: push.ok,
+          member_code: member.member_code,
+          status: push.status,
+          body: push.body,
+        });
+      }
+      return jsonResponse({
+        ok: results.every((x) => x.ok),
+        sent: results.filter((x) => x.ok && !x.dry_run).length,
+        failed: results.filter((x) => !x.ok).length,
+        results,
+      }, 200);
+    }
+
+    if (!parsed.data.member_code?.trim()) {
+      return jsonResponse({ error: "member_code or cancel_notifications required" }, 400);
+    }
+
     const code = parsed.data.member_code.trim().toUpperCase();
     const channelKey: LineChannelKey =
       parsed.data.line_channel_key ?? inferLineChannelKeyFromMemberCode(code) ?? "default";
@@ -62,8 +135,6 @@ export async function POST(req: Request) {
     if (!parsed.data.dry_run && !token) {
       return jsonResponse({ error: "missing_token", channel: channelKey }, 500);
     }
-
-    const supabase = createSupabaseServiceClient();
 
     let member: {
       id: string;
