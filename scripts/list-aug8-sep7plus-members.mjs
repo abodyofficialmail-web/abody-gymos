@@ -10,6 +10,8 @@ const MIN_AUG_SLOTS = 8;
 const MIN_SEP_RESERVATIONS = 3;
 const SLOT_MIN = 30;
 const EXCLUDE_HOME_STORE = "桜木町";
+/** 8月ちょうど8回利用の会員も除外（9回以上のみ残す） */
+const EXCLUDE_AUG_EXACTLY_8 = true;
 
 const AUG_START = "2026-08-01T00:00:00+09:00";
 const AUG_END = "2026-09-01T00:00:00+09:00";
@@ -154,8 +156,14 @@ async function main() {
 
   const excludedSakura = results.filter((m) => m.homeStore === EXCLUDE_HOME_STORE);
   const excluded8slot = results.filter((m) => EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode));
+  const excludedAug8 = EXCLUDE_AUG_EXACTLY_8
+    ? results.filter((m) => m.augReservationCount === 8)
+    : [];
   const remaining = results.filter(
-    (m) => m.homeStore !== EXCLUDE_HOME_STORE && !EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode),
+    (m) =>
+      m.homeStore !== EXCLUDE_HOME_STORE &&
+      !EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode) &&
+      !(EXCLUDE_AUG_EXACTLY_8 && m.augReservationCount === 8),
   );
 
   console.log(
@@ -169,14 +177,20 @@ async function main() {
         criteria: {
           august: `2026-08 ${MIN_AUG_SLOTS}枠以上（30分単位・キャンセル除外）`,
           september: `2026-09-07 〜 2026-09-30 ${MIN_SEP_RESERVATIONS}回以上予約（9/1〜9/6除外・キャンセル除外）`,
-          exclude: [`${EXCLUDE_HOME_STORE}所属`, "8枠先取り案内済み31名（send-june-low-booking-line.mjs）"],
+          exclude: [
+            `${EXCLUDE_HOME_STORE}所属`,
+            "8枠先取り案内済み31名（send-june-low-booking-line.mjs）",
+            "8月ちょうど8回利用",
+          ],
         },
         memberCount: results.length,
         excludedSakuraCount: excludedSakura.length,
         excluded8slotGuidanceCount: excluded8slot.length,
+        excludedAug8Count: excludedAug8.length,
         remainingCount: remaining.length,
         excludedSakuraMembers: excludedSakura,
         excluded8slotMembers: excluded8slot,
+        excludedAug8Members: excludedAug8,
         storeBreakdown: countByStore(remaining),
         remainingMembers: remaining,
       },
@@ -189,6 +203,7 @@ async function main() {
   console.log(`8月${MIN_AUG_SLOTS}枠以上 × 9/7〜9/30で${MIN_SEP_RESERVATIONS}回以上予約: ${results.length}名`);
   console.log(`${EXCLUDE_HOME_STORE}所属で除外: ${excludedSakura.length}名`);
   console.log(`8枠案内済みで除外: ${excluded8slot.length}名`);
+  console.log(`8月8回利用で除外: ${excludedAug8.length}名`);
   console.log(`最終: ${remaining.length}名`);
 
   if (excludedSakura.length) {
@@ -205,7 +220,14 @@ async function main() {
     }
   }
 
-  console.log("\n--- 一覧（桜木町・8枠案内済み除外） ---");
+  if (excludedAug8.length) {
+    console.log("\n--- 8月8回利用で除外 ---");
+    for (const m of excludedAug8) {
+      console.log(`${m.memberCode} ${m.displayName} (${m.homeStore ?? "—"})`);
+    }
+  }
+
+  console.log("\n--- 一覧（桜木町・8枠案内済み・8月8回除外） ---");
   console.log(
     "| # | 会員コード | 氏名 | 所属店 | 8月枠 | 8月予約数 | 9/7〜予約数 | 9/7〜枠 | 9/1〜6予約 | 9月合計予約 | 9月合計枠 |",
   );
