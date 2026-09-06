@@ -243,12 +243,17 @@ async function main() {
         console.log(`  [LINE予定] reservation=${n.reservation_id} ${fmtJst(n.start_at)}-${fmtJst(n.end_at).slice(11)}`);
       }
     } else {
-      const lineResult = await sendLineNotifications(lineNotifications, key, false);
-      console.log(`  送信: ${lineResult.sent} / 失敗: ${lineResult.failed}`);
-      for (const r of lineResult.results ?? []) {
-        if (!r.ok) console.log("  fail", r);
+      try {
+        const lineResult = await sendLineNotifications(lineNotifications, key, false);
+        console.log(`  送信: ${lineResult.sent} / 失敗: ${lineResult.failed}`);
+        for (const r of lineResult.results ?? []) {
+          if (!r.ok) console.log("  fail", r);
+        }
+        summary.line = lineResult;
+      } catch (e) {
+        console.error("  LINE送信失敗（DBキャンセルは完了）:", e.message);
+        summary.lineError = e.message;
       }
-      summary.line = lineResult;
     }
   }
 
