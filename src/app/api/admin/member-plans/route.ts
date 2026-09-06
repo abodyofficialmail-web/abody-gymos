@@ -20,6 +20,10 @@ export async function GET(req: Request) {
   try {
     if (!mustAuth(req)) return json({ error: "unauthorized" }, 401);
 
+    if (!process.env.GOOGLE_SHEET_ID?.trim()) {
+      return json({ error: "GOOGLE_SHEET_ID が未設定です" }, 503);
+    }
+
     const members = await getAllMembersFromSheet();
     return json({
       source: "google_sheets",
