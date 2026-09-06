@@ -155,7 +155,8 @@ async function fetchMemberPlansFromProductionApi() {
   });
 
   if (!res.ok) {
-    console.warn(`本番API プラン取得失敗: HTTP ${res.status} (${baseUrl})`);
+    const text = await res.text().catch(() => "");
+    console.warn(`本番API プラン取得失敗: HTTP ${res.status} (${baseUrl})`, text.slice(0, 300));
     return null;
   }
 
