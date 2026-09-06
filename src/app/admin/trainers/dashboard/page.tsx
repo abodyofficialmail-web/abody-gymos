@@ -2,6 +2,8 @@ import { GymShell } from "@/components/gym/GymShell";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { TrainersDashboardClient } from "./dashboardClient";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminTrainersDashboardPage() {
   const supabase = createSupabaseServiceClient();
   const { data: trainers } = await supabase
