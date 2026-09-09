@@ -1,6 +1,12 @@
 name: Send Sep Low Booking Motivation LINE
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/send-sep-low-booking-motivation-line.yml"
+      - "scripts/send-sep-low-booking-motivation-line.mjs"
   workflow_dispatch:
     inputs:
       confirm:
@@ -18,6 +24,7 @@ on:
 
 jobs:
   send:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[send-sep-line-dry-run]') || contains(github.event.head_commit.message, '[send-sep-line-confirm]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -37,11 +44,10 @@ jobs:
           export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
           ARGS=(--api)
-          if [ "${{ github.event.inputs.confirm || 'false' }}" = "true" ]; then
-            ARGS+=(--confirm)
-          else
-            ARGS+=(--dry-run)
-          fi
+          CONFIRM=false
+          if [ "${{ github.event.inputs.confirm || 'false' }}" = "true" ]; then CONFIRM=true; fi
+          if [ "${{ github.event_name }}" = "push" ] && printf '%s' "${{ github.event.head_commit.message || '' }}" | grep -qF '[send-sep-line-confirm]'; then CONFIRM=true; fi
+          if [ "$CONFIRM" = "true" ]; then ARGS+=(--confirm); else ARGS+=(--dry-run); fi
           if [ -n "${SEP_LOW_BOOKING_VIDEO_URL:-}" ]; then
             ARGS+=(--video-url="$SEP_LOW_BOOKING_VIDEO_URL")
           fi

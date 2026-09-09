@@ -14,6 +14,11 @@
  */
 import fs from "fs";
 import path from "path";
+import { createClient } from "@supabase/supabase-js";
+
+const LINE_MEDIA_BUCKET = "line-campaign-media";
+const DEFAULT_VIDEO_PATH = "sep-low-booking-2026-09/video.mp4";
+const DEFAULT_PREVIEW_PATH = "sep-low-booking-2026-09/preview.jpg";
 
 const MEMBER_CODES = [
   "UEN012", "SAK036", "SHI001", "SAK053", "EBI027", "FUK001", "SAK011", "SAK047", "SAK050",
@@ -82,6 +87,32 @@ function parseArgs(argv) {
   };
 }
 
+async function resolveMediaUrls(videoUrl, previewUrl) {
+  if (videoUrl && previewUrl) return { videoUrl, previewUrl };
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return { videoUrl, previewUrl };
+
+  const supabase = createClient(url, key, { auth: { persistSession: false } });
+  const ttl = 60 * 60 * 24 * 30;
+  const videoPath = process.env.SEP_LOW_BOOKING_VIDEO_PATH?.trim() || DEFAULT_VIDEO_PATH;
+  const previewPath = process.env.SEP_LOW_BOOKING_VIDEO_PREVIEW_PATH?.trim() || DEFAULT_PREVIEW_PATH;
+
+  const [videoSigned, previewSigned] = await Promise.all([
+    supabase.storage.from(LINE_MEDIA_BUCKET).createSignedUrl(videoPath, ttl),
+    supabase.storage.from(LINE_MEDIA_BUCKET).createSignedUrl(previewPath, ttl),
+  ]);
+  if (videoSigned.error) throw videoSigned.error;
+  if (previewSigned.error) throw previewSigned.error;
+
+  console.log(`media: resolved from storage (${LINE_MEDIA_BUCKET}/${videoPath})`);
+  return {
+    videoUrl: videoUrl || videoSigned.data.signedUrl,
+    previewUrl: previewUrl || previewSigned.data.signedUrl,
+  };
+}
+
 async function sendViaApi({ dryRun, codes, videoUrl, previewUrl, serviceKey }) {
   const body = {
     member_codes: codes,
@@ -108,24 +139,21 @@ async function sendViaApi({ dryRun, codes, videoUrl, previewUrl, serviceKey }) {
 }
 
 async function main() {
-  const { dryRun, useApi, codes, videoUrl, previewUrl } = parseArgs(process.argv);
+  const { dryRun, useApi, codes, videoUrl: videoArg, previewUrl: previewArg } = parseArgs(process.argv);
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
 
+  const { videoUrl, previewUrl } = await resolveMediaUrls(videoArg, previewArg);
+
   console.log(`mode: ${dryRun ? "DRY-RUN" : "SEND"}`);
   console.log(`targets: ${codes.length} codes`);
-  console.log(`via: ${useApi ? "production API" : "direct (requires deploy or local LINE tokens)"}`);
+  console.log(`via: ${useApi ? "production API" : "production API"}`);
 
   if (!dryRun && (!videoUrl || !previewUrl)) {
-    throw new Error("本番送信には --video-url と --preview-url（または環境変数）が必要です");
+    throw new Error("本番送信には動画URLが必要です（Storage未アップロードの可能性）");
   }
-  if (videoUrl) console.log(`video: ${videoUrl}`);
-  if (previewUrl) console.log(`preview: ${previewUrl}`);
-
-  if (useApi) {
-    await sendViaApi({ dryRun, codes, videoUrl, previewUrl, serviceKey });
-    return;
-  }
+  if (videoUrl) console.log(`video: ${videoUrl.slice(0, 80)}...`);
+  if (previewUrl) console.log(`preview: ${previewUrl.slice(0, 80)}...`);
 
   await sendViaApi({ dryRun, codes, videoUrl, previewUrl, serviceKey });
 }
