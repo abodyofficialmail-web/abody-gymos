@@ -8,6 +8,9 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 const MAX_SEP_TOTAL = 2;
 const SLOT_MIN = 30;
 
+/** 手動除外（2026-09-09: #8 SAK030, #16 UEN027, #21 EBI020） */
+const EXCLUDE_MEMBER_CODES = new Set(["SAK030", "UEN027", "EBI020"]);
+
 const SEP_START = "2026-09-01T00:00:00+09:00";
 const SEP_END = "2026-10-01T00:00:00+09:00";
 const SEP10_START = "2026-09-10T00:00:00+09:00";
