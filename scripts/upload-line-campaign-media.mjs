@@ -79,6 +79,17 @@ function previewFromVideo(videoPath, outPath) {
   );
 }
 
+async function ensureBucket(supabase) {
+  const { data: buckets } = await supabase.storage.listBuckets();
+  if (buckets?.some((b) => b.id === BUCKET || b.name === BUCKET)) return;
+  const { error } = await supabase.storage.createBucket(BUCKET, {
+    public: false,
+    fileSizeLimit: 20 * 1024 * 1024,
+    allowedMimeTypes: ["video/mp4", "image/jpeg", "image/png", "image/webp"],
+  });
+  if (error && !String(error.message ?? "").includes("already exists")) throw error;
+}
+
 async function upload(supabase, storagePath, buf, contentType) {
   const { error } = await supabase.storage.from(BUCKET).upload(storagePath, buf, {
     contentType,
@@ -108,6 +119,7 @@ async function main() {
   }
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
+  await ensureBucket(supabase);
   const tmpDir = fs.mkdtempSync(path.join(process.cwd(), ".tmp-line-media-"));
 
   try {
