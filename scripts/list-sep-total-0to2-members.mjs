@@ -45,6 +45,14 @@ function countByStore(results) {
   return breakdown;
 }
 
+/** 在籍会員のみ（退会・休会除外） */
+function isActiveMember(m) {
+  const ms = String(m.membership_status ?? "").toLowerCase();
+  if (ms === "active") return true;
+  if (ms === "hiatus" || ms === "withdrawn") return false;
+  return m.is_active === true;
+}
+
 async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -83,7 +91,7 @@ async function main() {
     fetchAllChecked(
       supabase,
       "members",
-      "id, member_code, display_name, name, store_id, is_active",
+      "id, member_code, display_name, name, store_id, is_active, membership_status",
       undefined,
       "members",
     ),
@@ -107,6 +115,7 @@ async function main() {
   const storeNameById = Object.fromEntries(storesResult.rows.map((s) => [s.id, s.name]));
 
   const results = [];
+  const excluded = [];
 
   for (const m of membersResult.rows) {
     const sepList = sepByMember.get(m.id) ?? [];
@@ -117,18 +126,25 @@ async function main() {
     if (sepTotal > MAX_SEP_TOTAL) continue;
 
     const augList = augByMember.get(m.id) ?? [];
-
-    results.push({
+    const memberRow = {
       memberCode: String(m.member_code ?? "").toUpperCase(),
       displayName: m.display_name ?? m.name ?? "—",
       homeStore: storeNameById[m.store_id] ?? null,
+      membershipStatus: m.membership_status ?? null,
       isActive: m.is_active ?? null,
       augSessionCount: augList.length,
       sep1to9ReservationCount: sep1to9,
       sep10to30ReservationCount: sep10to30,
       sepTotalReservationCount: sepTotal,
       sepTotalSlotCount: countSlotsInRange(sepList, SEP_START, SEP_END),
-    });
+    };
+
+    if (!isActiveMember(m)) {
+      excluded.push(memberRow);
+      continue;
+    }
+
+    results.push(memberRow);
   }
 
   results.sort(
@@ -153,11 +169,14 @@ async function main() {
         criteria: {
           september: "2026-09-01〜09 + 2026-09-10〜30 の予約合計 0〜2回（キャンセル除外）",
           august: "不問（参考として8月利用回数を表示）",
+          membership: "在籍会員のみ（退会・休会除外）",
         },
         memberCount: results.length,
+        excludedCount: excluded.length,
         breakdownBySepTotal: bySepTotal,
         storeBreakdown: countByStore(results),
         members: results,
+        excludedMembers: excluded,
       },
       null,
       2,
@@ -165,7 +184,10 @@ async function main() {
   );
 
   console.log("\n--- サマリー ---");
-  console.log(`9月合計0〜2回: ${results.length}名（0回: ${bySepTotal[0]} / 1回: ${bySepTotal[1]} / 2回: ${bySepTotal[2]}）`);
+  console.log(
+    `9月合計0〜2回（在籍のみ）: ${results.length}名（0回: ${bySepTotal[0]} / 1回: ${bySepTotal[1]} / 2回: ${bySepTotal[2]}）`,
+  );
+  console.log(`除外（退会・休会）: ${excluded.length}名`);
 
   console.log("\n--- 一覧 ---");
   console.log(
