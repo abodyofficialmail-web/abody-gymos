@@ -180,6 +180,22 @@ async function main() {
   for (const [store, n] of Object.entries(countByStore(results)).sort((a, b) => b[1] - a[1])) {
     console.log(`${store}: ${n}`);
   }
+
+  const sep1to8Low = results.filter((r) => r.sep1to8ReservationCount <= 1);
+  const sep1to8Zero = sep1to8Low.filter((r) => r.sep1to8ReservationCount === 0);
+  const sep1to8One = sep1to8Low.filter((r) => r.sep1to8ReservationCount === 1);
+
+  console.log("\n--- 9/1〜9/8 が0回または1回のみ（上記一覧から） ---");
+  console.log(`該当: ${sep1to8Low.length}名（0回: ${sep1to8Zero.length} / 1回: ${sep1to8One.length}）`);
+  console.log(
+    "| # | 会員コード | 氏名 | 所属店 | 8月利用 | 9/1〜8予約 | 9/9〜予約 | 9月合計 |",
+  );
+  console.log("|---:|---|---|---|---:|---:|---:|---:|");
+  sep1to8Low.forEach((r, i) => {
+    console.log(
+      `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.augSessionCount} | ${r.sep1to8ReservationCount} | ${r.sep9to30ReservationCount} | ${r.sepTotalReservationCount} |`,
+    );
+  });
 }
 
 main().catch((e) => {
