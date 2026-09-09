@@ -1,0 +1,276 @@
+/**
+ * 8月8枠以上 かつ 9/7〜9/30で3回以上予約の会員を抽出
+ * 除外: 桜木町所属・8枠先取り案内済み31名・8月8回・60分通い放題プラン
+ * プラン取得: Sheets / Supabase / 本番API / snapshot JSON
+ * node --env-file=.env.local scripts/list-aug8-sep7plus-members.mjs
+ */
+import { createClient } from "@supabase/supabase-js";
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+import { fetchMemberPlans, isUnlimited60Plan } from "./lib/fetchMemberPlansFromSheet.mjs";
+
+const MIN_AUG_SLOTS = 8;
+const MIN_SEP_RESERVATIONS = 3;
+const SLOT_MIN = 30;
+const EXCLUDE_HOME_STORE = "桜木町";
+/** 8月ちょうど8回利用の会員も除外（9回以上のみ残す） */
+const EXCLUDE_AUG_EXACTLY_8 = true;
+
+const AUG_START = "2026-08-01T00:00:00+09:00";
+const AUG_END = "2026-09-01T00:00:00+09:00";
+
+const SEP_FETCH_START = "2026-09-01T00:00:00+09:00";
+const SEP_FETCH_END = "2026-10-01T00:00:00+09:00";
+/** 予約数カウント対象: 9/7 0:00 〜 9/30（9/1〜9/6は除外） */
+const COUNT_START = "2026-09-07T00:00:00+09:00";
+const COUNT_END = "2026-10-01T00:00:00+09:00";
+
+/** 8コマ先取り案内済み scripts/send-june-low-booking-line.mjs と同期 */
+const EXCLUDE_8SLOT_GUIDANCE_CODES = new Set([
+  "EBI006", "EBI012", "EBI026", "EBI024", "EBI009", "EBI021", "EBI010", "EBI015", "EBI031",
+  "SAK009", "SAK043", "SAK033", "SAK049", "SAK050", "SAK044", "SAK025", "SAK028", "SAK017", "SAK030",
+  "UEN052", "UEN053", "UEN042", "UEN001", "UEN033", "UEN058", "UEN051", "UEN049", "UEN031",
+  "UEN009", "UEN039", "UEN002",
+]);
+
+function slotCount(startAt, endAt) {
+  const ms = new Date(endAt).getTime() - new Date(startAt).getTime();
+  if (ms <= 0) return 0;
+  return Math.max(1, Math.round(ms / (SLOT_MIN * 60 * 1000)));
+}
+
+function inRange(iso, start, end) {
+  const t = new Date(iso).getTime();
+  return t >= new Date(start).getTime() && t < new Date(end).getTime();
+}
+
+function countSlotsInRange(resList, rangeStart, rangeEnd) {
+  return resList
+    .filter((r) => inRange(r.start_at, rangeStart, rangeEnd))
+    .reduce((s, r) => s + slotCount(r.start_at, r.end_at), 0);
+}
+
+function countReservationsInRange(resList, rangeStart, rangeEnd) {
+  return resList.filter((r) => inRange(r.start_at, rangeStart, rangeEnd)).length;
+}
+
+function countByStore(results) {
+  const breakdown = {};
+  for (const r of results) {
+    const store = r.homeStore ?? "不明";
+    breakdown[store] = (breakdown[store] ?? 0) + 1;
+  }
+  return breakdown;
+}
+
+async function main() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    console.error("DB未接続");
+    process.exit(1);
+  }
+
+  const supabase = createClient(url, key, { auth: { persistSession: false } });
+
+  const { planByCode, source: planSource, warning: planWarning } = await fetchMemberPlans(supabase);
+  console.error(`会員プラン取得: ${planSource} (${planByCode.size}件)`);
+  if (planWarning) console.error(`警告: ${planWarning}`);
+
+  const [augResult, sepResult, membersResult, storesResult] = await Promise.all([
+    fetchAllChecked(
+      supabase,
+      "reservations",
+      "id, member_id, store_id, start_at, end_at, status",
+      (q) =>
+        q
+          .gte("start_at", AUG_START)
+          .lt("start_at", AUG_END)
+          .neq("status", "cancelled")
+          .not("member_id", "is", null),
+      "reservations.august",
+    ),
+    fetchAllChecked(
+      supabase,
+      "reservations",
+      "id, member_id, store_id, start_at, end_at, status",
+      (q) =>
+        q
+          .gte("start_at", SEP_FETCH_START)
+          .lt("start_at", SEP_FETCH_END)
+          .neq("status", "cancelled")
+          .not("member_id", "is", null),
+      "reservations.september",
+    ),
+    fetchAllChecked(
+      supabase,
+      "members",
+      "id, member_code, display_name, name, store_id",
+      undefined,
+      "members",
+    ),
+    fetchAllChecked(supabase, "stores", "id, name", undefined, "stores"),
+  ]);
+
+  const augByMember = new Map();
+  for (const r of augResult.rows) {
+    const list = augByMember.get(r.member_id) ?? [];
+    list.push(r);
+    augByMember.set(r.member_id, list);
+  }
+
+  const sepByMember = new Map();
+  for (const r of sepResult.rows) {
+    const list = sepByMember.get(r.member_id) ?? [];
+    list.push(r);
+    sepByMember.set(r.member_id, list);
+  }
+
+  const memberById = Object.fromEntries(membersResult.rows.map((m) => [m.id, m]));
+  const storeNameById = Object.fromEntries(storesResult.rows.map((s) => [s.id, s.name]));
+
+  const results = [];
+
+  for (const [memberId, augList] of augByMember) {
+    const augSlotCount = augList.reduce((s, r) => s + slotCount(r.start_at, r.end_at), 0);
+    if (augSlotCount < MIN_AUG_SLOTS) continue;
+
+    const sepList = sepByMember.get(memberId) ?? [];
+    const sep7to30ReservationCount = countReservationsInRange(sepList, COUNT_START, COUNT_END);
+    if (sep7to30ReservationCount < MIN_SEP_RESERVATIONS) continue;
+
+    const m = memberById[memberId];
+    const memberCode = String(m?.member_code ?? "").toUpperCase();
+    const planInfo = planByCode.get(memberCode);
+    results.push({
+      memberCode,
+      displayName: m?.display_name ?? m?.name ?? "—",
+      homeStore: storeNameById[m?.store_id] ?? null,
+      memberPlan: planInfo?.plan ?? null,
+      isUnlimited60Plan: planInfo?.isUnlimited60 ?? isUnlimited60Plan(planInfo?.plan),
+      augSlotCount,
+      augReservationCount: augList.length,
+      sep7to30ReservationCount,
+      sep7to30SlotCount: countSlotsInRange(sepList, COUNT_START, COUNT_END),
+      sep1to6ReservationCount: countReservationsInRange(sepList, SEP_FETCH_START, COUNT_START),
+      sepTotalReservationCount: sepList.length,
+      sepTotalSlotCount: countSlotsInRange(sepList, SEP_FETCH_START, SEP_FETCH_END),
+    });
+  }
+
+  results.sort(
+    (a, b) =>
+      b.sep7to30ReservationCount - a.sep7to30ReservationCount ||
+      b.augSlotCount - a.augSlotCount ||
+      String(a.memberCode).localeCompare(String(b.memberCode)),
+  );
+
+  const excludedSakura = results.filter((m) => m.homeStore === EXCLUDE_HOME_STORE);
+  const excluded8slot = results.filter((m) => EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode));
+  const excludedAug8 = EXCLUDE_AUG_EXACTLY_8
+    ? results.filter((m) => m.augReservationCount === 8)
+    : [];
+  const excludedUnlimited60 = results.filter((m) => m.isUnlimited60Plan);
+  const remaining = results.filter(
+    (m) =>
+      m.homeStore !== EXCLUDE_HOME_STORE &&
+      !EXCLUDE_8SLOT_GUIDANCE_CODES.has(m.memberCode) &&
+      !(EXCLUDE_AUG_EXACTLY_8 && m.augReservationCount === 8) &&
+      !m.isUnlimited60Plan,
+  );
+
+  console.log(
+    JSON.stringify(
+      {
+        fetched: {
+          august: { count: augResult.count, fetched: augResult.fetched },
+          september: { count: sepResult.count, fetched: sepResult.fetched },
+          members: { count: membersResult.count, fetched: membersResult.fetched },
+        },
+        criteria: {
+          august: `2026-08 ${MIN_AUG_SLOTS}枠以上（30分単位・キャンセル除外）`,
+          september: `2026-09-07 〜 2026-09-30 ${MIN_SEP_RESERVATIONS}回以上予約（9/1〜9/6除外・キャンセル除外）`,
+          exclude: [
+            `${EXCLUDE_HOME_STORE}所属`,
+            "8枠先取り案内済み31名（send-june-low-booking-line.mjs）",
+            "8月ちょうど8回利用",
+            "60分通い放題プラン（Google Sheets C列 unlimited 等）",
+          ],
+        },
+        planSource,
+        planWarning: planWarning ?? null,
+        planSheetMembers: planByCode.size,
+        memberCount: results.length,
+        excludedSakuraCount: excludedSakura.length,
+        excluded8slotGuidanceCount: excluded8slot.length,
+        excludedAug8Count: excludedAug8.length,
+        excludedUnlimited60Count: excludedUnlimited60.length,
+        remainingCount: remaining.length,
+        excludedSakuraMembers: excludedSakura,
+        excluded8slotMembers: excluded8slot,
+        excludedAug8Members: excludedAug8,
+        excludedUnlimited60Members: excludedUnlimited60,
+        storeBreakdown: countByStore(remaining),
+        remainingMembers: remaining,
+      },
+      null,
+      2,
+    ),
+  );
+
+  console.log("\n--- サマリー ---");
+  console.log(`8月${MIN_AUG_SLOTS}枠以上 × 9/7〜9/30で${MIN_SEP_RESERVATIONS}回以上予約: ${results.length}名`);
+  console.log(`${EXCLUDE_HOME_STORE}所属で除外: ${excludedSakura.length}名`);
+  console.log(`8枠案内済みで除外: ${excluded8slot.length}名`);
+  console.log(`8月8回利用で除外: ${excludedAug8.length}名`);
+  console.log(`60分通い放題で除外: ${excludedUnlimited60.length}名`);
+  console.log(`最終: ${remaining.length}名`);
+
+  if (excludedSakura.length) {
+    console.log(`\n--- ${EXCLUDE_HOME_STORE}所属で除外 ---`);
+    for (const m of excludedSakura) {
+      console.log(`${m.memberCode} ${m.displayName}`);
+    }
+  }
+
+  if (excluded8slot.length) {
+    console.log("\n--- 8枠案内済みで除外 ---");
+    for (const m of excluded8slot) {
+      console.log(`${m.memberCode} ${m.displayName} (${m.homeStore ?? "—"})`);
+    }
+  }
+
+  if (excludedAug8.length) {
+    console.log("\n--- 8月8回利用で除外 ---");
+    for (const m of excludedAug8) {
+      console.log(`${m.memberCode} ${m.displayName} (${m.homeStore ?? "—"})`);
+    }
+  }
+
+  if (excludedUnlimited60.length) {
+    console.log("\n--- 60分通い放題で除外 ---");
+    for (const m of excludedUnlimited60) {
+      console.log(`${m.memberCode} ${m.displayName} (${m.homeStore ?? "—"}) プラン:${m.memberPlan ?? "—"}`);
+    }
+  }
+
+  console.log("\n--- 一覧（全除外後） ---");
+  console.log(
+    "| # | 会員コード | 氏名 | 所属店 | 8月枠 | 8月予約数 | 9/7〜予約数 | 9/7〜枠 | 9/1〜6予約 | 9月合計予約 | 9月合計枠 |",
+  );
+  console.log("|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|");
+  remaining.forEach((r, i) => {
+    console.log(
+      `| ${i + 1} | ${r.memberCode} | ${r.displayName} | ${r.homeStore ?? "—"} | ${r.augSlotCount} | ${r.augReservationCount} | ${r.sep7to30ReservationCount} | ${r.sep7to30SlotCount} | ${r.sep1to6ReservationCount} | ${r.sepTotalReservationCount} | ${r.sepTotalSlotCount} |`,
+    );
+  });
+
+  console.log("\n--- 店舗別 ---");
+  for (const [store, n] of Object.entries(countByStore(remaining)).sort((a, b) => b[1] - a[1])) {
+    console.log(`${store}: ${n}`);
+  }
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

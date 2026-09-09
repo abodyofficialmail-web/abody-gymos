@@ -3,6 +3,8 @@ import { memberCodePrefixForStoreName, nextMemberCodeForStore } from "@/lib/memb
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { NewMemberClient } from "./newMemberClient";
 
+export const dynamic = "force-dynamic";
+
 function storeSortRank(storeName: string): number {
   if (storeName === "恵比寿") return 1;
   if (storeName === "上野") return 2;

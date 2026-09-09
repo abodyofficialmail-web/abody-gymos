@@ -1,0 +1,81 @@
+name: Cancel Sep7+ Keep 2 Slots
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "true で本番キャンセル（デフォルト dry-run）"
+        required: false
+        default: "false"
+      send_line:
+        description: "true でキャンセルLINE送信（confirm=true時のみ）"
+        required: false
+        default: "false"
+      send_line_only:
+        description: "true でキャンセルLINEのみ再送（本番API経由）"
+        required: false
+        default: "false"
+  push:
+    branches:
+      - cursor/cancel-sep7plus-keep-2slots-7588
+    paths:
+      - "scripts/cancel-sep7plus-keep-nearest-2slots.mjs"
+      - "scripts/cancel-farthest-slots-4-8.mjs"
+      - "scripts/send-cancel-line-batch.mjs"
+      - "scripts/send-cancel-line-farthest-4-8.mjs"
+      - "src/app/api/admin/send-cancel-line/**"
+      - ".github/workflows/cancel-sep7plus-keep-2slots.yml"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --legacy-peer-deps
+      - env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN_UENO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_UENO }}
+          LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU }}
+          LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          COMMIT_MSG="$(printf '%s' "${{ github.event.head_commit.message || '' }}" | tr '\n' ' ')"
+          if printf '%s' "$COMMIT_MSG" | grep -qF '[send-cancel-line-farthest-4-8]'; then
+            node scripts/send-cancel-line-farthest-4-8.mjs --confirm
+            exit 0
+          fi
+          if [ "${{ github.event.inputs.send_line_only || 'false' }}" = "true" ] || printf '%s' "$COMMIT_MSG" | grep -qF '[send-cancel-line]'; then
+            node scripts/send-cancel-line-batch.mjs --confirm
+            exit 0
+          fi
+          if printf '%s' "$COMMIT_MSG" | grep -qF '[cancel-farthest-4-8-confirm]'; then
+            node scripts/cancel-farthest-slots-4-8.mjs --confirm
+            exit 0
+          fi
+          if printf '%s' "$COMMIT_MSG" | grep -qF '[cancel-farthest-4-8]'; then
+            node scripts/cancel-farthest-slots-4-8.mjs --dry-run
+            exit 0
+          fi
+          ARGS=()
+          CONFIRM=false
+          SEND_LINE=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            [ "${{ github.event.inputs.confirm || 'false' }}" = "true" ] && CONFIRM=true
+            [ "${{ github.event.inputs.send_line || 'false' }}" = "true" ] && SEND_LINE=true
+          fi
+          if [ "${{ github.event_name }}" = "push" ] && printf '%s' "$COMMIT_MSG" | grep -qF '[cancel-sep7plus-confirm]'; then
+            CONFIRM=true
+            SEND_LINE=true
+          fi
+          if [ "$CONFIRM" = "true" ]; then ARGS+=(--confirm); else ARGS+=(--dry-run); fi
+          if [ "$SEND_LINE" = "true" ]; then ARGS+=(--send-line); fi
+          node scripts/cancel-sep7plus-keep-nearest-2slots.mjs "${ARGS[@]}"
