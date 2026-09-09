@@ -143,7 +143,12 @@ async function main() {
     };
 
     if (!isActiveMember(m)) {
-      excluded.push(memberRow);
+      excluded.push({ ...memberRow, excludeReason: "membership" });
+      continue;
+    }
+
+    if (EXCLUDE_MEMBER_CODES.has(memberRow.memberCode)) {
+      excluded.push({ ...memberRow, excludeReason: "manual" });
       continue;
     }
 
