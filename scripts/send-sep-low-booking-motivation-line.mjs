@@ -1,5 +1,5 @@
 /**
- * 9月低予約（合計0〜2回）対象27名へ、テキスト＋動画LINE一括送信
+ * 9月低予約（合計0〜2回）対象27名へ、テキスト＋動画LINE一括送信（動画はテキストの直後）
  *
  * usage:
  *   node scripts/send-sep-low-booking-motivation-line.mjs --dry-run
