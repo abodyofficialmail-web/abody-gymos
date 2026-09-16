@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/send-sep-low-booking-motivation-line.yml"
       - "scripts/send-sep-low-booking-motivation-line.mjs"
+      - "src/lib/sepLowBookingMotivationLine.ts"
   workflow_dispatch:
     inputs:
       confirm:
