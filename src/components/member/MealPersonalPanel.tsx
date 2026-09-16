@@ -1,8 +1,8 @@
 "use client";
 
-import { Apple, Home, Keyboard, MapPin, MessageCircle, Plus, ScanBarcode, Settings } from "lucide-react";
+import { Apple, Home, Keyboard, Lock, MapPin, MessageCircle, Plus, ScanBarcode, Settings } from "lucide-react";
 import { DateTime } from "luxon";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { MemberNutritionTargetView } from "@/lib/memberNutritionTargets";
 import {
   MEAL_LOG_TZ,
@@ -33,6 +33,7 @@ import { TrainingLogPanel } from "@/components/member/TrainingLogPanel";
 import { TrainingDiaryPanel } from "@/components/member/TrainingDiaryPanel";
 import { WeightLogPanel } from "@/components/member/WeightLogPanel";
 import { HOME_PAGE_CLASS, HomeSwipePager } from "@/components/member/WeightHomeCarousel";
+import { MealPersonalPaywall } from "@/components/member/MealPersonalPaywall";
 import {
   DEFAULT_MEAL_REMINDER_SETTINGS,
   type MealReminderSettings,
@@ -166,6 +167,45 @@ const EMPTY_DISH = {
   serving: "" as MealServing | "",
 };
 
+function lockedDemoMeals(today: string): MemberMealLogView[] {
+  return [
+    {
+      id: "demo-breakfast",
+      log_date: today,
+      meal_slot: "breakfast",
+      photo_url: null,
+      photo_urls: [],
+      note: null,
+      items: ["鶏むね", "ご飯", "サラダ"],
+      kcal: 480,
+      protein_g: 38,
+      fat_g: 12,
+      carb_g: 48,
+      alcohol_g: null,
+      confidence: 0.9,
+      source: "ai",
+      created_at: `${today}T08:10:00+09:00`,
+    },
+    {
+      id: "demo-lunch",
+      log_date: today,
+      meal_slot: "lunch",
+      photo_url: null,
+      photo_urls: [],
+      note: null,
+      items: ["大戸屋 さばの塩焼き定食"],
+      kcal: 720,
+      protein_g: 42,
+      fat_g: 22,
+      carb_g: 82,
+      alcohol_g: null,
+      confidence: 0.88,
+      source: "ai",
+      created_at: `${today}T12:30:00+09:00`,
+    },
+  ];
+}
+
 function fieldsFromApiDishes(
   dishes: NonNullable<MealDashboard["dishes"]>
 ): Array<{ menu: string; grams: string; count: string; count_unit: MealCountUnit; serving: MealServing | "" }> {
@@ -185,12 +225,18 @@ export function MealPersonalPanel({
   apiPath = "/api/member/meal-logs",
   readOnly = false,
   initialSlot,
+  locked = false,
+  subscribeUrl = null,
+  priceLabel = "食事パーソナル（月額）",
 }: {
   signed?: { s: string; sig: string } | null;
   compact?: boolean;
   apiPath?: string;
   readOnly?: boolean;
   initialSlot?: MealSlot | null;
+  locked?: boolean;
+  subscribeUrl?: string | null;
+  priceLabel?: string;
 }) {
   const [data, setData] = useState<MealDashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -223,7 +269,7 @@ export function MealPersonalPanel({
     fat_g: string;
     carb_g: string;
   } | null>(null);
-  const [tab, setTab] = useState<MealPersonalTab>(initialSlot ? "add" : "home");
+  const [tab, setTab] = useState<MealPersonalTab>(locked || !initialSlot ? "home" : "add");
   const [addMode, setAddMode] = useState<MealAddMode>(initialSlot ? "record" : "picker");
   const [intakeMode, setIntakeMode] = useState<"intake" | "remaining">("intake");
   const [suggestView, setSuggestView] = useState<"menu" | "map">("menu");
@@ -305,7 +351,7 @@ export function MealPersonalPanel({
   }, [tab, suggestView]);
 
   async function saveMeal() {
-    if (!data) return;
+    if (locked || !data) return;
     const hasMenu = dishes.some((d) => d.menu.trim());
     if (mealPhotos.length === 0 && !hasMenu) return;
     setBusy(true);
@@ -330,7 +376,7 @@ export function MealPersonalPanel({
   }
 
   async function confirmMeal() {
-    if (!data || !pending) return;
+    if (locked || !data || !pending) return;
     setBusy(true);
     setErr(null);
     setSavedMsg(null);
@@ -364,7 +410,7 @@ export function MealPersonalPanel({
   }
 
   async function sendChat() {
-    if (!data) return;
+    if (locked || !data) return;
     const raw = chatInput.trim();
     if (!raw && mealPhotos.length === 0) return;
     const userText = raw || "写真を送ります";
@@ -465,6 +511,7 @@ export function MealPersonalPanel({
   }
 
   async function saveReminderTimes() {
+    if (locked) return;
     setBusy(true);
     setErr(null);
     setSavedMsg(null);
@@ -492,7 +539,7 @@ export function MealPersonalPanel({
   }
 
   async function saveLifestyle() {
-    if (!data) return;
+    if (locked || !data) return;
     setBusy(true);
     setErr(null);
     setSavedMsg(null);
@@ -535,7 +582,7 @@ export function MealPersonalPanel({
   }
 
   async function saveEditMeal() {
-    if (!editDraft || !editingId) return;
+    if (locked || !editDraft || !editingId) return;
     const kcal = Math.round(Number(editDraft.kcal));
     const proteinG = Number(editDraft.protein_g);
     const fatG = Number(editDraft.fat_g);
@@ -580,6 +627,7 @@ export function MealPersonalPanel({
   }
 
   async function deleteMeal(meal: MemberMealLogView) {
+    if (locked) return;
     const label = meal.items.length ? meal.items.slice(0, 2).join("・") : MEAL_SLOT_LABELS[meal.meal_slot];
     if (!window.confirm(`${formatYmd(meal.log_date)}の${MEAL_SLOT_LABELS[meal.meal_slot]}（${label}）を削除しますか？`)) {
       return;
@@ -645,7 +693,7 @@ export function MealPersonalPanel({
           key={m.id}
           meal={m}
           showDate={showDate}
-          readOnly={readOnly}
+          readOnly={readOnly || locked}
           busy={busy}
           editing={editingId === m.id}
           draft={editingId === m.id ? editDraft : null}
@@ -900,6 +948,9 @@ export function MealPersonalPanel({
     </HomeSwipePager>
   );
 
+  const diaryMeals = locked ? lockedDemoMeals(data.today) : data.today_meals;
+  const diaryPast = locked ? [] : data.meals.filter((m) => m.log_date !== data.today);
+
   const diaryBody = (
     <HomeSwipePager labels={["食事", "トレーニング"]}>
       <section className={HOME_PAGE_CLASS}>
@@ -910,22 +961,32 @@ export function MealPersonalPanel({
         <div className="mt-4 space-y-4">
           <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="text-sm font-bold text-slate-900">{formatYmd(data.today)}の記録</div>
-            {data.today_meals.length === 0 ? <div className="text-sm text-slate-600">まだ食事がありません。</div> : null}
-            {renderMealCards(data.today_meals.slice(0, 20), false)}
+            {diaryMeals.length === 0 ? <div className="text-sm text-slate-600">まだ食事がありません。</div> : null}
+            {renderMealCards(diaryMeals.slice(0, 20), false)}
           </section>
-          {data.meals.some((m) => m.log_date !== data.today) ? (
+          {diaryPast.length ? (
             <section className="space-y-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="text-sm font-bold text-slate-900">過去の食事</div>
               <p className="text-xs text-slate-500">間違えた記録はここから削除・修正できます。</p>
-              {renderMealCards(
-                data.meals.filter((m) => m.log_date !== data.today).slice(0, 40),
-                true
-              )}
+              {renderMealCards(diaryPast.slice(0, 40), true)}
             </section>
           ) : null}
         </div>
       </section>
-      {readOnly ? null : <TrainingDiaryPanel signed={signed} />}
+      {readOnly || locked ? (
+        <section className={HOME_PAGE_CLASS}>
+          <div className="text-center">
+            <div className="text-3xl font-bold tracking-tight text-slate-900">トレーニング</div>
+            <div className="mt-0.5 text-[11px] font-semibold text-slate-400">← 食事</div>
+          </div>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm font-bold text-slate-900">{formatYmd(data.today)}の記録</div>
+            <div className="mt-2 text-sm text-slate-600">ジム・45分・調子ふつう</div>
+          </div>
+        </section>
+      ) : (
+        <TrainingDiaryPanel signed={signed} />
+      )}
     </HomeSwipePager>
   );
 
@@ -1238,6 +1299,36 @@ export function MealPersonalPanel({
     </div>
   );
 
+  function withPaywall(body: ReactNode) {
+    if (!locked) return body;
+    return (
+      <MealPersonalPaywall priceLabel={priceLabel} subscribeUrl={subscribeUrl}>
+        {body}
+      </MealPersonalPaywall>
+    );
+  }
+
+  const addBody =
+    addMode === "chat"
+      ? chatBody
+      : addMode === "record"
+        ? recordBody
+        : addMode === "barcode"
+          ? barcodeBody
+          : (
+            <div className="space-y-4">
+              {addPicker}
+              {locked ? (
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="text-sm font-bold text-slate-900">トレーニングを記録</div>
+                  <div className="mt-2 text-sm text-slate-600">ジム・45分・調子ふつう</div>
+                </section>
+              ) : (
+                <TrainingLogPanel signed={signed} />
+              )}
+            </div>
+          );
+
   return (
     <div className={useTabs ? "space-y-4 pb-28" : "space-y-4"}>
       {photoInputs}
@@ -1247,26 +1338,14 @@ export function MealPersonalPanel({
       ) : (
         <>
           {activeTab === "home" ? homeBody : null}
-          {activeTab === "diary" ? diaryBody : null}
-          {activeTab === "add" && !readOnly
-            ? addMode === "chat"
-              ? chatBody
-              : addMode === "record"
-                ? recordBody
-                : addMode === "barcode"
-                  ? barcodeBody
-                  : (
-                    <div className="space-y-4">
-                      {addPicker}
-                      <TrainingLogPanel signed={signed} />
-                    </div>
-                  )
-            : null}
-          {activeTab === "suggest" ? suggestBody : null}
-          {activeTab === "settings" ? settingsBody : null}
+          {activeTab === "diary" ? withPaywall(diaryBody) : null}
+          {activeTab === "add" && !readOnly ? withPaywall(addBody) : null}
+          {activeTab === "suggest" ? withPaywall(suggestBody) : null}
+          {activeTab === "settings" ? withPaywall(settingsBody) : null}
           <MealPersonalTabBar
             tab={activeTab}
             readOnly={readOnly}
+            locked={locked}
             pending={Boolean(pending)}
             onChange={(next) => {
               if (next === "add") setAddMode("picker");
@@ -1651,11 +1730,13 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 function MealPersonalTabBar({
   tab,
   readOnly,
+  locked,
   pending,
   onChange,
 }: {
   tab: MealPersonalTab;
   readOnly: boolean;
+  locked: boolean;
   pending: boolean;
   onChange: (tab: MealPersonalTab) => void;
 }) {
@@ -1697,10 +1778,11 @@ function MealPersonalTabBar({
                 </span>
                 <span
                   className={[
-                    "mt-0.5 text-[10px] font-semibold",
+                    "mt-0.5 inline-flex items-center gap-0.5 text-[10px] font-semibold",
                     tab === "add" ? "text-slate-900" : "text-slate-400",
                   ].join(" ")}
                 >
+                  {locked ? <Lock className="h-2.5 w-2.5" strokeWidth={2.4} /> : null}
                   記録
                 </span>
                 {pending ? (
@@ -1722,7 +1804,10 @@ function MealPersonalTabBar({
               ].join(" ")}
             >
               <Icon className="h-5 w-5" strokeWidth={active ? 2.4 : 1.8} />
-              {item.label}
+              <span className="inline-flex items-center gap-0.5">
+                {locked && item.id !== "home" ? <Lock className="h-2.5 w-2.5" strokeWidth={2.4} /> : null}
+                {item.label}
+              </span>
             </button>
           );
         })}

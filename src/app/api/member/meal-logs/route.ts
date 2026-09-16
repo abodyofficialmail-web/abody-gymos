@@ -45,11 +45,13 @@ export const maxDuration = 60;
 
 async function resolveMember(
   supabase: ReturnType<typeof createSupabaseServiceClient>,
-  signed?: { s?: string; sig?: string }
+  signed?: { s?: string; sig?: string },
+  opts?: { allowLocked?: boolean }
 ): Promise<
-  | { ok: true; memberId: string; memberCode: string; slotHint?: string }
+  | { ok: true; memberId: string; memberCode: string; slotHint?: string; full: boolean }
   | { ok: false; status: number; error: string }
 > {
+  const allowLocked = Boolean(opts?.allowLocked);
   const s = signed?.s?.trim() ?? "";
   const sig = signed?.sig?.trim() ?? "";
   if (s && sig) {
@@ -58,8 +60,8 @@ async function resolveMember(
     try {
       const gate = await loadMemberMealPersonalGate(supabase, payload.member_id);
       if (!gate || gate.is_active === false) return { ok: false, status: 401, error: "未ログイン" };
-      if (!gate.full) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
-      return { ok: true, memberId: gate.id, memberCode: gate.member_code, slotHint: payload.slot };
+      if (!gate.full && !allowLocked) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+      return { ok: true, memberId: gate.id, memberCode: gate.member_code, slotHint: payload.slot, full: gate.full };
     } catch {
       return { ok: false, status: 500, error: "会員の取得に失敗しました" };
     }
@@ -70,8 +72,8 @@ async function resolveMember(
   try {
     const gate = await loadMemberMealPersonalGate(supabase, memberId);
     if (!gate || !gate.is_active) return { ok: false, status: 401, error: "未ログイン" };
-    if (!gate.full) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
-    return { ok: true, memberId: gate.id, memberCode: gate.member_code };
+    if (!gate.full && !allowLocked) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+    return { ok: true, memberId: gate.id, memberCode: gate.member_code, full: gate.full };
   } catch {
     return { ok: false, status: 500, error: "会員の取得に失敗しました" };
   }
@@ -89,19 +91,35 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const supabase = createSupabaseServiceClient();
-    const resolved = await resolveMember(supabase, {
-      s: url.searchParams.get("s") ?? undefined,
-      sig: url.searchParams.get("sig") ?? undefined,
-    });
+    const resolved = await resolveMember(
+      supabase,
+      {
+        s: url.searchParams.get("s") ?? undefined,
+        sig: url.searchParams.get("sig") ?? undefined,
+      },
+      { allowLocked: true }
+    );
     if (!resolved.ok) return jsonResponse({ error: resolved.error }, resolved.status);
     const data = await dash(supabase, resolved.memberId);
     if (data.error && data.missingTable) {
-      return jsonResponse({ enabled: true, ...data, meals: [], lifestyles: [], today_meals: [] });
+      return jsonResponse({
+        enabled: resolved.full,
+        locked: !resolved.full,
+        ...data,
+        meals: [],
+        lifestyles: [],
+        today_meals: [],
+      });
     }
     if (data.error && !data.missingTable) {
       return jsonResponse({ error: "食事記録の取得に失敗しました", detail: data.error }, 500);
     }
-    return jsonResponse({ enabled: true, default_slot: resolved.slotHint ?? defaultMealSlot(), ...data });
+    return jsonResponse({
+      enabled: resolved.full,
+      locked: !resolved.full,
+      default_slot: resolved.slotHint ?? defaultMealSlot(),
+      ...data,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "取得中にエラーが発生しました", detail: message }, 500);
