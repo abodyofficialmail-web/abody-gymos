@@ -80,6 +80,7 @@ async function main() {
   let excludedMembership = 0;
   let excludedSep1to16 = 0;
   let excludedSep17to30 = 0;
+  let excludedSepTotalOver5 = 0;
 
   for (const m of membersResult.rows) {
     if (!isActiveMember(m)) {
@@ -100,13 +101,19 @@ async function main() {
       continue;
     }
 
+    const sepTotal = sep1to16 + sep17to30;
+    if (sepTotal > MAX_VISITS) {
+      excludedSepTotalOver5 += 1;
+      continue;
+    }
+
     results.push({
       memberCode: String(m.member_code ?? "").toUpperCase(),
       displayName: m.display_name ?? m.name ?? "—",
       homeStore: storeNameById[m.store_id] ?? null,
       visitCountSep1to16: sep1to16,
       visitCountSep17to30: sep17to30,
-      visitCountSeptemberTotal: sep1to16 + sep17to30,
+      visitCountSeptemberTotal: sepTotal,
     });
   }
 
@@ -125,10 +132,12 @@ async function main() {
           membership: "在籍会員のみ（退会・休会除外）",
           sep1to16: "0〜5回（start_at・キャンセル除外）",
           sep17to30: "0〜5回（start_at・キャンセル除外）",
+          septemberTotal: "0〜5回（上記合計）",
         },
         excludedMembershipCount: excludedMembership,
         excludedSep1to16Over5: excludedSep1to16,
         excludedSep17to30Over5: excludedSep17to30,
+        excludedSepTotalOver5: excludedSepTotalOver5,
         memberCount: results.length,
         storeBreakdown: countByStore(results),
         members: results,
@@ -140,7 +149,9 @@ async function main() {
 
   console.log("\n--- サマリー ---");
   console.log(`該当: ${results.length}名`);
-  console.log(`除外: 退会・休会 ${excludedMembership} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30}`);
+  console.log(
+    `除外: 退会・休会 ${excludedMembership} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30} / 9月合計6回以上 ${excludedSepTotalOver5}`,
+  );
 
   console.log("\n--- 一覧 ---");
   console.log("| # | 会員コード | 氏名 | 所属店 | 9/1〜16 | 9/17〜30 | 9月合計 |");
