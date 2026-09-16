@@ -20,7 +20,7 @@ on:
 
 jobs:
   upload:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[upload-sep-video]')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
