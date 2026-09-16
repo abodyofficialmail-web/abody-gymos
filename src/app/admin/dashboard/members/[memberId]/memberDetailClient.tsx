@@ -1,8 +1,13 @@
 "use client";
 
 import { MemberBodyPhotoSection } from "@/components/karte/MemberBodyPhotoSection";
+import { MemberGoalHearingSection, splitGoalHearingNotes } from "@/components/karte/MemberGoalHearingSection";
 import { MemberGoalPhotoSection } from "@/components/karte/MemberGoalPhotoSection";
 import { MemberNutritionTargetSection } from "@/components/karte/MemberNutritionTargetSection";
+import { WeightLogPanel } from "@/components/member/WeightLogPanel";
+import { isMemberWeightLogEnabled } from "@/lib/memberWeightLogRollout";
+import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import { MealPersonalPanel } from "@/components/member/MealPersonalPanel";
 import {
   WeightProgressPanel,
   type WeightProgressPanelData,
@@ -18,6 +23,7 @@ import {
   type SessionSurveyForKarte,
 } from "@/lib/sessionSurveyDisplay";
 import {
+  formatHiatusPeriod,
   formatWithdrawnAt,
   MEMBERSHIP_STATUS_OPTIONS,
   membershipStatusBadgeClass,
@@ -26,6 +32,16 @@ import {
   resolveMembershipStatus,
   type MembershipStatus,
 } from "@/lib/memberMembershipStatus";
+import {
+  ENROLLMENT_CAMPAIGN_OTHER,
+  ENROLLMENT_CAMPAIGN_PRESETS,
+  formatEnrollmentCampaign,
+  formatEnrollmentFee,
+  formatJoinedAt,
+  formatMinCommitmentMonths,
+  isPresetCampaign,
+  MIN_COMMITMENT_MONTH_OPTIONS,
+} from "@/lib/memberEnrollment";
 import {
   createKarteRepOptions,
   createKarteSecondOptions,
@@ -66,6 +82,13 @@ type ReservationRow = {
   start_at: string;
   end_at: string;
   status: string;
+  created_at: string;
+};
+
+type ChangeLogRow = {
+  id: string;
+  summary: string;
+  action: string;
   created_at: string;
 };
 
@@ -128,9 +151,21 @@ export function MemberDetailClient({
     withdrawn_at?: string | null;
     withdrawn_trainer_id?: string | null;
     withdrawn_trainer_name?: string | null;
+    hiatus_start_at?: string | null;
+    hiatus_end_at?: string | null;
+    joined_at?: string | null;
+    min_commitment_months?: number | null;
+    has_enrollment_fee?: boolean | null;
+    enrollment_campaign?: string | null;
     line_user_id: string | null;
     line_channel_key?: string | null;
     line_channel_label?: string | null;
+    trainer_visibility_pass_active?: boolean;
+    trainer_visibility_pass_status?: string;
+    trainer_visibility_pass_email?: string | null;
+    trainer_visibility_pass_period_end?: string | null;
+    trainer_visibility_stripe_customer_id?: string | null;
+    trainer_visibility_stripe_subscription_id?: string | null;
   };
 }) {
   const router = useRouter();
@@ -144,10 +179,34 @@ export function MemberDetailClient({
   const [withdrawnTrainerId, setWithdrawnTrainerId] = useState(member.withdrawn_trainer_id ?? "");
   const [withdrawnTrainerName, setWithdrawnTrainerName] = useState(member.withdrawn_trainer_name ?? "");
   const [withdrawFormOpen, setWithdrawFormOpen] = useState(false);
+  const [hiatusStartAt, setHiatusStartAt] = useState(member.hiatus_start_at ?? todayYmd);
+  const [hiatusEndAt, setHiatusEndAt] = useState(member.hiatus_end_at ?? todayYmd);
+  const [hiatusFormOpen, setHiatusFormOpen] = useState(false);
+  const [joinedAt, setJoinedAt] = useState(member.joined_at ?? "");
+  const [minCommitment, setMinCommitment] = useState(
+    member.min_commitment_months != null && member.min_commitment_months > 0
+      ? String(member.min_commitment_months)
+      : ""
+  );
+  const [hasEnrollmentFee, setHasEnrollmentFee] = useState<boolean | null>(
+    typeof member.has_enrollment_fee === "boolean" ? member.has_enrollment_fee : null
+  );
+  const [campaignPreset, setCampaignPreset] = useState(() => {
+    const c = String(member.enrollment_campaign ?? "").trim();
+    if (!c) return "";
+    return isPresetCampaign(c) ? c : ENROLLMENT_CAMPAIGN_OTHER;
+  });
+  const [campaignOther, setCampaignOther] = useState(() => {
+    const c = String(member.enrollment_campaign ?? "").trim();
+    return c && !isPresetCampaign(c) ? c : "";
+  });
+  const [enrollmentSaving, setEnrollmentSaving] = useState(false);
+  const [enrollmentMsg, setEnrollmentMsg] = useState<string | null>(null);
   const [withdrawTrainers, setWithdrawTrainers] = useState<TrainerRow[]>([]);
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
+  const [changeLogs, setChangeLogs] = useState<ChangeLogRow[]>([]);
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
   const [weightProgress, setWeightProgress] = useState<WeightProgressPanelData | null>(null);
   const [weightProgressLoading, setWeightProgressLoading] = useState(true);
@@ -360,6 +419,11 @@ export function MemberDetailClient({
         setErr(String(e?.message ?? "取得に失敗しました"));
         setRows([]);
       });
+    apiGet<{ logs: ChangeLogRow[] }>(
+      `/api/admin/reservation-change-logs?member_id=${encodeURIComponent(memberId)}`
+    )
+      .then((d) => setChangeLogs(d.logs ?? []))
+      .catch(() => setChangeLogs([]));
   }, [memberId, month]);
 
   const refreshNotes = async () => {
@@ -443,6 +507,8 @@ export function MemberDetailClient({
     const list = (rows ?? []).filter((r) => String(r.status ?? "") !== "cancelled");
     return list.length;
   }, [rows]);
+
+  const { hearingNotes, sessionNotes } = useMemo(() => splitGoalHearingNotes(notes), [notes]);
 
   const reservationsForToday = useMemo(() => {
     const ymd = noteDate || todayYmd;
@@ -645,8 +711,17 @@ export function MemberDetailClient({
   const saveMembershipStatus = async (next: MembershipStatus) => {
     if (next === "withdrawn") {
       setWithdrawFormOpen(true);
+      setHiatusFormOpen(false);
       setStatusMsg(null);
       if (!withdrawnAt) setWithdrawnAt(todayYmd);
+      return;
+    }
+    if (next === "hiatus") {
+      setHiatusFormOpen(true);
+      setWithdrawFormOpen(false);
+      setStatusMsg(null);
+      if (!hiatusStartAt) setHiatusStartAt(todayYmd);
+      if (!hiatusEndAt) setHiatusEndAt(todayYmd);
       return;
     }
     if (next === membershipStatus || statusSaving) return;
@@ -654,6 +729,7 @@ export function MemberDetailClient({
     setStatusSaving(true);
     setStatusMsg(null);
     setWithdrawFormOpen(false);
+    setHiatusFormOpen(false);
     const prev = membershipStatus;
     setMembershipStatus(next);
     try {
@@ -664,6 +740,8 @@ export function MemberDetailClient({
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
           withdrawn_trainer_name?: string | null;
+          hiatus_start_at?: string | null;
+          hiatus_end_at?: string | null;
         };
       }>(`/api/admin/members/${encodeURIComponent(memberId)}`, { membership_status: next });
       const saved = resolveMembershipStatus(res.member?.membership_status, res.member?.is_active ?? next === "active");
@@ -671,10 +749,64 @@ export function MemberDetailClient({
       setWithdrawnAt(res.member?.withdrawn_at ?? todayYmd);
       setWithdrawnTrainerId(res.member?.withdrawn_trainer_id ?? "");
       setWithdrawnTrainerName(res.member?.withdrawn_trainer_name ?? "");
+      setHiatusStartAt(res.member?.hiatus_start_at ?? todayYmd);
+      setHiatusEndAt(res.member?.hiatus_end_at ?? todayYmd);
       setStatusMsg(`${membershipStatusLabel(saved)}に更新しました`);
       router.refresh();
     } catch (e: any) {
       setMembershipStatus(prev);
+      setStatusMsg(String(e?.message ?? "更新に失敗しました"));
+    } finally {
+      setStatusSaving(false);
+    }
+  };
+
+  const confirmHiatus = async () => {
+    if (!hiatusStartAt.trim()) {
+      setStatusMsg("休会開始日を入力してください");
+      return;
+    }
+    if (!hiatusEndAt.trim()) {
+      setStatusMsg("休会終了日を入力してください");
+      return;
+    }
+    if (hiatusStartAt > hiatusEndAt) {
+      setStatusMsg("休会終了日は開始日以降にしてください");
+      return;
+    }
+    if (statusSaving) return;
+
+    setStatusSaving(true);
+    setStatusMsg(null);
+    const prevStatus = membershipStatus;
+    const prevStart = member.hiatus_start_at ?? todayYmd;
+    const prevEnd = member.hiatus_end_at ?? todayYmd;
+
+    setMembershipStatus("hiatus");
+    try {
+      const res = await apiPatch<{
+        member: {
+          membership_status?: MembershipStatus;
+          is_active?: boolean;
+          hiatus_start_at?: string | null;
+          hiatus_end_at?: string | null;
+        };
+      }>(`/api/admin/members/${encodeURIComponent(memberId)}`, {
+        membership_status: "hiatus",
+        hiatus_start_at: hiatusStartAt,
+        hiatus_end_at: hiatusEndAt,
+      });
+      const saved = resolveMembershipStatus(res.member?.membership_status, res.member?.is_active ?? true);
+      setMembershipStatus(saved);
+      setHiatusStartAt(res.member?.hiatus_start_at ?? hiatusStartAt);
+      setHiatusEndAt(res.member?.hiatus_end_at ?? hiatusEndAt);
+      setHiatusFormOpen(false);
+      setStatusMsg("休会期間を保存しました");
+      router.refresh();
+    } catch (e: any) {
+      setMembershipStatus(prevStatus);
+      setHiatusStartAt(prevStart);
+      setHiatusEndAt(prevEnd);
       setStatusMsg(String(e?.message ?? "更新に失敗しました"));
     } finally {
       setStatusSaving(false);
@@ -733,6 +865,65 @@ export function MemberDetailClient({
     }
   };
 
+  const saveEnrollment = async () => {
+    if (!joinedAt) {
+      setEnrollmentMsg("入会日を入力してください");
+      return;
+    }
+    if (hasEnrollmentFee == null) {
+      setEnrollmentMsg("入会金のあり・なしを選んでください");
+      return;
+    }
+    const campaign =
+      campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? campaignOther.trim() : campaignPreset.trim();
+    if (!campaign) {
+      setEnrollmentMsg("入会キャンペーンを選んでください");
+      return;
+    }
+    if (enrollmentSaving) return;
+
+    setEnrollmentSaving(true);
+    setEnrollmentMsg(null);
+    try {
+      const res = await apiPatch<{
+        member: {
+          joined_at?: string | null;
+          min_commitment_months?: number | null;
+          has_enrollment_fee?: boolean | null;
+          enrollment_campaign?: string | null;
+        };
+      }>(`/api/admin/members/${encodeURIComponent(memberId)}`, {
+        joined_at: joinedAt,
+        min_commitment_months: minCommitment ? Number(minCommitment) : null,
+        has_enrollment_fee: hasEnrollmentFee,
+        enrollment_campaign: campaign,
+      });
+      setJoinedAt(res.member?.joined_at ?? joinedAt);
+      setMinCommitment(
+        res.member?.min_commitment_months != null && res.member.min_commitment_months > 0
+          ? String(res.member.min_commitment_months)
+          : minCommitment ? minCommitment : ""
+      );
+      if (typeof res.member?.has_enrollment_fee === "boolean") {
+        setHasEnrollmentFee(res.member.has_enrollment_fee);
+      }
+      const savedCampaign = String(res.member?.enrollment_campaign ?? campaign).trim();
+      if (isPresetCampaign(savedCampaign)) {
+        setCampaignPreset(savedCampaign);
+        setCampaignOther("");
+      } else {
+        setCampaignPreset(ENROLLMENT_CAMPAIGN_OTHER);
+        setCampaignOther(savedCampaign);
+      }
+      setEnrollmentMsg("入会情報を保存しました");
+      router.refresh();
+    } catch (e: any) {
+      setEnrollmentMsg(String(e?.message ?? "更新に失敗しました"));
+    } finally {
+      setEnrollmentSaving(false);
+    }
+  };
+
   const saveTodayNote = async () => {
     setNoteMsg(null);
     if (!storeId) return setNoteMsg("店舗を選択してください");
@@ -755,6 +946,8 @@ export function MemberDetailClient({
         date: noteDate,
         content,
         line_message: buildLineMessage(),
+        training_parts: trainingParts,
+        training_condition: condition || null,
       });
       await refreshNotes();
       await refreshWeightProgress().catch(() => undefined);
@@ -809,6 +1002,11 @@ export function MemberDetailClient({
                 <div>退会時担当: {withdrawnTrainerName || "—"}</div>
               </div>
             ) : null}
+            {membershipStatus === "hiatus" && !hiatusFormOpen ? (
+              <div className="pt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                休会期間: {formatHiatusPeriod(hiatusStartAt, hiatusEndAt)}
+              </div>
+            ) : null}
             <div className="pt-1 text-[11px] text-slate-400 break-all">ID: {member.id}</div>
             {email.trim() ? (
               <div className="pt-1 text-[11px] text-slate-500 break-all">Email: {email.trim()}</div>
@@ -828,6 +1026,33 @@ export function MemberDetailClient({
             {member.line_user_id && member.line_channel_label ? (
               <div className="text-[11px] text-slate-500">送信先: {member.line_channel_label}</div>
             ) : null}
+            <div
+              title={member.trainer_visibility_pass_status || "inactive"}
+              className={[
+                "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
+                member.trainer_visibility_pass_active
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-slate-200 bg-slate-50 text-slate-600",
+              ].join(" ")}
+            >
+              {member.trainer_visibility_pass_active ? "出勤表示パス" : "出勤表示なし"}
+            </div>
+            {member.trainer_visibility_pass_active ? (
+              <div className="text-[11px] text-slate-500 space-y-0.5">
+                {member.trainer_visibility_pass_email ? (
+                  <div>決済メール: {member.trainer_visibility_pass_email}</div>
+                ) : null}
+                {member.trainer_visibility_pass_period_end ? (
+                  <div>
+                    期限:{" "}
+                    {DateTime.fromISO(member.trainer_visibility_pass_period_end).setZone("Asia/Tokyo").toFormat("yyyy/MM/dd")}
+                  </div>
+                ) : null}
+                {member.trainer_visibility_stripe_customer_id ? (
+                  <div className="break-all">Stripe: {member.trainer_visibility_stripe_customer_id}</div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -842,13 +1067,77 @@ export function MemberDetailClient({
                 onClick={() => void saveMembershipStatus(opt.id)}
                 className={membershipStatusButtonClass(
                   opt.id,
-                  opt.id === "withdrawn" ? membershipStatus === "withdrawn" || withdrawFormOpen : membershipStatus === opt.id
+                  opt.id === "withdrawn"
+                    ? membershipStatus === "withdrawn" || withdrawFormOpen
+                    : opt.id === "hiatus"
+                      ? (membershipStatus === "hiatus" || hiatusFormOpen) && !withdrawFormOpen
+                      : membershipStatus === opt.id && !withdrawFormOpen && !hiatusFormOpen
                 )}
               >
                 {opt.label}
               </button>
             ))}
           </div>
+
+          {hiatusFormOpen ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-3">
+              <div className="text-xs font-semibold text-amber-950">休会期間</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-700">開始日</label>
+                  <input
+                    type="date"
+                    value={hiatusStartAt}
+                    onChange={(e) => {
+                      setHiatusStartAt(e.target.value);
+                      setStatusMsg(null);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-700">終了日</label>
+                  <input
+                    type="date"
+                    value={hiatusEndAt}
+                    onChange={(e) => {
+                      setHiatusEndAt(e.target.value);
+                      setStatusMsg(null);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-600 leading-relaxed">
+                終了日の翌日に自動で入会中へ戻ります。休会中も予約は取れます。
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={statusSaving}
+                  onClick={() => void confirmHiatus()}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {statusSaving ? "保存中…" : "休会を確定"}
+                </button>
+                <button
+                  type="button"
+                  disabled={statusSaving}
+                  onClick={() => {
+                    setHiatusFormOpen(false);
+                    setStatusMsg(null);
+                    if (membershipStatus !== "hiatus") {
+                      setHiatusStartAt(member.hiatus_start_at ?? todayYmd);
+                      setHiatusEndAt(member.hiatus_end_at ?? todayYmd);
+                    }
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800"
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {withdrawFormOpen ? (
             <div className="rounded-xl border border-slate-300 bg-slate-50 p-3 space-y-3">
@@ -915,12 +1204,27 @@ export function MemberDetailClient({
             </div>
           ) : null}
 
+          {membershipStatus === "hiatus" && !hiatusFormOpen ? (
+            <button
+              type="button"
+              disabled={statusSaving}
+              onClick={() => {
+                setHiatusFormOpen(true);
+                setWithdrawFormOpen(false);
+                setStatusMsg(null);
+              }}
+              className="text-xs font-semibold text-slate-600 underline"
+            >
+              休会期間を編集
+            </button>
+          ) : null}
           {membershipStatus === "withdrawn" && !withdrawFormOpen ? (
             <button
               type="button"
               disabled={statusSaving}
               onClick={() => {
                 setWithdrawFormOpen(true);
+                setHiatusFormOpen(false);
                 setStatusMsg(null);
               }}
               className="text-xs font-semibold text-slate-600 underline"
@@ -930,8 +1234,125 @@ export function MemberDetailClient({
           ) : null}
           {statusMsg ? <div className="text-xs text-slate-600">{statusMsg}</div> : null}
           <div className="text-[11px] text-slate-500 leading-relaxed">
-            休会・退会にすると予約・ログインができなくなります。カルテの閲覧・入力は引き続き可能です。
+            休会中・退会後も予約・ログインはできます。休会は期間が過ぎると自動で入会中に戻ります。カルテの閲覧・入力も引き続き可能です。
           </div>
+        </div>
+
+        <div className="pt-2 space-y-2 border-t border-slate-100">
+          <div className="text-xs font-semibold text-slate-700">入会情報</div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
+            <div>入会日: {formatJoinedAt(joinedAt)}</div>
+            <div>最低継続期間: {formatMinCommitmentMonths(minCommitment ? Number(minCommitment) : null)}</div>
+            <div>入会金: {formatEnrollmentFee(hasEnrollmentFee)}</div>
+            <div>
+              キャンペーン:{" "}
+              {formatEnrollmentCampaign(
+                campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? campaignOther : campaignPreset
+              )}
+            </div>
+          </div>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-slate-700">入会日</span>
+            <input
+              type="date"
+              value={joinedAt}
+              onChange={(e) => {
+                setJoinedAt(e.target.value);
+                setEnrollmentMsg(null);
+              }}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-slate-700">最低継続期間</span>
+            <select
+              value={minCommitment}
+              onChange={(e) => {
+                setMinCommitment(e.target.value);
+                setEnrollmentMsg(null);
+              }}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">なし</option>
+              {MIN_COMMITMENT_MONTH_OPTIONS.map((n) => (
+                <option key={n} value={String(n)}>
+                  {n}ヶ月
+                </option>
+              ))}
+              {minCommitment &&
+              !(MIN_COMMITMENT_MONTH_OPTIONS as readonly number[]).includes(Number(minCommitment)) ? (
+                <option value={minCommitment}>{minCommitment}ヶ月</option>
+              ) : null}
+            </select>
+          </label>
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-slate-700">入会金</div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: true, label: "あり" },
+                { id: false, label: "なし" },
+              ].map((opt) => (
+                <button
+                  key={String(opt.id)}
+                  type="button"
+                  onClick={() => {
+                    setHasEnrollmentFee(opt.id);
+                    setEnrollmentMsg(null);
+                  }}
+                  className={[
+                    "rounded-full border px-3 py-1 text-xs font-semibold",
+                    hasEnrollmentFee === opt.id
+                      ? "border-slate-400 bg-white text-slate-900"
+                      : "border-slate-200 bg-white text-slate-700",
+                  ].join(" ")}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium text-slate-700">入会キャンペーン</span>
+            <select
+              value={campaignPreset}
+              onChange={(e) => {
+                setCampaignPreset(e.target.value);
+                setEnrollmentMsg(null);
+              }}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">選択してください</option>
+              {ENROLLMENT_CAMPAIGN_PRESETS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+              <option value={ENROLLMENT_CAMPAIGN_OTHER}>{ENROLLMENT_CAMPAIGN_OTHER}</option>
+            </select>
+          </label>
+          {campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? (
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-slate-700">キャンペーン名</span>
+              <input
+                value={campaignOther}
+                onChange={(e) => {
+                  setCampaignOther(e.target.value);
+                  setEnrollmentMsg(null);
+                }}
+                placeholder="キャンペーン名を入力"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+          ) : null}
+          <button
+            type="button"
+            disabled={enrollmentSaving}
+            onClick={() => void saveEnrollment()}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {enrollmentSaving ? "保存中…" : "入会情報を保存"}
+          </button>
+          {enrollmentMsg ? <div className="text-xs text-slate-600">{enrollmentMsg}</div> : null}
         </div>
 
         <div className="pt-2 space-y-1">
@@ -968,6 +1389,21 @@ export function MemberDetailClient({
             </button>
           </div>
           {emailMsg ? <div className="text-xs text-slate-600">{emailMsg}</div> : null}
+        </div>
+
+        <div className="pt-3 space-y-1 border-t border-slate-100">
+          <div className="text-xs font-semibold text-slate-700">予約のキャンセル・時間変更履歴</div>
+          <div className="space-y-1">
+            {changeLogs.length > 0 ? (
+              changeLogs.slice(0, 12).map((l) => (
+                <div key={l.id} className="text-xs text-slate-700">
+                  {l.summary}
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-slate-500">まだ記録がありません（これ以降の操作から残ります）</div>
+            )}
+          </div>
         </div>
       </section>
 
@@ -1415,6 +1851,8 @@ export function MemberDetailClient({
 
       <MemberGoalPhotoSection memberId={memberId} />
 
+      <MemberGoalHearingSection notes={hearingNotes} />
+
       <MemberNutritionTargetSection memberId={memberId} />
 
       {/* 画面下固定: メニュー追加（スクロール不要） */}
@@ -1459,6 +1897,22 @@ export function MemberDetailClient({
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
+
+        {isMemberWeightLogEnabled(member.member_code) ? (
+          <WeightLogPanel
+            compact
+            readOnly
+            apiPath={`/api/admin/members/${encodeURIComponent(memberId)}/weight-logs`}
+          />
+        ) : null}
+
+        {isMemberMealPersonalEnabled(member.member_code) ? (
+          <MealPersonalPanel
+            compact
+            readOnly
+            apiPath={`/api/admin/members/${encodeURIComponent(memberId)}/meal-logs`}
+          />
+        ) : null}
 
         <WeightProgressPanel
           data={weightProgress}
@@ -1506,9 +1960,14 @@ export function MemberDetailClient({
         ) : null}
 
         {notes === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-        {notes !== null && notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
+        {notes !== null && sessionNotes.length === 0 && hearingNotes.length === 0 ? (
+          <div className="text-sm text-slate-600">履歴がありません。</div>
+        ) : null}
+        {notes !== null && sessionNotes.length === 0 && hearingNotes.length > 0 ? (
+          <div className="text-sm text-slate-600">セッション記録はまだありません。</div>
+        ) : null}
         <div className="grid gap-2">
-          {(notes ?? []).map((n) => {
+          {sessionNotes.map((n) => {
             const survey = surveyByDate[n.date];
             const preSession = preSessionByDate[n.date];
             return (

@@ -71,7 +71,10 @@ export default function LineEntryPage() {
         if (!userId) throw new Error("LINEユーザーIDの取得に失敗しました");
 
         await postLineLogin({ line_user_id: userId });
-        window.location.href = "/member";
+        const nextRaw = new URLSearchParams(window.location.search).get("next") || "/member";
+        const next =
+          nextRaw.startsWith("/") && !nextRaw.startsWith("//") && !nextRaw.startsWith("/\\") ? nextRaw : "/member";
+        window.location.href = next;
       } catch (e: any) {
         const code = String(e?.message ?? "");
         window.location.href = `/login?from=line&reason=${encodeURIComponent(code)}`;

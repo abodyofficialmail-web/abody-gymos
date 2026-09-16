@@ -55,9 +55,22 @@ export interface Database {
           is_active: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          weight_reminder_line_enabled?: boolean;
+          trainer_visibility_pass_status?: string;
+          trainer_visibility_stripe_customer_id?: string | null;
+          trainer_visibility_stripe_subscription_id?: string | null;
+          trainer_visibility_pass_current_period_end?: string | null;
+          trainer_visibility_pass_email?: string | null;
+          trainer_visibility_pass_activated_at?: string | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
+          hiatus_start_at?: string | null;
+          hiatus_end_at?: string | null;
+          joined_at?: string | null;
+          min_commitment_months?: number | null;
+          has_enrollment_fee?: boolean | null;
+          enrollment_campaign?: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -76,9 +89,22 @@ export interface Database {
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          weight_reminder_line_enabled?: boolean;
+          trainer_visibility_pass_status?: string;
+          trainer_visibility_stripe_customer_id?: string | null;
+          trainer_visibility_stripe_subscription_id?: string | null;
+          trainer_visibility_pass_current_period_end?: string | null;
+          trainer_visibility_pass_email?: string | null;
+          trainer_visibility_pass_activated_at?: string | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
+          hiatus_start_at?: string | null;
+          hiatus_end_at?: string | null;
+          joined_at?: string | null;
+          min_commitment_months?: number | null;
+          has_enrollment_fee?: boolean | null;
+          enrollment_campaign?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -97,9 +123,22 @@ export interface Database {
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          weight_reminder_line_enabled?: boolean;
+          trainer_visibility_pass_status?: string;
+          trainer_visibility_stripe_customer_id?: string | null;
+          trainer_visibility_stripe_subscription_id?: string | null;
+          trainer_visibility_pass_current_period_end?: string | null;
+          trainer_visibility_pass_email?: string | null;
+          trainer_visibility_pass_activated_at?: string | null;
           membership_status?: "active" | "hiatus" | "withdrawn";
           withdrawn_at?: string | null;
           withdrawn_trainer_id?: string | null;
+          hiatus_start_at?: string | null;
+          hiatus_end_at?: string | null;
+          joined_at?: string | null;
+          min_commitment_months?: number | null;
+          has_enrollment_fee?: boolean | null;
+          enrollment_campaign?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -236,6 +275,7 @@ export interface Database {
           break_minutes: number;
           status: string;
           is_break: boolean;
+          booking_visibility?: "public" | "invite";
           created_at: string;
           updated_at: string;
         };
@@ -249,6 +289,7 @@ export interface Database {
           break_minutes?: number;
           status: string;
           is_break?: boolean;
+          booking_visibility?: "public" | "invite";
           created_at?: string;
           updated_at?: string;
         };
@@ -262,8 +303,45 @@ export interface Database {
           break_minutes?: number;
           status?: string;
           is_break?: boolean;
+          booking_visibility?: "public" | "invite";
           created_at?: string;
           updated_at?: string;
+        };
+        Relationships: [];
+      };
+      shift_booking_invites: {
+        Row: {
+          id: string;
+          token: string;
+          member_id: string;
+          shift_id: string;
+          store_id: string;
+          trainer_id: string | null;
+          slot_minutes: number;
+          expires_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          token?: string;
+          member_id: string;
+          shift_id: string;
+          store_id: string;
+          trainer_id?: string | null;
+          slot_minutes?: number;
+          expires_at: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          token?: string;
+          member_id?: string;
+          shift_id?: string;
+          store_id?: string;
+          trainer_id?: string | null;
+          slot_minutes?: number;
+          expires_at?: string;
+          created_at?: string;
         };
         Relationships: [];
       };
@@ -274,9 +352,9 @@ export interface Database {
         Relationships: [];
       };
       trainer_expenses: {
-        Row: { id: string; trainer_id: string | null; title: string; amount: number; type: "monthly" | "daily"; };
-        Insert: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; };
-        Update: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; };
+        Row: { id: string; trainer_id: string | null; title: string; amount: number; type: "monthly" | "daily"; applied_month: string | null; };
+        Insert: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; applied_month?: string | null; };
+        Update: { id?: string; trainer_id?: string | null; title?: string; amount?: number; type?: "monthly" | "daily"; applied_month?: string | null; };
         Relationships: [];
       };
       trainer_shift_breaks: {
@@ -842,6 +920,420 @@ export interface Database {
           year_month?: string;
           member_code?: string;
           with_photo?: boolean;
+          sent_at?: string;
+        };
+        Relationships: [];
+      };
+      store_marketing_accounts: {
+        Row: {
+          store_id: string;
+          instagram_username: string | null;
+          instagram_user_id: string | null;
+          meta_ad_account_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          store_id: string;
+          instagram_username?: string | null;
+          instagram_user_id?: string | null;
+          meta_ad_account_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          store_id?: string;
+          instagram_username?: string | null;
+          instagram_user_id?: string | null;
+          meta_ad_account_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      line_follow_events: {
+        Row: {
+          id: string;
+          line_channel_key: string;
+          store_id: string | null;
+          line_user_id: string;
+          event_type: "follow" | "unfollow";
+          followed_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          line_channel_key: string;
+          store_id?: string | null;
+          line_user_id: string;
+          event_type: "follow" | "unfollow";
+          followed_at: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          line_channel_key?: string;
+          store_id?: string | null;
+          line_user_id?: string;
+          event_type?: "follow" | "unfollow";
+          followed_at?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      instagram_follower_snapshots: {
+        Row: {
+          id: string;
+          store_id: string;
+          snapshot_date: string;
+          followers_count: number;
+          source: "meta_api" | "manual";
+          captured_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          snapshot_date: string;
+          followers_count: number;
+          source?: "meta_api" | "manual";
+          captured_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          snapshot_date?: string;
+          followers_count?: number;
+          source?: "meta_api" | "manual";
+          captured_at?: string;
+        };
+        Relationships: [];
+      };
+      line_follower_snapshots: {
+        Row: {
+          id: string;
+          store_id: string;
+          line_channel_key: string;
+          snapshot_date: string;
+          followers_count: number;
+          blocks: number | null;
+          source: string;
+          captured_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          line_channel_key: string;
+          snapshot_date: string;
+          followers_count: number;
+          blocks?: number | null;
+          source?: string;
+          captured_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          line_channel_key?: string;
+          snapshot_date?: string;
+          followers_count?: number;
+          blocks?: number | null;
+          source?: string;
+          captured_at?: string;
+        };
+        Relationships: [];
+      };
+      meta_ads_daily_insights: {
+        Row: {
+          id: string;
+          store_id: string;
+          insight_date: string;
+          spend: number;
+          impressions: number | null;
+          clicks: number | null;
+          reach: number | null;
+          source: "meta_api" | "manual";
+          raw: Record<string, unknown> | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          insight_date: string;
+          spend?: number;
+          impressions?: number | null;
+          clicks?: number | null;
+          reach?: number | null;
+          source?: "meta_api" | "manual";
+          raw?: Record<string, unknown> | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          insight_date?: string;
+          spend?: number;
+          impressions?: number | null;
+          clicks?: number | null;
+          reach?: number | null;
+          source?: "meta_api" | "manual";
+          raw?: Record<string, unknown> | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      marketing_report_dispatches: {
+        Row: {
+          id: string;
+          report_kind: "daily" | "weekly";
+          period_key: string;
+          sent_at: string;
+        };
+        Insert: {
+          id?: string;
+          report_kind: "daily" | "weekly";
+          period_key: string;
+          sent_at?: string;
+        };
+        Update: {
+          id?: string;
+          report_kind?: "daily" | "weekly";
+          period_key?: string;
+          sent_at?: string;
+        };
+        Relationships: [];
+      };
+      member_weight_logs: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          weight_kg: number;
+          body_fat_pct: number | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          weight_kg: number;
+          body_fat_pct?: number | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
+          weight_kg?: number;
+          body_fat_pct?: number | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      member_meal_logs: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          meal_slot: string;
+          photo_path: string | null;
+          note: string | null;
+          items: string[] | null;
+          kcal: number;
+          protein_g: number;
+          fat_g: number;
+          carb_g: number;
+          alcohol_g: number | null;
+          confidence: number | null;
+          source: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          meal_slot: string;
+          photo_path?: string | null;
+          note?: string | null;
+          items?: string[] | null;
+          kcal: number;
+          protein_g: number;
+          fat_g: number;
+          carb_g: number;
+          alcohol_g?: number | null;
+          confidence?: number | null;
+          source?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
+          meal_slot?: string;
+          photo_path?: string | null;
+          note?: string | null;
+          items?: string[] | null;
+          kcal?: number;
+          fat_g?: number;
+          protein_g?: number;
+          carb_g?: number;
+          alcohol_g?: number | null;
+          confidence?: number | null;
+          source?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      member_lifestyle_logs: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          water_ml: number | null;
+          alcohol_drinks: number | null;
+          bowel_count: number | null;
+          bowel_quality: string | null;
+          note: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          water_ml?: number | null;
+          alcohol_drinks?: number | null;
+          bowel_count?: number | null;
+          bowel_quality?: string | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
+          water_ml?: number | null;
+          alcohol_drinks?: number | null;
+          bowel_count?: number | null;
+          bowel_quality?: string | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      member_training_logs: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          kind: "gym" | "self" | "cardio" | "rest";
+          parts: string[];
+          duration_min: number | null;
+          condition: "good" | "normal" | "hard" | null;
+          note: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          kind: "gym" | "self" | "cardio" | "rest";
+          parts?: string[];
+          duration_min?: number | null;
+          condition?: "good" | "normal" | "hard" | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
+          kind?: "gym" | "self" | "cardio" | "rest";
+          parts?: string[];
+          duration_min?: number | null;
+          condition?: "good" | "normal" | "hard" | null;
+          note?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      member_meal_reminder_settings: {
+        Row: {
+          member_id: string;
+          breakfast_time: string;
+          lunch_time: string;
+          dinner_time: string;
+          snack_time: string;
+          updated_at: string;
+        };
+        Insert: {
+          member_id: string;
+          breakfast_time?: string;
+          lunch_time?: string;
+          dinner_time?: string;
+          snack_time?: string;
+          updated_at?: string;
+        };
+        Update: {
+          member_id?: string;
+          breakfast_time?: string;
+          lunch_time?: string;
+          dinner_time?: string;
+          snack_time?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      meal_personal_reminder_dispatches: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          meal_slot: string;
+          sent_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          meal_slot: string;
+          sent_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
+          meal_slot?: string;
+          sent_at?: string;
+        };
+        Relationships: [];
+      };
+      morning_weight_reminder_dispatches: {
+        Row: {
+          id: string;
+          member_id: string;
+          log_date: string;
+          sent_at: string;
+        };
+        Insert: {
+          id?: string;
+          member_id: string;
+          log_date: string;
+          sent_at?: string;
+        };
+        Update: {
+          id?: string;
+          member_id?: string;
+          log_date?: string;
           sent_at?: string;
         };
         Relationships: [];

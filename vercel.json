@@ -35,6 +35,14 @@
     {
       "path": "/api/cron/ads-marketing-report",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/morning-weight-reminder-line",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/meal-personal-reminder-line",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

@@ -1,10 +1,17 @@
 "use client";
 
 import { GymShell } from "@/components/gym/GymShell";
+import { WeightLogPanel } from "@/components/member/WeightLogPanel";
+import { MemberNutritionTargetReadOnly } from "@/components/karte/MemberNutritionTargetSection";
+import {
+  WeightProgressPanel,
+  type WeightProgressPanelData,
+} from "@/components/weight-progress/WeightProgressPanel";
 import {
   BODY_PHOTO_ANGLE_LABELS,
   type MemberBodyPhotoSetView,
 } from "@/lib/memberBodyPhotos";
+import type { MemberNutritionTargetView } from "@/lib/memberNutritionTargets";
 import {
   MAX_MEMBER_RESCHEDULE_COUNT,
   getMemberRescheduleEligibility,
@@ -12,7 +19,7 @@ import {
   type MemberRescheduleEligibility,
 } from "@/lib/memberReschedule";
 import { DateTime } from "luxon";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const TZ = "Asia/Tokyo";
 
@@ -26,6 +33,14 @@ type MeResponse = {
     email: string | null;
     line_user_id: string | null;
     reservation_reminder_line_enabled?: boolean;
+    weight_reminder_line_enabled?: boolean;
+    weight_log_enabled?: boolean;
+    meal_personal_enabled?: boolean;
+  };
+  trainer_visibility_pass?: {
+    active: boolean;
+    subscribe_url?: string | null;
+    price_label?: string;
   };
   reservations: Array<{
     id: string;
@@ -37,6 +52,7 @@ type MeResponse = {
     store_name: string;
     trainer_id: string | null;
     trainer_name: string;
+    on_shift_trainer_names?: string;
     status: string;
   }>;
   notes: Array<{
@@ -83,7 +99,7 @@ function formatBodyPhotoDateLabel(ymd: string) {
   return `${dt.toFormat("yyyy/M/d")}（${dow}）`;
 }
 
-type MemberTab = "reservations" | "karte" | "photos" | "reports";
+type MemberTab = "reservations" | "karte" | "photos" | "reports" | "weight";
 
 type MonthlyProgressReportItem = {
   yearMonth: string;
@@ -97,11 +113,12 @@ type MonthlyProgressReportItem = {
   pageUrls: string[];
 };
 
-const MEMBER_TABS: Array<{ id: MemberTab; label: string }> = [
-  { id: "reservations", label: "予約一覧" },
-  { id: "karte", label: "カルテ" },
-  { id: "photos", label: "写真記録" },
-  { id: "reports", label: "成長レポート" },
+const MEMBER_TABS: Array<{ id: MemberTab; label: string; shortLabel: string }> = [
+  { id: "reservations", label: "予約一覧", shortLabel: "予約" },
+  { id: "karte", label: "カルテ", shortLabel: "カルテ" },
+  { id: "photos", label: "写真記録", shortLabel: "写真" },
+  { id: "reports", label: "成長レポート", shortLabel: "レポート" },
+  { id: "weight", label: "体重・体脂肪", shortLabel: "体重" },
 ];
 
 function bodyPhotoThumbs(set: MemberBodyPhotoSetView) {
@@ -113,9 +130,18 @@ function bodyPhotoThumbs(set: MemberBodyPhotoSetView) {
   ];
 }
 
+type GoalPhotoItem = { index: number; path: string; url: string };
+
 export default function MemberPage() {
   const [data, setData] = useState<MeResponse | null>(null);
+  const [weightProgress, setWeightProgress] = useState<WeightProgressPanelData | null>(null);
+  const [weightProgressLoading, setWeightProgressLoading] = useState(true);
+  const [weightProgressError, setWeightProgressError] = useState<string | null>(null);
+  const weightAiRefreshTried = useRef(false);
   const [bodyPhotos, setBodyPhotos] = useState<MemberBodyPhotoSetView[] | null>(null);
+  const [goalPhotos, setGoalPhotos] = useState<GoalPhotoItem[] | null>(null);
+  const [nutritionTarget, setNutritionTarget] = useState<MemberNutritionTargetView | null>(null);
+  const [nutritionLoading, setNutritionLoading] = useState(true);
   const [progressReports, setProgressReports] = useState<MonthlyProgressReportItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -129,7 +155,11 @@ export default function MemberPage() {
   const [changeDateView, setChangeDateView] = useState<"calendar" | "list">("calendar");
   const [changeDays, setChangeDays] = useState<AvailableDay[] | null>(null);
   const [changeSelectedDate, setChangeSelectedDate] = useState<string>("");
-  const [changeSlots, setChangeSlots] = useState<Array<{ start_at: string; end_at: string }> | null>(null);
+  const [changeSlots, setChangeSlots] = useState<Array<{
+    start_at: string;
+    end_at: string;
+    trainers?: Array<{ id: string; display_name: string }>;
+  }> | null>(null);
   const [changeSelected, setChangeSelected] = useState<{ start_at: string; end_at: string } | null>(null);
   const [changeBusy, setChangeBusy] = useState(false);
   const [changeErr, setChangeErr] = useState<string | null>(null);
@@ -141,13 +171,12 @@ export default function MemberPage() {
   } | null>(null);
   const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<MeResponse["reservations"][number] | null>(null);
+  const [cancelConfirmText, setCancelConfirmText] = useState("");
+  const [changeConfirmText, setChangeConfirmText] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelErr, setCancelErr] = useState<string | null>(null);
-  const [reminderBusy, setReminderBusy] = useState(false);
-  const [reminderErr, setReminderErr] = useState<string | null>(null);
 
   const title = useMemo(() => (data?.member?.name ? `マイページ（${data.member.name}）` : "マイページ"), [data?.member?.name]);
-  const reminderEnabled = data?.member?.reservation_reminder_line_enabled !== false;
 
   // APIは新しい順。右=最新、左=比較用（デフォルトは最古）
   const latestPhotoSet = useMemo(() => (bodyPhotos && bodyPhotos.length > 0 ? bodyPhotos[0] : null), [bodyPhotos]);
@@ -162,26 +191,68 @@ export default function MemberPage() {
     return progressReports.find((r) => r.yearMonth === selectedReportYm) ?? progressReports[0];
   }, [progressReports, selectedReportYm]);
 
+  const visibleTabs = useMemo(
+    () =>
+      MEMBER_TABS.filter((t) => {
+        if (t.id === "weight") return Boolean(data?.member.weight_log_enabled);
+        return true;
+      }),
+    [data?.member.weight_log_enabled]
+  );
+
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab === "meals") {
+      window.location.replace("/meal-log");
+      return;
+    }
+    if (tab === "settings") {
+      window.location.replace("/member/settings");
+      return;
+    }
+    if (tab === "weight") setActiveTab(tab);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "weight" && data && !data.member.weight_log_enabled) {
+      setActiveTab("reservations");
+    }
+  }, [activeTab, data]);
+
   useEffect(() => {
     setLoading(true);
     setErr(null);
+    setWeightProgressLoading(true);
+    setWeightProgressError(null);
+    setNutritionLoading(true);
     Promise.all([
       apiGet<MeResponse>("/api/member/me"),
       apiGet<{ sets: MemberBodyPhotoSetView[] }>("/api/member/body-photos").catch(() => ({ sets: [] })),
+      apiGet<{ photos: GoalPhotoItem[] }>("/api/member/goal-photos").catch(() => ({ photos: [] })),
       apiGet<{ reports: MonthlyProgressReportItem[] }>("/api/member/monthly-progress-reports").catch(() => ({
         reports: [],
       })),
+      apiGet<WeightProgressPanelData>("/api/member/weight-progress").catch((e: any) => {
+        setWeightProgressError(String(e?.message ?? "重量進捗の取得に失敗しました"));
+        return null;
+      }),
+      apiGet<{ target: MemberNutritionTargetView | null }>("/api/member/nutrition-targets").catch(() => ({
+        target: null,
+      })),
     ])
-      .then(([me, photos, reportsRes]) => {
+      .then(([me, photos, goalRes, reportsRes, weight, nutrition]) => {
         setData(me);
         const sets = photos.sets ?? [];
         setBodyPhotos(sets);
+        setGoalPhotos(goalRes.photos ?? []);
         // デフォルトの比較元は最古のセット
         if (sets.length > 1) setBeforePhotoSetId(sets[sets.length - 1].id);
         else setBeforePhotoSetId(null);
         const reports = reportsRes.reports ?? [];
         setProgressReports(reports);
         setSelectedReportYm(reports[0]?.yearMonth ?? null);
+        setWeightProgress(weight);
+        setNutritionTarget(nutrition.target ?? null);
       })
       .catch((e: any) => {
         const status = Number((e as any)?.status ?? 0);
@@ -192,10 +263,43 @@ export default function MemberPage() {
         setErr(String(e?.message ?? "取得に失敗しました"));
         setData(null);
         setBodyPhotos(null);
+        setGoalPhotos(null);
         setProgressReports(null);
+        setWeightProgress(null);
+        setNutritionTarget(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setWeightProgressLoading(false);
+        setNutritionLoading(false);
+      });
   }, []);
+
+  // AIコメント未生成なら明示的に生成APIを叩いてから再取得（Vercelの裏処理切れ対策）
+  useEffect(() => {
+    const status = weightProgress?.aiCommentStatus;
+    if (!status || status === "ready") return;
+    if (weightAiRefreshTried.current) return;
+    weightAiRefreshTried.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await fetch("/api/member/weight-progress/refresh", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        if (cancelled) return;
+        const next = await apiGet<WeightProgressPanelData>("/api/member/weight-progress");
+        if (!cancelled) setWeightProgress(next);
+      } catch {
+        // 生成失敗時はルール根拠のまま表示
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [weightProgress?.aiCommentStatus]);
 
   const formatDateLabel = (ymd: string) => {
     const dt = DateTime.fromISO(ymd, { zone: TZ });
@@ -233,6 +337,7 @@ export default function MemberPage() {
     setChangeSlots(null);
     setChangeSelected(null);
     setChangeSuccess(null);
+    setChangeConfirmText("");
   };
 
   const closeChangeModal = () => {
@@ -254,6 +359,7 @@ export default function MemberPage() {
     setChangeSlots(null);
     setChangeDays(null);
     setChangeSelectedDate("");
+    setChangeConfirmText("");
     const eligibility = getMemberRescheduleEligibility({
       reservationStartAt: r.start_at,
       rescheduleCount: r.reschedule_count,
@@ -272,8 +378,11 @@ export default function MemberPage() {
     setChangeBusy(true);
     setChangeErr(null);
     const monthParam = changeMonth.toFormat("yyyy-MM");
+    const email = data?.member.email?.trim()
+      ? `&email=${encodeURIComponent(data.member.email.trim())}`
+      : "";
     apiGet<{ dates: { date: string; count: number }[] }>(
-      `/api/booking-v2/available-dates?store_id=${encodeURIComponent(changeTarget.store_id)}&month=${encodeURIComponent(monthParam)}`
+      `/api/booking-v2/available-dates?store_id=${encodeURIComponent(changeTarget.store_id)}&month=${encodeURIComponent(monthParam)}${email}`
     )
       .then((d) =>
         setChangeDays(
@@ -289,7 +398,7 @@ export default function MemberPage() {
         setChangeDays([]);
       })
       .finally(() => setChangeBusy(false));
-  }, [changeTarget, changeEligibility, changeMonth]);
+  }, [changeTarget, changeEligibility, changeMonth, data?.member.email]);
 
   useEffect(() => {
     if (!changeTarget || !changeEligibility?.ok || !changeSelectedDate) return;
@@ -297,8 +406,11 @@ export default function MemberPage() {
     setChangeErr(null);
     setChangeSelected(null);
     const ignoreCutoff = changeEligibility.mode === "same_day" ? "&ignore_cutoff=1" : "";
-    apiGet<Array<{ start_at: string; end_at: string }>>(
-      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(changeTarget.store_id)}&date=${encodeURIComponent(changeSelectedDate)}${ignoreCutoff}`
+    const email = data?.member.email?.trim()
+      ? `&email=${encodeURIComponent(data.member.email.trim())}`
+      : "";
+    apiGet<Array<{ start_at: string; end_at: string; trainers?: Array<{ id: string; display_name: string }> }>>(
+      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(changeTarget.store_id)}&date=${encodeURIComponent(changeSelectedDate)}${ignoreCutoff}${email}`
     )
       .then((slots) => {
         const filtered = (slots ?? []).filter(
@@ -311,13 +423,15 @@ export default function MemberPage() {
         setChangeSlots([]);
       })
       .finally(() => setChangeBusy(false));
-  }, [changeTarget, changeEligibility, changeSelectedDate]);
+  }, [changeTarget, changeEligibility, changeSelectedDate, data?.member.email]);
 
   return (
     <GymShell
       title={title}
       nav={[
         { href: "/booking", label: "予約" },
+        ...(data?.member.meal_personal_enabled ? [{ href: "/meal-log", label: "食事パーソナル" }] : []),
+        { href: "/member/settings", label: "設定" },
         { href: "/login", label: "ログイン" },
       ]}
     >
@@ -339,78 +453,26 @@ export default function MemberPage() {
               <div className="text-xs text-slate-500">{data.member.line_user_id ? "LINE連携済み" : "LINE未連携"}</div>
             </section>
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 space-y-1">
-                  <div className="text-sm font-bold text-slate-900">予約リマインドLINE</div>
-                  <p className="text-xs leading-relaxed text-slate-600">
-                    セッション開始60分前にLINEでお知らせします（セッション前ヒアリングも含みます）。
-                  </p>
-                  <p className="text-xs leading-relaxed text-slate-500">
-                    OFFにしても、予約の確定・変更・キャンセルやカルテ共有などの通知は届きます。
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={reminderEnabled}
-                  disabled={reminderBusy}
-                  onClick={async () => {
-                    if (!data) return;
-                    const next = !reminderEnabled;
-                    setReminderBusy(true);
-                    setReminderErr(null);
-                    try {
-                      await apiPatch<{ member: { reservation_reminder_line_enabled: boolean } }>("/api/member/me", {
-                        reservation_reminder_line_enabled: next,
-                      });
-                      setData({
-                        ...data,
-                        member: { ...data.member, reservation_reminder_line_enabled: next },
-                      });
-                    } catch (e: any) {
-                      setReminderErr(String(e?.message ?? "設定の更新に失敗しました"));
-                    } finally {
-                      setReminderBusy(false);
-                    }
-                  }}
-                  className={[
-                    "relative mt-0.5 h-8 w-14 shrink-0 rounded-full transition-colors disabled:opacity-60",
-                    reminderEnabled ? "bg-slate-900" : "bg-slate-300",
-                  ].join(" ")}
-                >
-                  <span
-                    className={[
-                      "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-transform",
-                      reminderEnabled ? "left-7" : "left-1",
-                    ].join(" ")}
-                  />
-                  <span className="sr-only">{reminderEnabled ? "ON" : "OFF"}</span>
-                </button>
-              </div>
-              <div className="text-xs font-semibold text-slate-700">
-                現在: {reminderEnabled ? "ON（送信する）" : "OFF（送らない）"}
-                {reminderBusy ? " …更新中" : ""}
-              </div>
-              {reminderErr ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{reminderErr}</div>
-              ) : null}
-            </section>
-
-            <div className="flex gap-1 rounded-2xl border border-slate-200 bg-slate-100 p-1">
-              {MEMBER_TABS.map((t) => (
+            <div className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-100 p-1">
+              {visibleTabs.map((t) => (
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setActiveTab(t.id)}
+                  onClick={() => {
+                    setActiveTab(t.id);
+                    const url = new URL(window.location.href);
+                    if (t.id === "weight") url.searchParams.set("tab", t.id);
+                    else url.searchParams.delete("tab");
+                    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+                  }}
                   className={[
-                    "flex-1 rounded-xl px-1.5 py-2.5 text-[11px] font-semibold transition-colors sm:text-sm sm:px-2",
+                    "flex-1 shrink-0 whitespace-nowrap rounded-xl px-1.5 py-2.5 text-[11px] font-semibold transition-colors sm:text-sm sm:px-2",
                     activeTab === t.id
                       ? "bg-white text-slate-900 shadow-sm"
                       : "text-slate-600 hover:text-slate-900",
                   ].join(" ")}
                 >
-                  {t.label}
+                  {visibleTabs.length > 4 ? t.shortLabel : t.label}
                 </button>
               ))}
             </div>
@@ -428,7 +490,11 @@ export default function MemberPage() {
                       </div>
                       <div className="mt-1 text-xs text-slate-600">{sessionLabel(r.session_type)}</div>
                       <div className="mt-1 text-xs text-slate-500">店舗: {r.store_name || r.store_id}</div>
-                      <div className="mt-1 text-xs text-slate-500">トレーナー: {r.trainer_name || (r.trainer_id ?? "-")}</div>
+                      {r.on_shift_trainer_names ? (
+                        <div className="mt-1 text-xs text-slate-700">出勤トレーナー: {r.on_shift_trainer_names}</div>
+                      ) : (
+                        <div className="mt-1 text-xs text-slate-500">トレーナー: {r.trainer_name || (r.trainer_id ?? "-")}</div>
+                      )}
 
                       <div className="mt-3 flex gap-2">
                         <button
@@ -443,6 +509,7 @@ export default function MemberPage() {
                           className="flex-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100"
                           onClick={() => {
                             setCancelErr(null);
+                            setCancelConfirmText("");
                             setCancelTarget(r);
                           }}
                         >
@@ -456,20 +523,31 @@ export default function MemberPage() {
             ) : null}
 
             {activeTab === "karte" ? (
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-                <div className="text-sm font-bold text-slate-900">カルテ（最新30件）</div>
-                {data.notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
-                <div className="grid gap-2">
-                  {data.notes.map((n) => (
-                    <div key={n.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                      <div className="text-xs font-semibold text-slate-700">
-                        {n.date} / {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+              <div className="space-y-4">
+                {!data.member.weight_log_enabled ? (
+                  <MemberNutritionTargetReadOnly target={nutritionTarget} loading={nutritionLoading} />
+                ) : null}
+                <WeightProgressPanel
+                  data={weightProgress}
+                  loading={weightProgressLoading}
+                  error={weightProgressError}
+                  compact
+                />
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                  <div className="text-sm font-bold text-slate-900">カルテ（最新30件）</div>
+                  {data.notes.length === 0 ? <div className="text-sm text-slate-600">履歴がありません。</div> : null}
+                  <div className="grid gap-2">
+                    {data.notes.map((n) => (
+                      <div key={n.id} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                        <div className="text-xs font-semibold text-slate-700">
+                          {n.date} / {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+                        </div>
+                        <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{n.content}</div>
                       </div>
-                      <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{n.content}</div>
-                    </div>
-                  ))}
-                </div>
-              </section>
+                    ))}
+                  </div>
+                </section>
+              </div>
             ) : null}
 
             {activeTab === "photos" ? (
@@ -477,18 +555,18 @@ export default function MemberPage() {
                 <div className="space-y-1">
                   <div className="text-sm font-bold text-slate-900">写真記録（ビフォーアフター）</div>
                   <p className="text-xs leading-relaxed text-slate-500">
-                    左に過去、右に最新の写真を縦に並べて比較できます。
+                    左に過去、中央に最新、右に目標写真（なりたい体型）を並べて比較できます。
                   </p>
                 </div>
 
                 {bodyPhotos === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-                {bodyPhotos !== null && bodyPhotos.length === 0 ? (
+                {bodyPhotos !== null && bodyPhotos.length === 0 && !(goalPhotos && goalPhotos.length > 0) ? (
                   <div className="text-sm text-slate-600">まだ登録がありません。</div>
                 ) : null}
 
-                {latestPhotoSet ? (
+                {latestPhotoSet || (goalPhotos && goalPhotos.length > 0) ? (
                   <div className="space-y-3">
-                    {olderPhotoSets.length > 1 ? (
+                    {latestPhotoSet && olderPhotoSets.length > 1 ? (
                       <label className="block text-xs font-semibold text-slate-700">
                         比較する過去の日付
                         <select
@@ -505,14 +583,17 @@ export default function MemberPage() {
                       </label>
                     ) : null}
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div
+                      className={[
+                        "grid gap-2",
+                        goalPhotos && goalPhotos.length > 0 ? "grid-cols-3" : "grid-cols-2",
+                      ].join(" ")}
+                    >
                       <div className="min-w-0 space-y-2">
                         <div className="rounded-lg bg-slate-50 px-2 py-1.5 text-center">
                           <div className="text-[10px] font-semibold text-slate-500">ビフォー</div>
                           <div className="text-[11px] font-semibold text-slate-800">
-                            {beforePhotoSet
-                              ? formatBodyPhotoDateLabel(beforePhotoSet.photo_date)
-                              : "—"}
+                            {beforePhotoSet ? formatBodyPhotoDateLabel(beforePhotoSet.photo_date) : "—"}
                           </div>
                         </div>
                         {beforePhotoSet ? (
@@ -530,7 +611,7 @@ export default function MemberPage() {
                             </div>
                           ))
                         ) : (
-                          <div className="rounded-lg border border-dashed border-slate-200 px-3 py-8 text-center text-xs text-slate-500">
+                          <div className="rounded-lg border border-dashed border-slate-200 px-2 py-8 text-center text-[10px] text-slate-500">
                             比較用の過去写真がまだありません
                           </div>
                         )}
@@ -540,29 +621,57 @@ export default function MemberPage() {
                         <div className="rounded-lg bg-slate-900 px-2 py-1.5 text-center">
                           <div className="text-[10px] font-semibold text-slate-300">アフター（最新）</div>
                           <div className="text-[11px] font-semibold text-white">
-                            {formatBodyPhotoDateLabel(latestPhotoSet.photo_date)}
+                            {latestPhotoSet ? formatBodyPhotoDateLabel(latestPhotoSet.photo_date) : "—"}
                           </div>
                         </div>
-                        {bodyPhotoThumbs(latestPhotoSet).map((t) => (
-                          <div key={`after-${t.angle}`} className="space-y-1">
-                            <div className="aspect-[3/4] overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                              {t.url ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={t.url} alt={`アフター ${t.label}`} className="h-full w-full object-cover" />
-                              ) : (
-                                <div className="flex h-full items-center justify-center text-[10px] text-slate-400">未登録</div>
-                              )}
+                        {latestPhotoSet ? (
+                          bodyPhotoThumbs(latestPhotoSet).map((t) => (
+                            <div key={`after-${t.angle}`} className="space-y-1">
+                              <div className="aspect-[3/4] overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                                {t.url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={t.url} alt={`アフター ${t.label}`} className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center text-[10px] text-slate-400">未登録</div>
+                                )}
+                              </div>
+                              <div className="text-center text-[10px] text-slate-500">{t.label}</div>
                             </div>
-                            <div className="text-center text-[10px] text-slate-500">{t.label}</div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-slate-200 px-2 py-8 text-center text-[10px] text-slate-500">
+                            最新写真がまだありません
                           </div>
-                        ))}
+                        )}
                       </div>
+
+                      {goalPhotos && goalPhotos.length > 0 ? (
+                        <div className="min-w-0 space-y-2">
+                          <div className="rounded-lg bg-teal-800 px-2 py-1.5 text-center">
+                            <div className="text-[10px] font-semibold text-teal-100">目標</div>
+                            <div className="text-[11px] font-semibold text-white">なりたい体型</div>
+                          </div>
+                          {goalPhotos.map((p) => (
+                            <div key={p.path} className="space-y-1">
+                              <div className="aspect-[3/4] overflow-hidden rounded-lg border border-teal-200 bg-teal-50/40">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={p.url}
+                                  alt={`目標写真 ${p.index + 1}`}
+                                  className="h-full w-full object-cover"
+                                />
+                              </div>
+                              <div className="text-center text-[10px] text-slate-500">目標 {p.index + 1}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
 
-                    {beforePhotoSet?.note || latestPhotoSet.note ? (
+                    {beforePhotoSet?.note || latestPhotoSet?.note ? (
                       <div className="space-y-1 text-xs text-slate-500">
                         {beforePhotoSet?.note ? <div>ビフォーメモ: {beforePhotoSet.note}</div> : null}
-                        {latestPhotoSet.note ? <div>最新メモ: {latestPhotoSet.note}</div> : null}
+                        {latestPhotoSet?.note ? <div>最新メモ: {latestPhotoSet.note}</div> : null}
                       </div>
                     ) : null}
                   </div>
@@ -571,15 +680,22 @@ export default function MemberPage() {
             ) : null}
 
             {activeTab === "reports" ? (
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-bold text-slate-900">成長レポート</div>
-                  <p className="text-xs leading-relaxed text-slate-500">
-                    月次の成長レポートです。PDFや各ページ画像をいつでも確認できます。画像をタップすると拡大表示できます。
-                  </p>
-                </div>
+              <div className="space-y-4">
+                <WeightProgressPanel
+                  data={weightProgress}
+                  loading={weightProgressLoading}
+                  error={weightProgressError}
+                  compact
+                />
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-bold text-slate-900">成長レポート</div>
+                    <p className="text-xs leading-relaxed text-slate-500">
+                      月次の成長レポートです。PDFや各ページ画像をいつでも確認できます。画像をタップすると拡大表示できます。
+                    </p>
+                  </div>
 
-                {progressReports === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+                  {progressReports === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
                 {progressReports !== null && progressReports.length === 0 ? (
                   <div className="text-sm text-slate-600">まだレポートがありません。</div>
                 ) : null}
@@ -639,8 +755,11 @@ export default function MemberPage() {
                     </div>
                   </div>
                 ) : null}
-              </section>
+                </section>
+              </div>
             ) : null}
+
+            {activeTab === "weight" && data.member.weight_log_enabled ? <WeightLogPanel /> : null}
           </>
         ) : null}
 
@@ -861,22 +980,33 @@ export default function MemberPage() {
                     <div className="text-sm text-slate-600">空き枠がありません。</div>
                   ) : null}
                   {changeSlots && changeSlots.length > 0 ? (
-                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                       {changeSlots.map((s) => {
                         const start = DateTime.fromISO(s.start_at).setZone(TZ).toFormat("HH:mm");
                         const end = DateTime.fromISO(s.end_at).setZone(TZ).toFormat("HH:mm");
                         const active = changeSelected?.start_at === s.start_at && changeSelected?.end_at === s.end_at;
+                        const names = (s.trainers ?? [])
+                          .map((t) => t.display_name.trim())
+                          .filter(Boolean)
+                          .join(" / ");
                         return (
                           <button
                             key={`${s.start_at}|${s.end_at}`}
                             type="button"
                             onClick={() => setChangeSelected(s)}
                             className={[
-                              "rounded-xl border px-3 py-3 text-sm font-semibold",
+                              "rounded-xl border px-3 py-3 text-left text-sm font-semibold",
                               active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
                             ].join(" ")}
                           >
-                            {start}〜{end}
+                            <div>
+                              {start}〜{end}
+                            </div>
+                            {names ? (
+                              <div className={["mt-1 text-[11px] font-normal", active ? "text-white/80" : "text-slate-500"].join(" ")}>
+                                {names}
+                              </div>
+                            ) : null}
                           </button>
                         );
                       })}
@@ -894,11 +1024,22 @@ export default function MemberPage() {
                             .toFormat("HH:mm")}`
                         : " 未選択"}
                     </div>
+                    <div className="mt-2 text-xs text-slate-600">確定すると LINE にも「マイページで予約変更しました」と届きます。</div>
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold text-slate-700">確認のため「変更」と入力</div>
+                      <input
+                        value={changeConfirmText}
+                        onChange={(e) => setChangeConfirmText(e.target.value)}
+                        placeholder="変更"
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        autoComplete="off"
+                      />
+                    </div>
                   </div>
 
                   <button
                     type="button"
-                    disabled={changeBusy || !changeSelected}
+                    disabled={changeBusy || !changeSelected || changeConfirmText !== "変更"}
                     onClick={async () => {
                       if (!changeSelected) return;
                       setChangeBusy(true);
@@ -916,6 +1057,7 @@ export default function MemberPage() {
                           end_at: changeSelected.end_at,
                           lineNotified: Boolean(result.line_notified),
                         });
+                        setChangeConfirmText("");
                       } catch (e: any) {
                         setChangeErr(String(e?.message ?? "変更に失敗しました"));
                       } finally {
@@ -946,6 +1088,7 @@ export default function MemberPage() {
                     onClick={() => {
                       if (cancelBusy) return;
                       setCancelTarget(null);
+                      setCancelConfirmText("");
                       setCancelErr(null);
                     }}
                   >
@@ -964,7 +1107,17 @@ export default function MemberPage() {
                   {DateTime.fromISO(cancelTarget.end_at).setZone(TZ).toFormat("HH:mm")}
                 </div>
                 <div className="mt-2 text-xs text-slate-600">
-                  この予約をキャンセルしますか？
+                  この予約をキャンセルしますか？確定すると LINE にも「マイページでキャンセルしました」と届きます。
+                </div>
+                <div className="mt-3">
+                  <div className="text-xs font-semibold text-slate-700">確認のため「キャンセル」と入力</div>
+                  <input
+                    value={cancelConfirmText}
+                    onChange={(e) => setCancelConfirmText(e.target.value)}
+                    placeholder="キャンセル"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    autoComplete="off"
+                  />
                 </div>
               </div>
 
@@ -978,6 +1131,7 @@ export default function MemberPage() {
                   disabled={cancelBusy}
                   onClick={() => {
                     setCancelTarget(null);
+                    setCancelConfirmText("");
                     setCancelErr(null);
                   }}
                   className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 disabled:opacity-60"
@@ -986,7 +1140,7 @@ export default function MemberPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={cancelBusy}
+                  disabled={cancelBusy || cancelConfirmText !== "キャンセル"}
                   onClick={async () => {
                     setCancelBusy(true);
                     setCancelErr(null);
@@ -995,6 +1149,7 @@ export default function MemberPage() {
                       const d = await apiGet<MeResponse>("/api/member/me");
                       setData(d);
                       setCancelTarget(null);
+                      setCancelConfirmText("");
                     } catch (e: any) {
                       setCancelErr(String(e?.message ?? "キャンセルに失敗しました"));
                     } finally {

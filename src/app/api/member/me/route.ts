@@ -2,6 +2,11 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { getMemberIdFromCookie } from "../_cookies";
+import { isMemberWeightLogEnabled } from "@/lib/memberWeightLogRollout";
+import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import { fetchTrainerVisibilityPassForMemberId, trainerVisibilityPassPriceLabel } from "@/lib/trainerVisibilityPass";
+import { fetchOnShiftTrainerNamesBySlots } from "@/lib/onShiftTrainers";
+import { canBookOrLogin } from "@/lib/memberMembershipStatus";
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -9,14 +14,28 @@ function json(body: any, status = 200) {
 
 const TZ = "Asia/Tokyo";
 
-function isMissingReminderColumn(err: { message?: string } | null | undefined): boolean {
+function isMissingDbColumn(err: { message?: string } | null | undefined, column: string): boolean {
   const msg = String(err?.message ?? "");
-  return /reservation_reminder_line_enabled/i.test(msg) && (/does not exist|column/i.test(msg) || /PGRST/i.test(msg));
+  return new RegExp(column, "i").test(msg) && (/does not exist|column/i.test(msg) || /PGRST/i.test(msg) || /Could not find/i.test(msg));
 }
 
-const patchSchema = z.object({
-  reservation_reminder_line_enabled: z.boolean(),
-});
+function isMissingReminderColumn(err: { message?: string } | null | undefined): boolean {
+  return isMissingDbColumn(err, "reservation_reminder_line_enabled");
+}
+
+function isMissingWeightReminderColumn(err: { message?: string } | null | undefined): boolean {
+  return isMissingDbColumn(err, "weight_reminder_line_enabled");
+}
+
+const patchSchema = z
+  .object({
+    reservation_reminder_line_enabled: z.boolean().optional(),
+    weight_reminder_line_enabled: z.boolean().optional(),
+  })
+  .refine(
+    (d) => d.reservation_reminder_line_enabled !== undefined || d.weight_reminder_line_enabled !== undefined,
+    { message: "at least one setting required" }
+  );
 
 export async function GET() {
   try {
@@ -25,22 +44,41 @@ export async function GET() {
 
     const supabase = createSupabaseServiceClient();
 
-    const selectWithReminder =
-      "id, member_code, name, email, line_user_id, is_active, reservation_reminder_line_enabled";
-    const selectLegacy = "id, member_code, name, email, line_user_id, is_active";
+    const selectWithBothReminders =
+      "id, member_code, name, email, line_user_id, is_active, membership_status, reservation_reminder_line_enabled, weight_reminder_line_enabled";
+    const selectWithReservationReminder =
+      "id, member_code, name, email, line_user_id, is_active, membership_status, reservation_reminder_line_enabled";
+    const selectLegacy = "id, member_code, name, email, line_user_id, is_active, membership_status";
+    const selectNoStatus = "id, member_code, name, email, line_user_id, is_active";
 
     let { data: member, error: mErr } = await (supabase as any)
       .from("members")
-      .select(selectWithReminder)
+      .select(selectWithBothReminders)
       .eq("id", memberId)
       .maybeSingle();
+    if (mErr && isMissingWeightReminderColumn(mErr)) {
+      const second = await (supabase as any)
+        .from("members")
+        .select(selectWithReservationReminder)
+        .eq("id", memberId)
+        .maybeSingle();
+      member = second.data;
+      mErr = second.error;
+    }
     if (mErr && isMissingReminderColumn(mErr)) {
       const second = await (supabase as any).from("members").select(selectLegacy).eq("id", memberId).maybeSingle();
       member = second.data;
       mErr = second.error;
     }
+    if (mErr && /membership_status/i.test(String(mErr.message ?? ""))) {
+      const third = await (supabase as any).from("members").select(selectNoStatus).eq("id", memberId).maybeSingle();
+      member = third.data;
+      mErr = third.error;
+    }
     if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
-    if (!member || !member.is_active) return json({ error: "未ログイン" }, 401);
+    if (!member || !canBookOrLogin({ membershipStatus: member.membership_status, isActive: member.is_active })) {
+      return json({ error: "未ログイン" }, 401);
+    }
 
     // マイページは「当月」だけだと月末に翌月予約が見えないため、今月〜翌月の2ヶ月分を返す
     const monthKey = DateTime.now().setZone(TZ).toFormat("yyyy-MM");
@@ -136,6 +174,32 @@ export async function GET() {
       typeof (member as any).reservation_reminder_line_enabled === "boolean"
         ? Boolean((member as any).reservation_reminder_line_enabled)
         : true;
+    const weightReminderEnabled =
+      typeof (member as any).weight_reminder_line_enabled === "boolean"
+        ? Boolean((member as any).weight_reminder_line_enabled)
+        : true;
+
+    const trainerVisibilityPass = await fetchTrainerVisibilityPassForMemberId(
+      supabase,
+      memberId,
+      String((member as any).email ?? "")
+    );
+
+    let onShiftNames: string[] = reservations.map(() => "");
+    if (trainerVisibilityPass.active && reservations.length > 0) {
+      try {
+        onShiftNames = await fetchOnShiftTrainerNamesBySlots(
+          supabase,
+          reservations.map((r: any) => ({
+            store_id: String(r.store_id ?? ""),
+            start_at: String(r.start_at ?? ""),
+            end_at: String(r.end_at ?? r.start_at ?? ""),
+          }))
+        );
+      } catch (e) {
+        console.error("member me on-shift trainers failed", e);
+      }
+    }
 
     return json(
       {
@@ -146,8 +210,15 @@ export async function GET() {
           email: (member as any).email ?? null,
           line_user_id: member.line_user_id ?? null,
           reservation_reminder_line_enabled: reminderEnabled,
+          weight_reminder_line_enabled: weightReminderEnabled,
+          weight_log_enabled: isMemberWeightLogEnabled(member.member_code),
+          meal_personal_enabled: isMemberMealPersonalEnabled(member.member_code),
         },
-        reservations: (reservations ?? []).map((r: any) => ({
+        trainer_visibility_pass: {
+          ...trainerVisibilityPass,
+          price_label: trainerVisibilityPassPriceLabel(),
+        },
+        reservations: (reservations ?? []).map((r: any, i: number) => ({
           id: r.id,
           start_at: r.start_at,
           end_at: r.end_at,
@@ -157,6 +228,7 @@ export async function GET() {
           store_name: r.stores?.name ?? "",
           trainer_id: r.trainer_id,
           trainer_name: r.trainers?.display_name ?? "",
+          on_shift_trainer_names: onShiftNames[i] || "",
           status: r.status,
         })),
         notes: (notes ?? []).map((n: any) => ({
@@ -190,21 +262,40 @@ export async function PATCH(req: Request) {
 
     const { data: member, error: mErr } = await (supabase as any)
       .from("members")
-      .select("id, is_active")
+      .select("id, is_active, membership_status")
       .eq("id", memberId)
       .maybeSingle();
-    if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
-    if (!member || !member.is_active) return json({ error: "未ログイン" }, 401);
+    if (mErr && /membership_status/i.test(String(mErr.message ?? ""))) {
+      const retry = await (supabase as any).from("members").select("id, is_active").eq("id", memberId).maybeSingle();
+      if (retry.error) return json({ error: "会員の取得に失敗しました", detail: retry.error.message }, 500);
+      if (!retry.data || !canBookOrLogin({ membershipStatus: null, isActive: retry.data.is_active })) {
+        return json({ error: "未ログイン" }, 401);
+      }
+    } else {
+      if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
+      if (!member || !canBookOrLogin({ membershipStatus: member.membership_status, isActive: member.is_active })) {
+        return json({ error: "未ログイン" }, 401);
+      }
+    }
 
+    const update: Record<string, boolean> = {};
+    if (parsed.data.reservation_reminder_line_enabled !== undefined) {
+      update.reservation_reminder_line_enabled = parsed.data.reservation_reminder_line_enabled;
+    }
+    if (parsed.data.weight_reminder_line_enabled !== undefined) {
+      update.weight_reminder_line_enabled = parsed.data.weight_reminder_line_enabled;
+    }
+
+    const selectCols = ["id", ...Object.keys(update)].join(", ");
     const { data: updated, error: uErr } = await (supabase as any)
       .from("members")
-      .update({ reservation_reminder_line_enabled: parsed.data.reservation_reminder_line_enabled })
+      .update(update)
       .eq("id", memberId)
-      .select("id, reservation_reminder_line_enabled")
+      .select(selectCols)
       .maybeSingle();
 
     if (uErr) {
-      if (isMissingReminderColumn(uErr)) {
+      if (isMissingReminderColumn(uErr) || isMissingWeightReminderColumn(uErr)) {
         return json(
           {
             error: "設定の保存準備ができていません。しばらくしてからお試しください。",
@@ -221,9 +312,14 @@ export async function PATCH(req: Request) {
         ok: true,
         member: {
           id: updated?.id ?? memberId,
-          reservation_reminder_line_enabled: Boolean(
-            updated?.reservation_reminder_line_enabled ?? parsed.data.reservation_reminder_line_enabled
-          ),
+          reservation_reminder_line_enabled:
+            parsed.data.reservation_reminder_line_enabled !== undefined
+              ? Boolean(updated?.reservation_reminder_line_enabled ?? parsed.data.reservation_reminder_line_enabled)
+              : undefined,
+          weight_reminder_line_enabled:
+            parsed.data.weight_reminder_line_enabled !== undefined
+              ? Boolean(updated?.weight_reminder_line_enabled ?? parsed.data.weight_reminder_line_enabled)
+              : undefined,
         },
       },
       200
