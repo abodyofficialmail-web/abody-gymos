@@ -34,6 +34,7 @@ import { TrainingDiaryPanel } from "@/components/member/TrainingDiaryPanel";
 import { WeightLogPanel } from "@/components/member/WeightLogPanel";
 import { HOME_PAGE_CLASS, HomeSwipePager } from "@/components/member/WeightHomeCarousel";
 import { MealPersonalPaywall } from "@/components/member/MealPersonalPaywall";
+import { MealPersonalGoalSettings } from "@/components/member/MealPersonalGoalSettings";
 import {
   DEFAULT_MEAL_REMINDER_SETTINGS,
   type MealReminderSettings,
@@ -1208,94 +1209,128 @@ export function MealPersonalPanel({
 
   const settingsBody = (
     <div className="space-y-4">
-      <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="space-y-1">
-          <div className="text-sm font-bold text-slate-900">LINE配信時間</div>
-          <p className="text-xs text-slate-500">朝昼夜と間食の案内を、この時刻に送ります（日本時間）。</p>
-        </div>
-        {readOnly ? (
-          <div className="grid grid-cols-2 gap-2 text-sm text-slate-700">
-            {(Object.keys(MEAL_SLOT_LABELS) as MealSlot[]).map((s) => (
-              <div key={s}>
-                {MEAL_SLOT_LABELS[s]} {data.reminder_settings?.[`${s}_time`] ?? "—"}
+      {locked ? (
+        <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="space-y-1">
+            <div className="text-sm font-bold text-slate-900">オプションに申し込む</div>
+            <p className="text-xs text-slate-500">
+              {priceLabel}に申し込むと、日記・記録・提案のモザイクが外れます。
+            </p>
+          </div>
+          {subscribeUrl ? (
+            <a
+              href={subscribeUrl}
+              className="inline-flex w-full items-center justify-center rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white"
+            >
+              オプションを申し込む
+            </a>
+          ) : (
+            <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+              現在お申し込みの準備中です
+            </p>
+          )}
+        </section>
+      ) : null}
+
+      <MealPersonalGoalSettings
+        current={data.nutrition ?? null}
+        onSaved={(target) => {
+          setData((prev) => (prev ? { ...prev, nutrition: target } : prev));
+        }}
+      />
+
+      {locked ? null : (
+        <>
+          <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="space-y-1">
+              <div className="text-sm font-bold text-slate-900">LINE配信時間</div>
+              <p className="text-xs text-slate-500">朝昼夜と間食の案内を、この時刻に送ります（日本時間）。</p>
+            </div>
+            {readOnly ? (
+              <div className="grid grid-cols-2 gap-2 text-sm text-slate-700">
+                {(Object.keys(MEAL_SLOT_LABELS) as MealSlot[]).map((s) => (
+                  <div key={s}>
+                    {MEAL_SLOT_LABELS[s]} {data.reminder_settings?.[`${s}_time`] ?? "—"}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              {(Object.keys(MEAL_SLOT_LABELS) as MealSlot[]).map((s) => (
-                <label key={s} className="text-xs font-semibold text-slate-700">
-                  {MEAL_SLOT_LABELS[s]}
-                  <input
-                    type="time"
-                    value={reminderTimes[`${s}_time`]}
-                    onChange={(e) =>
-                      setReminderTimes((prev) => ({ ...prev, [`${s}_time`]: e.target.value }))
-                    }
-                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal"
-                  />
-                </label>
-              ))}
-            </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void saveReminderTimes()}
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 disabled:opacity-60"
-            >
-              配信時間を保存
-            </button>
-          </>
-        )}
-      </section>
-      <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="text-sm font-bold text-slate-900">水分・お酒・お通じ</div>
-        {readOnly ? (
-          <div className="text-sm text-slate-700">
-            水分 {data.today_lifestyle?.water_ml ?? "—"} ml / 酒 {data.today_lifestyle?.alcohol_drinks ?? "—"} 杯 / お通じ{" "}
-            {data.today_lifestyle?.bowel_count ?? "—"} 回
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-3 gap-2">
-              <NumField label="水分 ml" value={water} onChange={setWater} placeholder="2000" />
-              <NumField label="酒 杯" value={alcohol} onChange={setAlcohol} placeholder="0" />
-              <NumField label="お通じ 回" value={bowel} onChange={setBowel} placeholder="1" />
-            </div>
-            <div className="grid grid-cols-4 gap-1">
-              {(
-                [
-                  ["", "状態"],
-                  ["normal", "普通"],
-                  ["hard", "硬い"],
-                  ["loose", "緩い"],
-                ] as Array<[BowelQuality | "", string]>
-              ).map(([v, label]) => (
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.keys(MEAL_SLOT_LABELS) as MealSlot[]).map((s) => (
+                    <label key={s} className="text-xs font-semibold text-slate-700">
+                      {MEAL_SLOT_LABELS[s]}
+                      <input
+                        type="time"
+                        value={reminderTimes[`${s}_time`]}
+                        onChange={(e) =>
+                          setReminderTimes((prev) => ({ ...prev, [`${s}_time`]: e.target.value }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal"
+                      />
+                    </label>
+                  ))}
+                </div>
                 <button
-                  key={label}
                   type="button"
-                  onClick={() => setBowelQuality(v)}
-                  className={[
-                    "rounded-xl px-2 py-2 text-[11px] font-semibold",
-                    bowelQuality === v ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700",
-                  ].join(" ")}
+                  disabled={busy}
+                  onClick={() => void saveReminderTimes()}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 disabled:opacity-60"
                 >
-                  {label}
+                  配信時間を保存
                 </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void saveLifestyle()}
-              className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 disabled:opacity-60"
-            >
-              生活記録を保存
-            </button>
-          </>
-        )}
-      </section>
+              </>
+            )}
+          </section>
+          <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="text-sm font-bold text-slate-900">水分・お酒・お通じ</div>
+            {readOnly ? (
+              <div className="text-sm text-slate-700">
+                水分 {data.today_lifestyle?.water_ml ?? "—"} ml / 酒 {data.today_lifestyle?.alcohol_drinks ?? "—"} 杯 / お通じ{" "}
+                {data.today_lifestyle?.bowel_count ?? "—"} 回
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumField label="水分 ml" value={water} onChange={setWater} placeholder="2000" />
+                  <NumField label="酒 杯" value={alcohol} onChange={setAlcohol} placeholder="0" />
+                  <NumField label="お通じ 回" value={bowel} onChange={setBowel} placeholder="1" />
+                </div>
+                <div className="grid grid-cols-4 gap-1">
+                  {(
+                    [
+                      ["", "状態"],
+                      ["normal", "普通"],
+                      ["hard", "硬い"],
+                      ["loose", "緩い"],
+                    ] as Array<[BowelQuality | "", string]>
+                  ).map(([v, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setBowelQuality(v)}
+                      className={[
+                        "rounded-xl px-2 py-2 text-[11px] font-semibold",
+                        bowelQuality === v ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700",
+                      ].join(" ")}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void saveLifestyle()}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 disabled:opacity-60"
+                >
+                  生活記録を保存
+                </button>
+              </>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 
@@ -1341,7 +1376,7 @@ export function MealPersonalPanel({
           {activeTab === "diary" ? withPaywall(diaryBody) : null}
           {activeTab === "add" && !readOnly ? withPaywall(addBody) : null}
           {activeTab === "suggest" ? withPaywall(suggestBody) : null}
-          {activeTab === "settings" ? withPaywall(settingsBody) : null}
+          {activeTab === "settings" ? settingsBody : null}
           <MealPersonalTabBar
             tab={activeTab}
             readOnly={readOnly}
@@ -1805,7 +1840,9 @@ function MealPersonalTabBar({
             >
               <Icon className="h-5 w-5" strokeWidth={active ? 2.4 : 1.8} />
               <span className="inline-flex items-center gap-0.5">
-                {locked && item.id !== "home" ? <Lock className="h-2.5 w-2.5" strokeWidth={2.4} /> : null}
+                {locked && item.id !== "home" && item.id !== "settings" ? (
+                  <Lock className="h-2.5 w-2.5" strokeWidth={2.4} />
+                ) : null}
                 {item.label}
               </span>
             </button>

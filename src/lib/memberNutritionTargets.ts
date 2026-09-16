@@ -34,6 +34,17 @@ export type MemberNutritionTargetView = {
   updated_at: string;
 };
 
+export type NutritionProfile = {
+  sex: string | null;
+  age_years: number | null;
+  height_cm: number | null;
+  current_weight_kg: number | null;
+  target_weight_kg: number | null;
+  activity_level: string | null;
+  weight_direction: string | null;
+  primary_goal: string | null;
+};
+
 type Supabase = ReturnType<typeof createSupabaseServiceClient>;
 
 function isMissingTable(err: { code?: string; message?: string } | null | undefined): boolean {
@@ -57,7 +68,7 @@ export function toNutritionTargetView(row: MemberNutritionTargetRow): MemberNutr
     fat_g: row.fat_g,
     carb_g: row.carb_g,
     bmr_kcal: row.bmr_kcal,
-    note: row.note,
+    note: stripNutritionProfileNote(row.note),
     source: row.source,
     updated_at: row.updated_at,
   };
@@ -185,6 +196,8 @@ export async function upsertNutritionFromGoalHearing(
     memberId: string;
     form: GoalHearingFormPayload;
     goalHearingResponseId?: string | null;
+    source?: "goal_hearing" | "manual";
+    profile?: NutritionProfile | null;
   }
 ): Promise<{ ok: true; row: MemberNutritionTargetView } | { ok: false; skipped?: boolean; error?: string }> {
   const estimate = estimateGoalHearingNutrition(params.form);
@@ -193,9 +206,10 @@ export async function upsertNutritionFromGoalHearing(
   const row = nutritionRowFromEstimate({
     memberId: params.memberId,
     estimate,
-    source: "goal_hearing",
+    source: params.source ?? "goal_hearing",
     goalHearingResponseId: params.goalHearingResponseId ?? null,
   });
+  row.note = encodeNutritionProfileNote(row.note, params.profile ?? nutritionProfileFromForm(params.form));
 
   const { data, error } = await (supabase as any)
     .from("member_nutrition_targets")
@@ -239,6 +253,129 @@ export type NutritionHearingMeta = {
   has_response: boolean;
   weight_missing: boolean;
 };
+
+const PROFILE_MARKER = "\nMP_PROFILE:";
+
+export function stripNutritionProfileNote(note: string | null | undefined): string | null {
+  if (!note) return null;
+  const i = note.indexOf(PROFILE_MARKER);
+  const text = (i >= 0 ? note.slice(0, i) : note).trim();
+  return text || null;
+}
+
+export function parseNutritionProfileFromNote(note: string | null | undefined): NutritionProfile | null {
+  if (!note) return null;
+  const i = note.indexOf(PROFILE_MARKER);
+  if (i < 0) return null;
+  try {
+    const parsed = JSON.parse(note.slice(i + PROFILE_MARKER.length)) as NutritionProfile;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function encodeNutritionProfileNote(note: string | null | undefined, profile?: NutritionProfile | null): string | null {
+  const base = stripNutritionProfileNote(note ?? null);
+  if (!profile) return base;
+  return `${base ?? ""}${PROFILE_MARKER}${JSON.stringify(profile)}`;
+}
+
+function emptyNutritionProfile(): NutritionProfile {
+  return {
+    sex: null,
+    age_years: null,
+    height_cm: null,
+    current_weight_kg: null,
+    target_weight_kg: null,
+    activity_level: null,
+    weight_direction: null,
+    primary_goal: null,
+  };
+}
+
+function ageYearsFromBirthDate(birthDate: string | null | undefined): number | null {
+  if (!birthDate) return null;
+  const d = new Date(`${birthDate}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const asOf = new Date();
+  let age = asOf.getFullYear() - d.getFullYear();
+  const m = asOf.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && asOf.getDate() < d.getDate())) age -= 1;
+  return age > 0 && age < 120 ? age : null;
+}
+
+export function nutritionProfileFromForm(form: GoalHearingFormPayload): NutritionProfile {
+  return {
+    sex: form.sex,
+    age_years: form.age_years ?? ageYearsFromBirthDate(form.birth_date) ?? null,
+    height_cm: form.height_cm ?? null,
+    current_weight_kg: form.current_weight_kg ?? null,
+    target_weight_kg: form.target_weight_kg ?? null,
+    activity_level: normalizeActivityLevel(form.activity_level),
+    weight_direction: form.weight_direction || null,
+    primary_goal: form.primary_goal || null,
+  };
+}
+
+export async function loadNutritionProfile(
+  supabase: Supabase,
+  memberId: string
+): Promise<NutritionProfile> {
+  const profile = emptyNutritionProfile();
+
+  const { data: response } = await (supabase as any)
+    .from("goal_hearing_responses")
+    .select(
+      "primary_goal, weight_direction, current_weight_kg, target_weight_kg, sex, birth_date, age_years, height_cm, activity_level"
+    )
+    .eq("member_id", memberId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (response) {
+    profile.sex = response.sex ?? null;
+    profile.age_years = response.age_years ?? ageYearsFromBirthDate(response.birth_date) ?? null;
+    profile.height_cm = response.height_cm ?? null;
+    profile.current_weight_kg = response.current_weight_kg ?? null;
+    profile.target_weight_kg = response.target_weight_kg ?? null;
+    profile.activity_level = normalizeActivityLevel(response.activity_level);
+    profile.weight_direction = response.weight_direction ?? null;
+    profile.primary_goal = response.primary_goal ?? null;
+  }
+
+  const { data: saved } = await (supabase as any)
+    .from("member_nutrition_targets")
+    .select("note")
+    .eq("member_id", memberId)
+    .maybeSingle();
+  const fromNote = parseNutritionProfileFromNote(saved?.note);
+  if (fromNote) {
+    if (fromNote.sex) profile.sex = fromNote.sex;
+    if (fromNote.age_years != null) profile.age_years = fromNote.age_years;
+    if (fromNote.height_cm != null) profile.height_cm = fromNote.height_cm;
+    if (fromNote.current_weight_kg != null) profile.current_weight_kg = fromNote.current_weight_kg;
+    if (fromNote.target_weight_kg != null) profile.target_weight_kg = fromNote.target_weight_kg;
+    if (fromNote.activity_level) profile.activity_level = fromNote.activity_level;
+    if (fromNote.weight_direction) profile.weight_direction = fromNote.weight_direction;
+    if (fromNote.primary_goal) profile.primary_goal = fromNote.primary_goal;
+  }
+
+  const { data: weight } = await (supabase as any)
+    .from("member_weight_logs")
+    .select("weight_kg")
+    .eq("member_id", memberId)
+    .order("log_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (weight?.weight_kg != null && Number.isFinite(Number(weight.weight_kg))) {
+    profile.current_weight_kg = Number(weight.weight_kg);
+  }
+
+  return profile;
+}
 
 /** 未保存なら最新の目標ヒアリングから算出して保存（既存回答のバックフィル） */
 export async function fetchOrBackfillNutritionTarget(
