@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - cursor/aug10-sep2-members-7588
+      - main
     paths:
       - "scripts/find-mtg-slots-2026-09.mjs"
       - "scripts/lib/supabaseFetchAll.mjs"
