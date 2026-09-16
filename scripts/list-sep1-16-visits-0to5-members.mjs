@@ -9,6 +9,14 @@ const MAX_VISITS = 5;
 const RANGE_START = "2026-09-01T00:00:00+09:00";
 const RANGE_END = "2026-09-17T00:00:00+09:00";
 
+/** 在籍会員のみ（退会・休会除外） */
+function isActiveMember(m) {
+  const ms = String(m.membership_status ?? "").toLowerCase();
+  if (ms === "active") return true;
+  if (ms === "hiatus" || ms === "withdrawn") return false;
+  return m.is_active === true;
+}
+
 function countByStore(results) {
   const breakdown = {};
   for (const r of results) {
@@ -61,7 +69,13 @@ async function main() {
   const storeNameById = Object.fromEntries(storesResult.rows.map((s) => [s.id, s.name]));
 
   const results = [];
+  let excludedMembership = 0;
   for (const m of membersResult.rows) {
+    if (!isActiveMember(m)) {
+      excludedMembership += 1;
+      continue;
+    }
+
     const visits = (byMember.get(m.id) ?? []).length;
     if (visits > MAX_VISITS) continue;
 
@@ -93,7 +107,9 @@ async function main() {
           period: "2026-09-01〜16（start_at基準・キャンセル除外）",
           metric: "来店回数 = 予約レコード件数",
           visitRange: "0〜5回",
+          membership: "在籍会員のみ（退会・休会除外）",
         },
+        excludedMembershipCount: excludedMembership,
         memberCount: results.length,
         breakdownByVisits: byVisits,
         storeBreakdown: countByStore(results),
@@ -105,7 +121,7 @@ async function main() {
   );
 
   console.log("\n--- サマリー ---");
-  console.log(`9/1〜16 来店0〜5回: ${results.length}名`);
+  console.log(`9/1〜16 来店0〜5回（在籍のみ）: ${results.length}名（退会・休会除外: ${excludedMembership}名）`);
   console.log(
     `内訳: 0=${byVisits[0]} / 1=${byVisits[1]} / 2=${byVisits[2]} / 3=${byVisits[3]} / 4=${byVisits[4]} / 5=${byVisits[5]}`,
   );
