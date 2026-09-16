@@ -4,7 +4,14 @@
  */
 export const MEAL_PERSONAL_PILOT_ONLY = true;
 
-export const MEAL_PERSONAL_PILOT_CODES = new Set(["EBI020", "SAK013", "FUK001", "UEN054", "SHI031"]);
+export const MEAL_PERSONAL_PILOT_CODES = new Set([
+  "EBI020",
+  "SAK013",
+  "FUK001",
+  "UEN054",
+  "SHI031",
+  "YUT001", // トレーナーゆうと（佐々木優斗）本人
+]);
 
 function normalizeMemberCode(memberCode: string | null | undefined): string {
   return String(memberCode ?? "")

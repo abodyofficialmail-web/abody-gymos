@@ -44,8 +44,11 @@ describe("isMealPersonalPassActive", () => {
 describe("isMemberMealPersonalFullEnabled", () => {
   it("grants pilot members without a pass", () => {
     assert.equal(isMemberMealPersonalPilot("EBI020"), true);
+    assert.equal(isMemberMealPersonalPilot("YUT001"), true);
     assert.equal(isMemberMealPersonalFullEnabled({ memberCode: "EBI020" }), true);
+    assert.equal(isMemberMealPersonalFullEnabled({ memberCode: "YUT001" }), true);
     assert.equal(isMemberMealPersonalFullEnabled({ memberCode: "UEN001" }), false);
+    assert.equal(isMemberMealPersonalFullEnabled({ memberCode: "EBI001" }), false);
   });
 
   it("grants paid members", () => {
