@@ -5,6 +5,7 @@ import {
   fetchOrBackfillNutritionTarget,
   formPayloadFromGoalHearingResponse,
   loadNutritionProfile,
+  nutritionProfileFromForm,
   upsertNutritionFromGoalHearing,
 } from "@/lib/memberNutritionTargets";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
@@ -61,6 +62,7 @@ const postSchema = z.object({
   activity_level: z.string().min(1).max(40),
   weight_direction: z.string().min(1).max(40),
   primary_goal: z.string().min(1).max(40),
+  weight_pace: z.enum(["slow", "normal", "fast"]).nullable().optional(),
 });
 
 export async function POST(request: Request) {
@@ -93,6 +95,10 @@ export async function POST(request: Request) {
       memberId: auth.memberId,
       form,
       source: "manual",
+      profile: {
+        ...nutritionProfileFromForm(form),
+        weight_pace: body.weight_pace ?? null,
+      },
     });
     if (!upserted.ok) {
       if (upserted.skipped) {

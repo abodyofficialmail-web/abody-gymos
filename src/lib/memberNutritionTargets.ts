@@ -1,5 +1,5 @@
 import { ACTIVITY_OPTIONS, type GoalHearingFormPayload } from "@/lib/goalHearing";
-import { estimateGoalHearingNutrition, type NutritionEstimate } from "@/lib/goalHearingNutrition";
+import { estimateGoalHearingNutrition, isWeightPace, type NutritionEstimate } from "@/lib/goalHearingNutrition";
 import type { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
 export type MemberNutritionTargetRow = {
@@ -43,6 +43,7 @@ export type NutritionProfile = {
   activity_level: string | null;
   weight_direction: string | null;
   primary_goal: string | null;
+  weight_pace: string | null;
 };
 
 type Supabase = ReturnType<typeof createSupabaseServiceClient>;
@@ -200,7 +201,9 @@ export async function upsertNutritionFromGoalHearing(
     profile?: NutritionProfile | null;
   }
 ): Promise<{ ok: true; row: MemberNutritionTargetView } | { ok: false; skipped?: boolean; error?: string }> {
-  const estimate = estimateGoalHearingNutrition(params.form);
+  const estimate = estimateGoalHearingNutrition(params.form, {
+    pace: isWeightPace(params.profile?.weight_pace) ? params.profile?.weight_pace : null,
+  });
   if (!estimate) return { ok: false, skipped: true };
 
   const row = nutritionRowFromEstimate({
@@ -292,6 +295,7 @@ function emptyNutritionProfile(): NutritionProfile {
     activity_level: null,
     weight_direction: null,
     primary_goal: null,
+    weight_pace: null,
   };
 }
 
@@ -316,6 +320,7 @@ export function nutritionProfileFromForm(form: GoalHearingFormPayload): Nutritio
     activity_level: normalizeActivityLevel(form.activity_level),
     weight_direction: form.weight_direction || null,
     primary_goal: form.primary_goal || null,
+    weight_pace: null,
   };
 }
 
@@ -361,6 +366,7 @@ export async function loadNutritionProfile(
     if (fromNote.activity_level) profile.activity_level = fromNote.activity_level;
     if (fromNote.weight_direction) profile.weight_direction = fromNote.weight_direction;
     if (fromNote.primary_goal) profile.primary_goal = fromNote.primary_goal;
+    if (fromNote.weight_pace) profile.weight_pace = fromNote.weight_pace;
   }
 
   const { data: weight } = await (supabase as any)

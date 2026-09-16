@@ -1,5 +1,13 @@
 import type { GoalHearingFormPayload } from "@/lib/goalHearing";
 
+export type WeightPace = "slow" | "normal" | "fast";
+
+export const WEIGHT_PACE_OPTIONS = [
+  { id: "slow" as const, label: "ゆるやか", hint: "月0.5kg前後", monthlyKg: 0.5 },
+  { id: "normal" as const, label: "ふつう", hint: "月1kg前後", monthlyKg: 1 },
+  { id: "fast" as const, label: "しっかり", hint: "月1.5kg前後", monthlyKg: 1.5 },
+] as const;
+
 export type NutritionEstimate = {
   age_years: number;
   bmr: number;
@@ -14,7 +22,16 @@ export type NutritionEstimate = {
   monthly_change_max_kg: number;
   direction: "lose" | "gain" | "maintain" | "looks";
   note: string;
+  pace?: WeightPace | null;
 };
+
+export function isWeightPace(v: string | null | undefined): v is WeightPace {
+  return v === "slow" || v === "normal" || v === "fast";
+}
+
+function paceMonthlyKg(pace: WeightPace | null | undefined): number | null {
+  return WEIGHT_PACE_OPTIONS.find((o) => o.id === pace)?.monthlyKg ?? null;
+}
 
 const ACTIVITY_FACTOR: Record<string, number> = {
   sedentary: 1.2,
@@ -56,7 +73,10 @@ function resolveDirection(form: GoalHearingFormPayload): "lose" | "gain" | "main
  * Mifflin-St Jeor + 活動係数。
  * 1ヶ月の体重変化は約 7,700kcal ≒ 1kg で概算。
  */
-export function estimateGoalHearingNutrition(form: GoalHearingFormPayload): NutritionEstimate | null {
+export function estimateGoalHearingNutrition(
+  form: GoalHearingFormPayload,
+  opts?: { pace?: WeightPace | null }
+): NutritionEstimate | null {
   if (form.weight_unknown || form.current_weight_kg == null || !Number.isFinite(form.current_weight_kg)) {
     return null;
   }
@@ -78,8 +98,24 @@ export function estimateGoalHearingNutrition(form: GoalHearingFormPayload): Nutr
   let deficitMin = 0;
   let deficitMax = 0;
   let note = "体重はほぼ横ばいの目安です。";
+  const looksLose = direction === "looks" && form.target_weight_kg != null && form.target_weight_kg < weight - 0.5;
+  const looksGain = direction === "looks" && form.target_weight_kg != null && form.target_weight_kg > weight + 0.5;
+  const changing =
+    direction === "lose" || direction === "gain" || looksLose || looksGain;
+  const monthlyKg = changing ? paceMonthlyKg(opts?.pace) : null;
+  const sign = direction === "gain" || looksGain ? -1 : 1;
 
-  if (direction === "lose") {
+  if (monthlyKg != null) {
+    const mid = Math.round((monthlyKg * 7700) / 30);
+    const spread = Math.max(40, Math.round(mid * 0.18));
+    deficitMin = sign * (mid - spread);
+    deficitMax = sign * (mid + spread);
+    const paceWord = opts?.pace === "slow" ? "ゆるやかな" : opts?.pace === "fast" ? "しっかりめの" : "ふつうのペースの";
+    note =
+      sign > 0
+        ? `${paceWord}減量（月${monthlyKg}kg前後）を踏まえた目安です。`
+        : `${paceWord}増量（月${monthlyKg}kg前後）を踏まえた目安です。`;
+  } else if (direction === "lose") {
     deficitMin = 300;
     deficitMax = 500;
     note = "無理のない減量ペースの目安です。";
@@ -88,11 +124,11 @@ export function estimateGoalHearingNutrition(form: GoalHearingFormPayload): Nutr
     deficitMax = -200;
     note = "筋肉をつけやすい増量ペースの目安です。";
   } else if (direction === "looks") {
-    if (form.target_weight_kg != null && form.target_weight_kg < weight - 0.5) {
+    if (looksLose) {
       deficitMin = 250;
       deficitMax = 400;
       note = "見た目重視・ゆるやかな減量の目安です。";
-    } else if (form.target_weight_kg != null && form.target_weight_kg > weight + 0.5) {
+    } else if (looksGain) {
       deficitMin = -250;
       deficitMax = -150;
       note = "見た目重視・ゆるやかな増量の目安です。";
@@ -133,6 +169,7 @@ export function estimateGoalHearingNutrition(form: GoalHearingFormPayload): Nutr
     monthly_change_max_kg: Math.max(monthly_change_min_kg, monthly_change_max_kg),
     direction,
     note,
+    pace: monthlyKg != null ? opts?.pace ?? null : null,
   };
 }
 
