@@ -1,8 +1,11 @@
 "use client";
 
+import { MealPersonalLockedPreview } from "@/components/member/MealPersonalLockedPreview";
 import { MealPersonalPanel } from "@/components/member/MealPersonalPanel";
 import type { MealSlot } from "@/lib/memberMealLogs";
 import { useEffect, useState } from "react";
+
+type Gate = "checking" | "ok" | "preview";
 
 export function MealLogClient({
   signed,
@@ -11,7 +14,10 @@ export function MealLogClient({
   signed?: { s: string; sig: string } | null;
   initialSlot?: MealSlot | null;
 }) {
-  const [gate, setGate] = useState<"checking" | "ok" | "forbidden">(signed ? "ok" : "checking");
+  const [gate, setGate] = useState<Gate>(signed ? "ok" : "checking");
+  const [priceLabel, setPriceLabel] = useState("食事パーソナル（月額）");
+  const [subscribeUrl, setSubscribeUrl] = useState<string | null>(null);
+  const [paidNotice, setPaidNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (signed) {
@@ -19,23 +25,47 @@ export function MealLogClient({
       return;
     }
     let cancelled = false;
-    fetch("/api/member/me", { cache: "no-store" })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (res.status === 401) {
-          window.location.href = "/login";
-          return;
+
+    const activateIfNeeded = async () => {
+      try {
+        const q = new URLSearchParams(window.location.search);
+        const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
+        if (q.get("meal_pass") !== "success" && !sessionId) return false;
+        if (!sessionId) return false;
+        const res = await fetch(`/api/member/meal-personal/from-checkout?session_id=${encodeURIComponent(sessionId)}`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          window.history.replaceState({}, "", "/meal-log");
+          if (!cancelled) setPaidNotice("お申し込みが完了しました。食事記録が使えます。");
+          return true;
         }
-        const json = (await res.json().catch(() => ({}))) as { member?: { meal_personal_enabled?: boolean } };
-        if (!json?.member?.meal_personal_enabled) {
-          setGate("forbidden");
-          return;
-        }
-        setGate("ok");
-      })
-      .catch(() => {
-        if (!cancelled) setGate("ok");
-      });
+      } catch {
+        // webhook 側で有効化される場合もある
+      }
+      return false;
+    };
+
+    (async () => {
+      const justPaid = await activateIfNeeded();
+      const res = await fetch("/api/member/me", { cache: "no-store" });
+      if (cancelled) return;
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        member?: { meal_personal_enabled?: boolean };
+        meal_personal_pass?: { active?: boolean; subscribe_url?: string | null; price_label?: string };
+      };
+      const enabled = Boolean(json?.member?.meal_personal_enabled || json?.meal_personal_pass?.active || justPaid);
+      setPriceLabel(json?.meal_personal_pass?.price_label || "食事パーソナル（月額）");
+      setSubscribeUrl(json?.meal_personal_pass?.subscribe_url ?? "/api/member/meal-personal/checkout");
+      setGate(enabled ? "ok" : "preview");
+    })().catch(() => {
+      if (!cancelled) setGate("preview");
+    });
+
     return () => {
       cancelled = true;
     };
@@ -44,17 +74,16 @@ export function MealLogClient({
   if (gate === "checking") {
     return <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">読み込み中…</div>;
   }
-  if (gate === "forbidden") {
-    return (
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-        この機能は現在ご利用いただけません。
-        <a href="/member" className="mx-1 font-semibold underline">
-          マイページ
-        </a>
-        へ戻る
-      </div>
-    );
+  if (gate === "preview") {
+    return <MealPersonalLockedPreview priceLabel={priceLabel} subscribeUrl={subscribeUrl} />;
   }
 
-  return <MealPersonalPanel signed={signed} initialSlot={initialSlot} />;
+  return (
+    <div className="space-y-4">
+      {paidNotice ? (
+        <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">{paidNotice}</div>
+      ) : null}
+      <MealPersonalPanel signed={signed} initialSlot={initialSlot} />
+    </div>
+  );
 }

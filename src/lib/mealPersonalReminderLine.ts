@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAppUrl } from "@/lib/constants";
 import { lineMemberProfileReachable, linePushTokenForMemberRow } from "@/lib/lineChannel";
-import { isMemberMealPersonalEnabled, MEAL_PERSONAL_PILOT_CODES, MEAL_PERSONAL_PILOT_ONLY } from "@/lib/memberMealPersonalRollout";
+import { isMemberMealPersonalFullEnabled, isMissingMealPersonalPassColumn, type MealPersonalPassRow } from "@/lib/memberMealPersonalPass";
 import { memberMealLogPageUrl } from "@/lib/memberMealLogSigned";
 import {
   hasMealSlotLogged,
@@ -92,6 +92,8 @@ export type MealReminderTarget = {
   line_channel_key: string | null;
   membership_status?: string | null;
   is_active?: boolean | null;
+  meal_personal_pass_status?: string | null;
+  meal_personal_pass_current_period_end?: string | null;
 };
 
 export type SendMealReminderResult = {
@@ -108,24 +110,35 @@ export type SendMealReminderResult = {
 export async function listMealPersonalReminderTargets(supabase: SupabaseClient): Promise<MealReminderTarget[]> {
   const pageSize = 1000;
   const rows: MealReminderTarget[] = [];
+  const selectWithPass =
+    "id, member_code, name, line_user_id, line_channel_key, membership_status, is_active, meal_personal_pass_status, meal_personal_pass_current_period_end";
+  const selectLegacy = "id, member_code, name, line_user_id, line_channel_key, membership_status, is_active";
   let from = 0;
+  let usePassCols = true;
   for (;;) {
-    let query = supabase
+    const { data, error } = await (supabase as any)
       .from("members")
-      .select("id, member_code, name, line_user_id, line_channel_key, membership_status, is_active")
+      .select(usePassCols ? selectWithPass : selectLegacy)
       .not("line_user_id", "is", null)
       .range(from, from + pageSize - 1);
-    if (MEAL_PERSONAL_PILOT_ONLY) {
-      query = query.in("member_code", [...MEAL_PERSONAL_PILOT_CODES]);
+    if (error && usePassCols && isMissingMealPersonalPassColumn(error)) {
+      usePassCols = false;
+      continue;
     }
-    const { data, error } = await query;
     if (error) throw error;
     rows.push(...((data ?? []) as MealReminderTarget[]));
     if (!data || data.length < pageSize) break;
     from += pageSize;
-    if (MEAL_PERSONAL_PILOT_ONLY) break;
   }
-  return rows.filter((m) => isMemberMealPersonalEnabled(m.member_code) && isActiveMember(m) && Boolean(m.line_user_id));
+  return rows.filter((m) => {
+    const pass: MealPersonalPassRow | null = usePassCols
+      ? {
+          meal_personal_pass_status: m.meal_personal_pass_status,
+          meal_personal_pass_current_period_end: m.meal_personal_pass_current_period_end,
+        }
+      : null;
+    return isMemberMealPersonalFullEnabled({ memberCode: m.member_code, pass }) && isActiveMember(m) && Boolean(m.line_user_id);
+  });
 }
 
 export async function sendMealPersonalReminder(
@@ -147,7 +160,11 @@ export async function sendMealPersonalReminder(
   const recordDispatch = opts.recordDispatch !== false && !dryRun;
   const appUrl = opts.appUrl || getAppUrl();
 
-  if (!isMemberMealPersonalEnabled(memberCode)) {
+  const pass: MealPersonalPassRow = {
+    meal_personal_pass_status: (opts.member as MealReminderTarget).meal_personal_pass_status,
+    meal_personal_pass_current_period_end: (opts.member as MealReminderTarget).meal_personal_pass_current_period_end,
+  };
+  if (!isMemberMealPersonalFullEnabled({ memberCode, pass })) {
     return { member_code: memberCode, slot, sent: false, skipped: "not_in_rollout" };
   }
   if (!opts.member.line_user_id) {
@@ -233,11 +250,15 @@ export async function sendMealPersonalReminderForCode(
   }
 ): Promise<SendMealReminderResult> {
   const memberCode = opts.memberCode.trim().toUpperCase();
-  const { data, error } = await supabase
-    .from("members")
-    .select("id, member_code, name, line_user_id, line_channel_key, membership_status, is_active")
-    .eq("member_code", memberCode)
-    .maybeSingle();
+  const selectWithPass =
+    "id, member_code, name, line_user_id, line_channel_key, membership_status, is_active, meal_personal_pass_status, meal_personal_pass_current_period_end";
+  const selectLegacy = "id, member_code, name, line_user_id, line_channel_key, membership_status, is_active";
+  let { data, error } = await (supabase as any).from("members").select(selectWithPass).eq("member_code", memberCode).maybeSingle();
+  if (error && isMissingMealPersonalPassColumn(error)) {
+    const second = await (supabase as any).from("members").select(selectLegacy).eq("member_code", memberCode).maybeSingle();
+    data = second.data;
+    error = second.error;
+  }
   if (error) return { member_code: memberCode, slot: opts.slot, sent: false, error: "member_fetch_failed", detail: error.message };
   if (!data) return { member_code: memberCode, slot: opts.slot, sent: false, error: "member_not_found" };
   return sendMealPersonalReminder(supabase, {

@@ -37,6 +37,11 @@ type MeResponse = {
     weight_log_enabled?: boolean;
     meal_personal_enabled?: boolean;
   };
+  meal_personal_pass?: {
+    active: boolean;
+    subscribe_url?: string | null;
+    price_label?: string;
+  };
   trainer_visibility_pass?: {
     active: boolean;
     subscribe_url?: string | null;
@@ -430,7 +435,7 @@ export default function MemberPage() {
       title={title}
       nav={[
         { href: "/booking", label: "予約" },
-        ...(data?.member.meal_personal_enabled ? [{ href: "/meal-log", label: "食事パーソナル" }] : []),
+        ...(data ? [{ href: "/meal-log", label: "食事パーソナル" }] : []),
         { href: "/member/settings", label: "設定" },
         { href: "/login", label: "ログイン" },
       ]}

@@ -11,8 +11,47 @@ export function membershipStatusLabel(status: MembershipStatus): string {
   return MEMBERSHIP_STATUS_OPTIONS.find((o) => o.id === status)?.label ?? status;
 }
 
+/** 集計・案内対象の is_active。休会中も true、退会のみ false。予約可否とは別。 */
 export function isActiveFromMembershipStatus(status: MembershipStatus): boolean {
-  return status === "active";
+  return status !== "withdrawn";
+}
+
+/** 入会中・休会・退会いずれも予約・ログイン可。会員レコードがあれば通す。 */
+export function canBookOrLogin(_params: {
+  membershipStatus?: MembershipStatus | string | null;
+  isActive?: boolean | null;
+}): boolean {
+  return true;
+}
+
+export function pickBookableMember<
+  T extends {
+    is_active?: boolean | null;
+    membership_status?: MembershipStatus | string | null;
+    store_id?: string | null;
+  },
+>(rows: T[], storeId?: string | null): T | null {
+  const bookable = rows.filter((m) =>
+    canBookOrLogin({ membershipStatus: m.membership_status, isActive: m.is_active })
+  );
+  if (storeId) {
+    const home = bookable.find((m) => String(m.store_id ?? "") === String(storeId));
+    if (home) return home;
+  }
+  return bookable[0] ?? null;
+}
+
+export function shouldReactivateHiatus(
+  status: MembershipStatus,
+  hiatusEndAt: string | null | undefined,
+  todayYmd: string
+): boolean {
+  return status === "hiatus" && typeof hiatusEndAt === "string" && hiatusEndAt < todayYmd;
+}
+
+export function formatHiatusPeriod(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start && !end) return "期間未設定";
+  return `${formatWithdrawnAt(start)} 〜 ${formatWithdrawnAt(end)}`;
 }
 
 /** DB未移行時は is_active から推定 */

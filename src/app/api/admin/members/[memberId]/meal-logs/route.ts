@@ -1,5 +1,5 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
-import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import { loadMemberMealPersonalGate } from "@/lib/memberMealPersonalPass";
 import { loadMealPersonalDashboard } from "@/lib/memberMealDashboard";
 import { deleteMemberMealLogsByIds, tokyoTodayYmd, updateMemberMealLog } from "@/lib/memberMealLogs";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
@@ -25,10 +25,11 @@ export async function GET(_request: Request, ctx: { params: { memberId: string }
     if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
     if (!member) return jsonResponse({ error: "会員が見つかりません" }, 404);
 
+    const gate = await loadMemberMealPersonalGate(supabase, member.id);
     const today = tokyoTodayYmd();
     const data = await loadMealPersonalDashboard(supabase, member.id, today);
     return jsonResponse({
-      enabled: isMemberMealPersonalEnabled(member.member_code),
+      enabled: Boolean(gate?.full),
       ...data,
     });
   } catch (e) {
@@ -56,7 +57,8 @@ export async function POST(req: Request, ctx: { params: { memberId: string } | P
       .maybeSingle();
     if (memberErr) return jsonResponse({ error: "会員の取得に失敗しました", detail: memberErr.message }, 500);
     if (!member) return jsonResponse({ error: "会員が見つかりません" }, 404);
-    if (!isMemberMealPersonalEnabled(member.member_code)) {
+    const gate = await loadMemberMealPersonalGate(supabase, member.id);
+    if (!gate?.full) {
       return jsonResponse({ error: "この機能は現在ご利用いただけません" }, 403);
     }
     if (raw.action === "delete_meal") {

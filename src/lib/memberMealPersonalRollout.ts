@@ -1,7 +1,6 @@
 /**
  * 食事パーソナルの段階的ロールアウト。
- * パイロット中はテスト会員 EBI020・SAK013・FUK001・UEN054・SHI031 のみ。課金（出勤表示パス方式）は試験後に接続する。
- * 全員公開時は MEAL_PERSONAL_PILOT_ONLY を false にする。
+ * 全会員は消費カロリー・PFCを見られる。写真記録など全機能はパイロットまたは課金後。
  */
 export const MEAL_PERSONAL_PILOT_ONLY = true;
 
@@ -15,9 +14,17 @@ function normalizeMemberCode(memberCode: string | null | undefined): string {
     .replace(/[\s_-]/g, "");
 }
 
-export function isMemberMealPersonalEnabled(memberCode: string | null | undefined): boolean {
+export function isMemberMealPersonalPilot(memberCode: string | null | undefined): boolean {
   const code = normalizeMemberCode(memberCode);
-  if (!code) return false;
-  if (!MEAL_PERSONAL_PILOT_ONLY) return true;
-  return MEAL_PERSONAL_PILOT_CODES.has(code);
+  return Boolean(code) && MEAL_PERSONAL_PILOT_CODES.has(code);
+}
+
+/** ログイン会員ならマイページに入口を出す（未課金はプレビュー）。 */
+export function isMemberMealPersonalVisible(memberCode: string | null | undefined): boolean {
+  return Boolean(normalizeMemberCode(memberCode));
+}
+
+/** 全機能。課金パス判定は isMemberMealPersonalFullEnabled を使う。 */
+export function isMemberMealPersonalEnabled(memberCode: string | null | undefined): boolean {
+  return isMemberMealPersonalPilot(memberCode);
 }

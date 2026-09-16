@@ -9,6 +9,11 @@ type MemberSettings = {
     weight_log_enabled?: boolean;
     meal_personal_enabled?: boolean;
   };
+  meal_personal_pass?: {
+    active: boolean;
+    subscribe_url?: string | null;
+    price_label?: string;
+  };
   trainer_visibility_pass?: {
     active: boolean;
     subscribe_url?: string | null;
@@ -210,6 +215,39 @@ export function MemberSettingsPanel() {
             ) : null}
           </>
         ) : null}
+      </section>
+
+      <section className="space-y-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="text-sm font-bold text-slate-900">食事パーソナル</div>
+        {data.member.meal_personal_enabled || data.meal_personal_pass?.active ? (
+          <div className="text-sm text-slate-700">
+            適用中。写真記録・今日の残り・LINE案内が使えます。
+            <a href="/meal-log" className="ml-1 font-semibold underline">
+              食事パーソナルを開く
+            </a>
+          </div>
+        ) : (
+          <>
+            <div className="text-sm text-slate-700">
+              {data.meal_personal_pass?.price_label || "食事パーソナル（月額）"}で、食事の写真記録とアドバイスが使えます。消費カロリーとPFCは申し込み前から確認できます。
+            </div>
+            {data.meal_personal_pass?.subscribe_url ? (
+              <a
+                href={data.meal_personal_pass.subscribe_url}
+                className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+              >
+                申し込む
+              </a>
+            ) : (
+              <a
+                href="/meal-log"
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-800"
+              >
+                消費カロリー・PFCを見る
+              </a>
+            )}
+          </>
+        )}
       </section>
 
       <section className="space-y-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

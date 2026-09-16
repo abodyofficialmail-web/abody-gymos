@@ -2,7 +2,7 @@ import { z } from "zod";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
-import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import { loadMemberMealPersonalGate } from "@/lib/memberMealPersonalPass";
 import { verifyMemberMealLogSigned } from "@/lib/memberMealLogSigned";
 import { isLogDateAllowed, tokyoTodayYmd } from "@/lib/memberWeightLogs";
 import {
@@ -26,32 +26,26 @@ async function resolveMember(
   if (s && sig) {
     const payload = verifyMemberMealLogSigned(s, sig);
     if (!payload) return { ok: false, status: 400, error: "リンクが無効または期限切れです" };
-    const { data: member, error } = await supabase
-      .from("members")
-      .select("id, member_code, is_active")
-      .eq("id", payload.member_id)
-      .maybeSingle();
-    if (error) return { ok: false, status: 500, error: "会員の取得に失敗しました" };
-    if (!member || member.is_active === false) return { ok: false, status: 401, error: "未ログイン" };
-    if (!isMemberMealPersonalEnabled(member.member_code)) {
-      return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+    try {
+      const gate = await loadMemberMealPersonalGate(supabase, payload.member_id);
+      if (!gate || gate.is_active === false) return { ok: false, status: 401, error: "未ログイン" };
+      if (!gate.full) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+      return { ok: true, memberId: gate.id };
+    } catch {
+      return { ok: false, status: 500, error: "会員の取得に失敗しました" };
     }
-    return { ok: true, memberId: member.id };
   }
 
   const memberId = getMemberIdFromCookie();
   if (!memberId) return { ok: false, status: 401, error: "未ログイン" };
-  const { data: member, error } = await supabase
-    .from("members")
-    .select("id, member_code, is_active")
-    .eq("id", memberId)
-    .maybeSingle();
-  if (error) return { ok: false, status: 500, error: "会員の取得に失敗しました" };
-  if (!member || !member.is_active) return { ok: false, status: 401, error: "未ログイン" };
-  if (!isMemberMealPersonalEnabled(member.member_code)) {
-    return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+  try {
+    const gate = await loadMemberMealPersonalGate(supabase, memberId);
+    if (!gate || !gate.is_active) return { ok: false, status: 401, error: "未ログイン" };
+    if (!gate.full) return { ok: false, status: 403, error: "この機能は現在ご利用いただけません" };
+    return { ok: true, memberId: gate.id };
+  } catch {
+    return { ok: false, status: 500, error: "会員の取得に失敗しました" };
   }
-  return { ok: true, memberId: member.id };
 }
 
 export async function OPTIONS() {

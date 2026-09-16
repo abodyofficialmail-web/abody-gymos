@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { defaultMealSlot, deleteMemberMealLogsForSlot, tokyoTodayYmd } from "@/lib/memberMealLogs";
-import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
 import { sendMealPersonalReminderForCode, type MealReminderSlot } from "@/lib/mealPersonalReminderLine";
 
 function json(body: unknown, status = 200) {
@@ -67,9 +66,6 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const memberCode = (url.searchParams.get("member_code") ?? "EBI020").trim().toUpperCase();
     const slotRaw = url.searchParams.get("slot") ?? "breakfast";
-    if (!isMemberMealPersonalEnabled(memberCode)) {
-      return json({ error: "pilot_only" }, 403);
-    }
     if (slotRaw !== "breakfast" && slotRaw !== "lunch" && slotRaw !== "dinner" && slotRaw !== "snack") {
       return json({ error: "invalid_slot" }, 400);
     }

@@ -4,6 +4,10 @@ import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { getMemberIdFromCookie } from "../_cookies";
 import { isMemberWeightLogEnabled } from "@/lib/memberWeightLogRollout";
 import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import {
+  fetchMealPersonalPassForMemberId,
+  mealPersonalPassPriceLabel,
+} from "@/lib/memberMealPersonalPass";
 import { fetchTrainerVisibilityPassForMemberId, trainerVisibilityPassPriceLabel } from "@/lib/trainerVisibilityPass";
 import { fetchOnShiftTrainerNamesBySlots } from "@/lib/onShiftTrainers";
 import { canBookOrLogin } from "@/lib/memberMembershipStatus";
@@ -184,6 +188,12 @@ export async function GET() {
       memberId,
       String((member as any).email ?? "")
     );
+    const mealPersonalPass = await fetchMealPersonalPassForMemberId(
+      supabase,
+      memberId,
+      String(member.member_code ?? "")
+    );
+    const mealPersonalEnabled = mealPersonalPass.active || isMemberMealPersonalEnabled(member.member_code);
 
     let onShiftNames: string[] = reservations.map(() => "");
     if (trainerVisibilityPass.active && reservations.length > 0) {
@@ -212,7 +222,11 @@ export async function GET() {
           reservation_reminder_line_enabled: reminderEnabled,
           weight_reminder_line_enabled: weightReminderEnabled,
           weight_log_enabled: isMemberWeightLogEnabled(member.member_code),
-          meal_personal_enabled: isMemberMealPersonalEnabled(member.member_code),
+          meal_personal_enabled: mealPersonalEnabled,
+        },
+        meal_personal_pass: {
+          ...mealPersonalPass,
+          price_label: mealPersonalPassPriceLabel(),
         },
         trainer_visibility_pass: {
           ...trainerVisibilityPass,
