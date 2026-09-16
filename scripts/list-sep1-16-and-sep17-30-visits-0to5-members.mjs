@@ -2,9 +2,12 @@
  * 在籍会員のうち
  * - 9/1〜16 来店 0〜5回
  * - 9/17〜30 予約 0〜5回
+ * - 9月合計 0〜5回
+ * - 9月入会者除外（created_at JST が 2026-09）
  * node scripts/list-sep1-16-and-sep17-30-visits-0to5-members.mjs
  */
 import { createClient } from "@supabase/supabase-js";
+import { DateTime } from "luxon";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const MAX_VISITS = 5;
@@ -12,6 +15,13 @@ const SEP_START = "2026-09-01T00:00:00+09:00";
 const SEP16_END = "2026-09-17T00:00:00+09:00";
 const SEP17_START = "2026-09-17T00:00:00+09:00";
 const SEP_END = "2026-10-01T00:00:00+09:00";
+const TZ = "Asia/Tokyo";
+const EXCLUDE_JOIN_MONTH = "2026-09";
+
+function joinedInMonth(createdAt, monthKey) {
+  if (!createdAt) return false;
+  return DateTime.fromISO(String(createdAt)).setZone(TZ).toFormat("yyyy-MM") === monthKey;
+}
 
 function isActiveMember(m) {
   const ms = String(m.membership_status ?? "").toLowerCase();
@@ -60,7 +70,7 @@ async function main() {
     fetchAllChecked(
       supabase,
       "members",
-      "id, member_code, display_name, name, store_id, is_active, membership_status",
+      "id, member_code, display_name, name, store_id, is_active, membership_status, created_at",
       undefined,
       "members",
     ),
@@ -81,10 +91,22 @@ async function main() {
   let excludedSep1to16 = 0;
   let excludedSep17to30 = 0;
   let excludedSepTotalOver5 = 0;
+  let excludedJoinedSeptember2026 = 0;
+  const excludedJoinedSeptember2026Members = [];
 
   for (const m of membersResult.rows) {
     if (!isActiveMember(m)) {
       excludedMembership += 1;
+      continue;
+    }
+
+    if (joinedInMonth(m.created_at, EXCLUDE_JOIN_MONTH)) {
+      excludedJoinedSeptember2026 += 1;
+      excludedJoinedSeptember2026Members.push({
+        memberCode: String(m.member_code ?? "").toUpperCase(),
+        displayName: m.display_name ?? m.name ?? "—",
+        createdAt: m.created_at,
+      });
       continue;
     }
 
@@ -133,8 +155,11 @@ async function main() {
           sep1to16: "0〜5回（start_at・キャンセル除外）",
           sep17to30: "0〜5回（start_at・キャンセル除外）",
           septemberTotal: "0〜5回（上記合計）",
+          excludeJoinMonth: `${EXCLUDE_JOIN_MONTH} 入会（created_at JST）`,
         },
         excludedMembershipCount: excludedMembership,
+        excludedJoinedSeptember2026Count: excludedJoinedSeptember2026,
+        excludedJoinedSeptember2026Members,
         excludedSep1to16Over5: excludedSep1to16,
         excludedSep17to30Over5: excludedSep17to30,
         excludedSepTotalOver5: excludedSepTotalOver5,
@@ -150,7 +175,7 @@ async function main() {
   console.log("\n--- サマリー ---");
   console.log(`該当: ${results.length}名`);
   console.log(
-    `除外: 退会・休会 ${excludedMembership} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30} / 9月合計6回以上 ${excludedSepTotalOver5}`,
+    `除外: 退会・休会 ${excludedMembership} / 9月入会 ${excludedJoinedSeptember2026} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30} / 9月合計6回以上 ${excludedSepTotalOver5}`,
   );
 
   console.log("\n--- 一覧 ---");
