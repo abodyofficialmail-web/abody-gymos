@@ -19,6 +19,8 @@ import { execSync } from "child_process";
 const BUCKET = "line-campaign-media";
 const SIGNED_TTL_SEC = 60 * 60 * 24 * 30;
 const CAMPAIGN_PREFIX = "sep-low-booking-2026-09";
+/** Supabase bucket fileSizeLimit（既存バケットは20MBのことが多い） */
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 function loadEnvFile(name) {
   const p = path.join(process.cwd(), name);
@@ -77,6 +79,35 @@ function previewFromVideo(videoPath, outPath) {
     `ffmpeg -y -i "${videoPath}" -ss 00:00:01 -vframes 1 -q:v 2 "${outPath}"`,
     { stdio: "pipe" },
   );
+}
+
+function compressVideoForUpload(inputPath, outputPath, crf) {
+  execSync(
+    `ffmpeg -y -i "${inputPath}" -c:v libx264 -crf ${crf} -preset medium -c:a aac -b:a 128k -movflags +faststart "${outputPath}"`,
+    { stdio: "pipe", maxBuffer: 80 * 1024 * 1024 },
+  );
+}
+
+function ensureVideoUnderLimit(localVideoPath, tmpDir) {
+  let buf = fs.readFileSync(localVideoPath);
+  if (buf.length <= MAX_UPLOAD_BYTES) return { buf, localVideoPath };
+
+  if (!hasFfmpeg()) {
+    throw new Error(`${(buf.length / (1024 * 1024)).toFixed(2)}MB超過。ffmpegで圧縮するか20MB以下にしてください`);
+  }
+
+  let input = localVideoPath;
+  for (const crf of [28, 32, 36]) {
+    const out = path.join(tmpDir, `video-crf${crf}.mp4`);
+    console.log(`video: compressing with crf=${crf}...`);
+    compressVideoForUpload(input, out, crf);
+    buf = fs.readFileSync(out);
+    console.log(`video: after compress ${(buf.length / (1024 * 1024)).toFixed(2)} MB`);
+    if (buf.length <= MAX_UPLOAD_BYTES) return { buf, localVideoPath: out };
+    input = out;
+  }
+
+  throw new Error("圧縮後も20MB超過。元動画を短くするか解像度を下げてください");
 }
 
 async function ensureBucket(supabase) {
@@ -143,8 +174,12 @@ async function main() {
 
     const mb = (videoBuf.length / (1024 * 1024)).toFixed(2);
     console.log(`video size: ${mb} MB`);
-    if (videoBuf.length > 20 * 1024 * 1024) {
-      throw new Error("20MB超過（Supabaseバケット上限）。LINE自体は200MBまで可");
+    if (localVideoPath) {
+      const fitted = ensureVideoUnderLimit(localVideoPath, tmpDir);
+      videoBuf = fitted.buf;
+      localVideoPath = fitted.localVideoPath;
+    } else if (videoBuf.length > MAX_UPLOAD_BYTES) {
+      throw new Error("20MB超過（ローカルパスなし・圧縮不可）");
     }
 
     let previewBuf;
