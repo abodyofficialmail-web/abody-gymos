@@ -4,8 +4,7 @@
  * usage:
  *   node scripts/send-sep-low-booking-motivation-line.mjs --dry-run
  *   node scripts/send-sep-low-booking-motivation-line.mjs --confirm \
- *     --video-url=https://.../video.mp4 \
- *     --preview-url=https://.../thumb.jpg
+ *     --video-url=https://.../video.mp4 --preview-url=https://.../thumb.jpg
  *
  * 本番API経由（デプロイ後）:
  *   node scripts/send-sep-low-booking-motivation-line.mjs --api --dry-run
