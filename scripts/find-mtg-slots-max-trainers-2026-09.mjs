@@ -150,25 +150,34 @@ async function main() {
   function evaluateSlot(ymd, slotStart, slotEnd) {
     const available = [];
     const blocked = [];
+    const notOnShift = [];
     for (const t of trainers) {
       const name = t.display_name ?? t.id;
+      const onShift = isOnShift(t.id, ymd, slotStart, slotEnd);
       const reasons = [];
       if (hasReservationConflict(t.id, ymd, slotStart, slotEnd)) reasons.push("reservation");
       if (hasEventConflict(t.id, ymd, slotStart, slotEnd)) reasons.push("event");
+      if (!onShift) notOnShift.push(name);
       if (reasons.length) {
-        blocked.push({ name, reasons });
+        blocked.push({ name, reasons, onShift });
         continue;
       }
       available.push({
         name,
-        onShift: isOnShift(t.id, ymd, slotStart, slotEnd),
+        onShift,
         hasShiftOnDay: hasShiftOnDay(t.id, ymd),
       });
     }
+    const n = trainers.length;
+    const allOnShift = notOnShift.length === 0;
+    const allOnShiftAndFree = allOnShift && blocked.length === 0 && available.length === n;
     return {
       availableCount: available.length,
       onShiftCount: available.filter((a) => a.onShift).length,
       offDayCount: available.filter((a) => !a.hasShiftOnDay).length,
+      allOnShift,
+      allOnShiftAndFree,
+      notOnShift,
       available,
       blocked,
     };
@@ -212,6 +221,9 @@ async function main() {
   const maxCount = top[0]?.availableCount ?? 0;
   const best = futureRanked.filter((s) => s.availableCount === maxCount);
 
+  const fullShiftAndFree = futureRanked.filter((s) => s.allOnShiftAndFree);
+  const fullShiftOnly = futureRanked.filter((s) => s.allOnShift);
+
   console.log(
     JSON.stringify(
       {
@@ -233,6 +245,13 @@ async function main() {
         },
         checkedFromJst: todayYmd,
         maxAvailableCount: maxCount,
+        fullShiftAndFreeCount: fullShiftAndFree.length,
+        fullShiftAndFreeSlots: fullShiftAndFree.map((s) => ({
+          date: s.date,
+          dow: s.dow,
+          time: s.time,
+        })),
+        fullShiftOnlyCount: fullShiftOnly.length,
         bestSlots: best.slice(0, 20),
         top15: top.map((s) => ({
           date: s.date,
@@ -249,6 +268,20 @@ async function main() {
       2,
     ),
   );
+
+  console.log("\n--- 全員シフトイン＆予約/eventなし（1時間MTG可） ---");
+  console.log(`該当: ${fullShiftAndFree.length}枠 / アクティブ ${trainers.length}名\n`);
+  for (const s of fullShiftAndFree.slice(0, 40)) {
+    console.log(`${s.date} (${s.dow}) ${s.time}`);
+  }
+  if (fullShiftAndFree.length === 0 && fullShiftOnly.length > 0) {
+    console.log("\n（参考）全員シフトインだが予約/eventと重なる枠のみ:");
+    for (const s of fullShiftOnly.slice(0, 8)) {
+      console.log(
+        `${s.date} (${s.dow}) ${s.time} → 不可: ${s.blocked.map((b) => `${b.name}[${b.reasons.join("+")}]`).join("、")}`,
+      );
+    }
+  }
 
   console.log("\n--- おすすめ（参加可能人数が最多） ---");
   console.log(`アクティブトレーナー: ${trainers.length}名 / 最多参加可能: ${maxCount}名\n`);
