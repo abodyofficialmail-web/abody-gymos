@@ -18,6 +18,20 @@ const SEP_END = "2026-10-01T00:00:00+09:00";
 const TZ = "Asia/Tokyo";
 const EXCLUDE_JOIN_MONTH = "2026-09";
 
+/** 手動除外（2026-09-16 依頼: 一覧 #2,4,6,10,11,12,14,15,27,35） */
+const EXCLUDE_MEMBER_CODES = new Set([
+  "SAK030", // #2
+  "SAK047", // #4
+  "SAK053", // #6
+  "UEN014", // #10
+  "UEN022", // #11
+  "UEN027", // #12
+  "UEN057", // #14
+  "ZAI001", // #15
+  "UEN013", // #27
+  "UEN055", // #35
+]);
+
 function joinedInMonth(createdAt, monthKey) {
   if (!createdAt) return false;
   return DateTime.fromISO(String(createdAt)).setZone(TZ).toFormat("yyyy-MM") === monthKey;
@@ -93,6 +107,7 @@ async function main() {
   let excludedSepTotalOver5 = 0;
   let excludedJoinedSeptember2026 = 0;
   const excludedJoinedSeptember2026Members = [];
+  let excludedManualMemberCodes = 0;
 
   for (const m of membersResult.rows) {
     if (!isActiveMember(m)) {
@@ -129,8 +144,14 @@ async function main() {
       continue;
     }
 
+    const memberCode = String(m.member_code ?? "").toUpperCase();
+    if (EXCLUDE_MEMBER_CODES.has(memberCode)) {
+      excludedManualMemberCodes += 1;
+      continue;
+    }
+
     results.push({
-      memberCode: String(m.member_code ?? "").toUpperCase(),
+      memberCode,
       displayName: m.display_name ?? m.name ?? "—",
       homeStore: storeNameById[m.store_id] ?? null,
       visitCountSep1to16: sep1to16,
@@ -156,8 +177,10 @@ async function main() {
           sep17to30: "0〜5回（start_at・キャンセル除外）",
           septemberTotal: "0〜5回（上記合計）",
           excludeJoinMonth: `${EXCLUDE_JOIN_MONTH} 入会（created_at JST）`,
+          excludeMemberCodes: [...EXCLUDE_MEMBER_CODES].sort(),
         },
         excludedMembershipCount: excludedMembership,
+        excludedManualMemberCodesCount: excludedManualMemberCodes,
         excludedJoinedSeptember2026Count: excludedJoinedSeptember2026,
         excludedJoinedSeptember2026Members,
         excludedSep1to16Over5: excludedSep1to16,
@@ -175,7 +198,7 @@ async function main() {
   console.log("\n--- サマリー ---");
   console.log(`該当: ${results.length}名`);
   console.log(
-    `除外: 退会・休会 ${excludedMembership} / 9月入会 ${excludedJoinedSeptember2026} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30} / 9月合計6回以上 ${excludedSepTotalOver5}`,
+    `除外: 退会・休会 ${excludedMembership} / 9月入会 ${excludedJoinedSeptember2026} / 手動 ${excludedManualMemberCodes} / 9/1〜16が6回以上 ${excludedSep1to16} / 9/17〜30が6回以上 ${excludedSep17to30} / 9月合計6回以上 ${excludedSepTotalOver5}`,
   );
 
   console.log("\n--- 一覧 ---");
