@@ -16,6 +16,7 @@ on:
       - main
     paths:
       - ".github/workflows/upload-sep-low-booking-video.yml"
+      - "scripts/upload-line-campaign-media.mjs"
 
 jobs:
   upload:
