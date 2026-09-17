@@ -109,12 +109,29 @@ function drawVideoRegion(
   return true;
 }
 
+async function captureJpeg(video: HTMLVideoElement): Promise<Blob | null> {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const max = 1280;
+  const scale = Math.min(1, max / Math.max(vw, vh));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(vw * scale));
+  canvas.height = Math.max(1, Math.round(vh * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.82);
+  });
+}
+
 export function MealBarcodeInput({
   busy,
   onLookup,
 }: {
   busy: boolean;
-  onLookup: (barcode: string) => void;
+  onLookup: (barcode: string, photo?: Blob | null) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onLookupRef = useRef(onLookup);
@@ -140,9 +157,15 @@ export function MealBarcodeInput({
     video.setAttribute("webkit-playsinline", "true");
     video.muted = true;
 
-    const finish = (raw: string) => {
+    const finish = async (raw: string) => {
       if (!alive) return;
       alive = false;
+      let photo: Blob | null = null;
+      try {
+        photo = await captureJpeg(video);
+      } catch {
+        photo = null;
+      }
       setCode(raw);
       setScanning(false);
       try {
@@ -150,7 +173,7 @@ export function MealBarcodeInput({
       } catch {
         // ignore
       }
-      onLookupRef.current(raw);
+      onLookupRef.current(raw, photo);
     };
 
     const stopTracks = () => {
@@ -214,7 +237,7 @@ export function MealBarcodeInput({
                   const found = await detector.detect(video);
                   const raw = digitsFromScan(found[0]?.rawValue);
                   if (raw.length >= 8) {
-                    finish(raw);
+                    await finish(raw);
                     return;
                   }
                 } catch {
@@ -228,7 +251,7 @@ export function MealBarcodeInput({
                     const result = reader.decodeFromCanvas(canvas);
                     const raw = digitsFromScan(result?.getText());
                     if (raw.length >= 8) {
-                      finish(raw);
+                      await finish(raw);
                       return;
                     }
                   } catch {
@@ -315,7 +338,7 @@ export function MealBarcodeInput({
         </button>
       </div>
       <p className="text-[11px] leading-relaxed text-slate-500">
-        カメラは画面いっぱいに開き、できるだけ広い範囲から読み取ります。バーコード全体が見える距離で構いません。
+        カメラは画面いっぱいに開きます。バーコード全体とパッケージの商品名が見えるように撮ると、まいばすけっと等の市販品も推定できます。
       </p>
       <label className="block text-xs font-semibold text-slate-700">
         JAN / バーコード番号

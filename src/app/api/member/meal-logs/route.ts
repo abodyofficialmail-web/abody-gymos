@@ -157,6 +157,40 @@ async function refineEstimate(estimate: MealEstimate, dishes: MealDishInput[]): 
   return applyOpenFoodFacts(refined, grams);
 }
 
+function barcodeImageFromJson(raw: Record<string, unknown>): { base64: string; mimeType: string } | null {
+  const encoded = String(raw.image_base64 ?? "").trim();
+  if (!encoded) return null;
+  const comma = encoded.indexOf(",");
+  const base64 = encoded.startsWith("data:") && comma >= 0 ? encoded.slice(comma + 1) : encoded;
+  if (base64.length < 80 || base64.length > 2_000_000) return null;
+  const mime = String(raw.mime_type ?? "image/jpeg").trim() || "image/jpeg";
+  if (!/^image\/(jpeg|jpg|png|webp)$/i.test(mime)) return null;
+  return { base64, mimeType: mime.toLowerCase() === "image/jpg" ? "image/jpeg" : mime };
+}
+
+async function estimateFromBarcodeExtras(params: {
+  barcode: string;
+  productName?: string | null;
+  image?: { base64: string; mimeType: string } | null;
+}): Promise<MealEstimate | null> {
+  const name = String(params.productName ?? "").trim();
+  const image = params.image;
+  if (!name && !image) return null;
+  const dishes: MealDishInput[] = name
+    ? [{ menu: name, grams: null, count: 1, count_unit: "個", serving: null }]
+    : [];
+  const estimated = await estimateMealFromPhoto({
+    images: image ? [{ base64: image.base64, mimeType: image.mimeType }] : undefined,
+    dishesHint: name
+      ? `まいばすけっと等の日本の市販品「${name}」1個または1パック。JAN ${params.barcode}`
+      : `JAN ${params.barcode}。日本のスーパー（まいばすけっと・トップバリュ・イオン）やコンビニの包装食品。ラベルに書いてある商品名と栄養成分を優先し、1個または1パックで推定する。`,
+    note: `JAN ${params.barcode}。公開されている栄養成分を優先する。`,
+    slotLabel: "食事",
+  });
+  if (!estimated.ok || estimated.estimate.kcal <= 0) return null;
+  return refineEstimate(estimated.estimate, dishes);
+}
+
 function parseMealItems(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   return raw.map((x) => String(x).trim()).filter(Boolean).slice(0, 16);
@@ -302,27 +336,24 @@ export async function POST(req: Request) {
             estimate_note: found.estimate.note,
           });
         }
-        const productName = found.productName;
-        if (productName) {
-          const estimated = await estimateMealFromPhoto({
-            dishesHint: `${productName} 1個`,
-            note: `JAN ${barcode}。公開されている栄養成分を優先する。`,
-            slotLabel: "食事",
+        const productName = String(raw.product_name ?? found.productName ?? "").trim();
+        const fromExtras = await estimateFromBarcodeExtras({
+          barcode,
+          productName,
+          image: barcodeImageFromJson(raw),
+        });
+        if (fromExtras) {
+          return jsonResponse({
+            ok: true,
+            preview: true,
+            estimate: fromExtras,
+            estimate_note: fromExtras.note,
           });
-          if (estimated.ok && estimated.estimate.confidence >= 0.5) {
-            const refined = await refineEstimate(estimated.estimate, []);
-            return jsonResponse({
-              ok: true,
-              preview: true,
-              estimate: refined,
-              estimate_note: refined.note,
-            });
-          }
         }
         return jsonResponse(
           {
             error:
-              "このバーコードの栄養情報が見つかりませんでした。番号を確認するか、手入力・成分表の写真で記録してください。",
+              "まいばすけっと等の日本の市販品はデータベースに無いことがあります。パッケージの商品名を入れるか、成分表を撮ってください。",
           },
           404
         );

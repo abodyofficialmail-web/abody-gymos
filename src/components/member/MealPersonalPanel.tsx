@@ -264,6 +264,7 @@ export function MealPersonalPanel({
   ]);
   const [chatInput, setChatInput] = useState("");
   const [barcodeMiss, setBarcodeMiss] = useState<string | null>(null);
+  const [barcodeName, setBarcodeName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
     items: string;
@@ -458,7 +459,7 @@ export function MealPersonalPanel({
     }
   }
 
-  async function lookupBarcode(barcode: string) {
+  async function lookupBarcode(barcode: string, photo?: Blob | null, productName?: string) {
     const digits = barcode.replace(/\D/g, "");
     if (digits.length < 8) return;
     setBusy(true);
@@ -466,12 +467,28 @@ export function MealPersonalPanel({
     setBarcodeMiss(null);
     setSavedMsg(null);
     try {
+      let imageBase64: string | undefined;
+      if (photo && photo.size > 0) {
+        imageBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const s = String(reader.result ?? "");
+            const i = s.indexOf(",");
+            resolve(i >= 0 ? s.slice(i + 1) : s);
+          };
+          reader.onerror = () => reject(reader.error ?? new Error("写真を読めませんでした"));
+          reader.readAsDataURL(photo);
+        });
+      }
       const res = await fetch(apiPath, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           kind: "barcode",
           barcode: digits,
+          product_name: productName?.trim() || undefined,
+          image_base64: imageBase64,
+          mime_type: imageBase64 ? "image/jpeg" : undefined,
           ...(signed ? { s: signed.s, sig: signed.sig } : {}),
         }),
       });
@@ -1119,28 +1136,47 @@ export function MealPersonalPanel({
         {addBack}
         <div className="text-sm font-bold text-slate-900">バーコードで記録</div>
         <p className="text-xs leading-relaxed text-slate-500">
-          市販品のJANをカメラか番号で読みます。カメラは画面いっぱいに開き、バーコード全体が枠に入れば読み取れます。
+          市販品のJANをカメラか番号で読みます。まいばすけっと等はパッケージ写真と商品名からも推定します。
         </p>
       </div>
       {slotButtons}
       {pendingCard}
-      <MealBarcodeInput busy={busy} onLookup={(code) => void lookupBarcode(code)} />
+      <MealBarcodeInput busy={busy} onLookup={(code, photo) => void lookupBarcode(code, photo)} />
       {barcodeMiss ? (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-2">
+          <label className="block text-xs font-semibold text-slate-700">
+            パッケージの商品名
+            <input
+              value={barcodeName}
+              onChange={(e) => setBarcodeName(e.target.value)}
+              placeholder="例: トップバリュ サラダチキン"
+              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal"
+            />
+          </label>
           <button
             type="button"
-            onClick={() => continueBarcodeAsRecord(false)}
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800"
+            disabled={busy || !barcodeName.trim()}
+            onClick={() => void lookupBarcode(barcodeMiss, null, barcodeName)}
+            className="w-full rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
           >
-            手入力する
+            {busy ? "検索中…" : "この名前で記録"}
           </button>
-          <button
-            type="button"
-            onClick={() => continueBarcodeAsRecord(true)}
-            className="rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white"
-          >
-            成分表を撮る
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => continueBarcodeAsRecord(false)}
+              className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800"
+            >
+              手入力する
+            </button>
+            <button
+              type="button"
+              onClick={() => continueBarcodeAsRecord(true)}
+              className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800"
+            >
+              成分表を撮る
+            </button>
+          </div>
         </div>
       ) : null}
     </section>
