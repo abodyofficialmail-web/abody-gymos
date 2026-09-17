@@ -97,6 +97,31 @@ export function pickActiveMember<T extends { is_active: boolean | null; store_id
   return rows.find((m) => m?.is_active) ?? null;
 }
 
+function isPassRowTestAccount(row: MemberPassRow, email?: string | null): boolean {
+  return isTrainerVisibilityTestAccount(email, row.member_code) || isTrainerVisibilityTestAccount(row.email, row.member_code);
+}
+
+/** 同じメールの複数行のうち、表示用の会員とパス行を分ける。パスはどの行でも有効なら残す */
+export function pickTrainerVisibilityPassSource(
+  rows: MemberPassRow[],
+  email?: string | null,
+  storeId?: string
+): { member: MemberPassRow; passRow: MemberPassRow } | null {
+  if (rows.length === 0) return null;
+  const member =
+    pickActiveMember(rows, storeId) ??
+    rows.find((m) => isPassRowTestAccount(m, email)) ??
+    rows.find((m) => isTrainerVisibilityPassActive(m)) ??
+    rows[0] ??
+    null;
+  if (!member) return null;
+  const passRow =
+    rows.find((m) => isPassRowTestAccount(m, email)) ??
+    rows.find((m) => isTrainerVisibilityPassActive(m)) ??
+    member;
+  return { member, passRow };
+}
+
 function toPassView(row: MemberPassRow, email: string): TrainerVisibilityPassView {
   if (isTrainerVisibilityTestAccount(email, row.member_code) || isTrainerVisibilityTestAccount(row.email, row.member_code)) {
     return {
@@ -138,19 +163,14 @@ export async function fetchTrainerVisibilityPassForEmail(
     throw new Error(error.message ?? "会員の取得に失敗しました");
   }
 
-  const member =
-    pickActiveMember((rows ?? []) as MemberPassRow[], storeId) ??
-    ((rows ?? []) as MemberPassRow[]).find(
-      (m) => isTrainerVisibilityTestAccount(normalized, m.member_code) || isTrainerVisibilityTestAccount(m.email, m.member_code)
-    ) ??
-    null;
-  if (!member) return null;
+  const picked = pickTrainerVisibilityPassSource((rows ?? []) as MemberPassRow[], normalized, storeId);
+  if (!picked) return null;
 
   return {
-    memberId: member.id,
-    memberCode: member.member_code,
-    name: member.name ?? "",
-    pass: toPassView(member, normalized),
+    memberId: picked.member.id,
+    memberCode: picked.member.member_code,
+    name: picked.member.name ?? "",
+    pass: toPassView(picked.passRow, normalized),
   };
 }
 
@@ -187,5 +207,17 @@ export async function fetchTrainerVisibilityPassForMemberId(
       subscribe_url: buildTrainerVisibilitySubscribeUrl(memberId, email),
     };
   }
-  return toPassView(data as MemberPassRow, email || String((data as MemberPassRow).email ?? ""));
+  const row = data as MemberPassRow;
+  const view = toPassView(row, email || String(row.email ?? ""));
+  if (view.active) return view;
+  const emailToUse = (email || String(row.email ?? "")).trim();
+  if (emailToUse) {
+    try {
+      const found = await fetchTrainerVisibilityPassForEmail(supabase, emailToUse);
+      if (found?.pass.active) return found.pass;
+    } catch (e) {
+      console.error("trainer visibility pass email fallback failed", e);
+    }
+  }
+  return view;
 }

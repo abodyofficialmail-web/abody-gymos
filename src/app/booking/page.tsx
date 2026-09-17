@@ -5,19 +5,53 @@ import { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
+import { resolveTrainerVisibilityPassActive } from "@/lib/trainerVisibilityPass";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 type Store = { id: string; name: string };
-type Slot = { startAt: string; endAt: string };
-type BookingV2Slot = { start_at: string; end_at: string };
+type SlotTrainer = { id: string; display_name: string };
+type Slot = { startAt: string; endAt: string; trainers?: SlotTrainer[] };
+type BookingV2Slot = { start_at: string; end_at: string; trainers?: SlotTrainer[] };
 type SessionType = "store" | "online";
 type DateView = "calendar" | "list";
-type AvailableDay = { date: string; slotCount: number; status: "available" | "limited" | "full" };
+type AvailableDay = {
+  date: string;
+  slotCount: number;
+  status: "available" | "limited" | "full";
+  trainers?: SlotTrainer[];
+};
 
 const TZ = "Asia/Tokyo";
 const DATE_VIEW_KEY = "booking-date-view";
+const PASS_EMAIL_KEY = "booking-trainer-pass-email";
+const PASS_CODE_KEY = "booking-trainer-pass-member-code";
+const PASS_STORE_KEY = "booking-trainer-pass-store";
+const PASS_ACTIVE_KEY = "booking-trainer-pass-active";
+
+function storageGet(key: string): string {
+  try {
+    return sessionStorage.getItem(key) ?? localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistTrainerPass(email: string, memberCode: string, active: boolean) {
+  const write = (storage: Storage) => {
+    if (email) storage.setItem(PASS_EMAIL_KEY, email);
+    if (memberCode) storage.setItem(PASS_CODE_KEY, memberCode);
+    if (active) storage.setItem(PASS_ACTIVE_KEY, "1");
+    else storage.removeItem(PASS_ACTIVE_KEY);
+  };
+  try {
+    write(sessionStorage);
+    write(localStorage);
+  } catch {
+    // ignore
+  }
+}
 const SLOT_FETCH_CONCURRENCY = 4;
 
 function readDateView(): DateView {
@@ -56,6 +90,33 @@ function formatJstTimeRange(startAtUtc: string, endAtUtc: string) {
 
 function formatJstTime(startAtUtc: string) {
   return DateTime.fromISO(startAtUtc).setZone(TZ).toFormat("HH:mm");
+}
+
+function formatTrainerNames(trainers: SlotTrainer[] | undefined): string {
+  return (trainers ?? [])
+    .map((t) => t.display_name.trim())
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function mapBookingSlots(rows: BookingV2Slot[] | null | undefined): Slot[] {
+  return (rows ?? []).map((r) => ({
+    startAt: r.start_at,
+    endAt: r.end_at,
+    trainers: r.trainers,
+  }));
+}
+
+function availableDatesPath(storeId: string, monthParam: string, email: string) {
+  const qs = new URLSearchParams({ store_id: storeId, month: monthParam });
+  if (email) qs.set("email", email);
+  return `/api/booking-v2/available-dates?${qs.toString()}`;
+}
+
+function availableSlotsPath(storeId: string, date: string, email: string) {
+  const qs = new URLSearchParams({ store_id: storeId, date });
+  if (email) qs.set("email", email);
+  return `/api/booking-v2/available-slots?${qs.toString()}`;
 }
 
 type AccentTheme = {
@@ -175,8 +236,8 @@ export default function BookingPage() {
   const [monthSlots, setMonthSlots] = useState<Record<string, Slot[]> | null>(null);
   const [monthSlotsLoading, setMonthSlotsLoading] = useState(false);
   const daysByDate = useMemo(() => {
-    const m = new Map<string, { slotCount: number; status: "available" | "limited" | "full" }>();
-    for (const d of days ?? []) m.set(d.date, { slotCount: d.slotCount, status: d.status });
+    const m = new Map<string, { slotCount: number; status: "available" | "limited" | "full"; trainers?: SlotTrainer[] }>();
+    for (const d of days ?? []) m.set(d.date, { slotCount: d.slotCount, status: d.status, trainers: d.trainers });
     return m;
   }, [days]);
 
@@ -189,6 +250,17 @@ export default function BookingPage() {
 
   const [memberEmailInput, setMemberEmailInput] = useState("");
   const [memberName, setMemberName] = useState<string>("");
+
+  const [passEmail, setPassEmail] = useState("");
+  const [passEmailInput, setPassEmailInput] = useState("");
+  const [passMemberCodeInput, setPassMemberCodeInput] = useState("");
+  const [passActive, setPassActive] = useState(false);
+  const [passBusy, setPassBusy] = useState(false);
+  const [passMsg, setPassMsg] = useState<string | null>(null);
+  const [passJustPaid, setPassJustPaid] = useState(false);
+  const [passRestoreEmail, setPassRestoreEmail] = useState("");
+  const [passCheckoutSessionId, setPassCheckoutSessionId] = useState("");
+  const [passMenuOpen, setPassMenuOpen] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,6 +281,29 @@ export default function BookingPage() {
 
   useEffect(() => {
     setDateView(readDateView());
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
+      const savedStore = storageGet(PASS_STORE_KEY);
+      if (savedStore) setSelectedStoreId(savedStore);
+      if (q.get("trainer_pass") === "success" || sessionId) {
+        setPassJustPaid(true);
+        if (savedStore) setStep(2);
+      }
+      if (sessionId) setPassCheckoutSessionId(sessionId);
+      const saved = storageGet(PASS_EMAIL_KEY);
+      const savedCode = storageGet(PASS_CODE_KEY);
+      if (saved) {
+        setMemberEmailInput((prev) => prev || saved);
+        setPassEmailInput(saved);
+        setPassEmail(saved);
+        setPassRestoreEmail(saved);
+      }
+      if (savedCode) setPassMemberCodeInput(savedCode);
+      if (storageGet(PASS_ACTIVE_KEY) === "1") setPassActive(true);
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -227,7 +322,6 @@ export default function BookingPage() {
 
   useEffect(() => {
     if (!selectedStoreId) return;
-    setMemberName("");
     setError(null);
     setSessionType("store");
     setDays(null);
@@ -235,40 +329,35 @@ export default function BookingPage() {
     setSelectedDate("");
     setSlots(null);
     setSelectedSlotKey("");
+  }, [selectedStoreId, month]);
+
+  useEffect(() => {
+    if (!selectedStoreId) return;
     const monthParam = month.toFormat("yyyy-MM");
-    apiGet<{ dates: { date: string; count: number }[] }>(
-      `/api/booking-v2/available-dates?store_id=${encodeURIComponent(selectedStoreId)}&month=${encodeURIComponent(
-        monthParam
-      )}`
+    apiGet<{ dates: { date: string; count: number; trainers?: SlotTrainer[] }[] }>(
+      availableDatesPath(selectedStoreId, monthParam, passEmail)
     )
       .then((d) =>
         setDays(
           (d.dates ?? []).map((x) => {
             const slotCount = x.count;
             const status = slotCount >= 3 ? "available" : slotCount >= 1 ? "limited" : "full";
-            return { date: x.date, slotCount, status };
+            return { date: x.date, slotCount, status, trainers: x.trainers };
           })
         )
       )
       .catch((e: any) => setError(e?.message ?? "カレンダーの取得に失敗しました"));
-  }, [selectedStoreId, month]);
+  }, [selectedStoreId, month, passEmail]);
 
   useEffect(() => {
     if (!selectedStoreId || !selectedDate) return;
     let cancelled = false;
     setMemberName("");
     setError(null);
-    apiGet<BookingV2Slot[]>(
-      `/api/booking-v2/available-slots?store_id=${encodeURIComponent(selectedStoreId)}&date=${encodeURIComponent(
-        selectedDate
-      )}`
-    )
+    apiGet<BookingV2Slot[]>(availableSlotsPath(selectedStoreId, selectedDate, passEmail))
       .then((rows) => {
         if (cancelled) return;
-        const mapped = (rows ?? []).map((r) => ({
-          startAt: r.start_at,
-          endAt: r.end_at,
-        }));
+        const mapped = mapBookingSlots(rows);
         setSlots(mapped);
         setSelectedSlotKey((prev) =>
           prev && mapped.some((s) => `${s.startAt}|${s.endAt}` === prev) ? prev : ""
@@ -281,7 +370,7 @@ export default function BookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedStoreId, selectedDate]);
+  }, [selectedStoreId, selectedDate, passEmail]);
 
   useEffect(() => {
     if (dateView !== "list") return;
@@ -296,10 +385,8 @@ export default function BookingPage() {
     }
     void mapPool(dates, SLOT_FETCH_CONCURRENCY, async (date) => {
       try {
-        const rows = await apiGet<BookingV2Slot[]>(
-          `/api/booking-v2/available-slots?store_id=${encodeURIComponent(selectedStoreId)}&date=${encodeURIComponent(date)}`
-        );
-        return [date, (rows ?? []).map((r) => ({ startAt: r.start_at, endAt: r.end_at }))] as const;
+        const rows = await apiGet<BookingV2Slot[]>(availableSlotsPath(selectedStoreId, date, passEmail));
+        return [date, mapBookingSlots(rows)] as const;
       } catch {
         return [date, [] as Slot[]] as const;
       }
@@ -313,7 +400,7 @@ export default function BookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [dateView, selectedStoreId, days, todayYmd]);
+  }, [dateView, selectedStoreId, days, todayYmd, passEmail]);
 
   const selectedStoreName = useMemo(
     () => (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "",
@@ -332,6 +419,137 @@ export default function BookingPage() {
     return { ok: true, email };
   }
 
+  async function lookupTrainerPass(
+    emailRaw: string,
+    opts?: { silent?: boolean }
+  ): Promise<{ ok: true; active: boolean } | { ok: false }> {
+    const v = validateMemberEmail(emailRaw);
+    if (!v.ok) {
+      if (!opts?.silent) setPassMsg(v.message);
+      return { ok: false };
+    }
+    setPassBusy(true);
+    if (!opts?.silent) setPassMsg(null);
+    try {
+      const qs = new URLSearchParams({ email: v.email });
+      if (selectedStoreId) qs.set("store_id", selectedStoreId);
+      const info = await apiGet<{
+        member: { id: string; member_code: string; name: string };
+        trainer_visibility_pass?: { active?: boolean; subscribe_url?: string | null };
+      }>(`/api/booking-v2/member?${qs.toString()}`);
+      const active = resolveTrainerVisibilityPassActive(
+        info.trainer_visibility_pass?.active,
+        v.email,
+        info.member.member_code || passMemberCodeInput
+      );
+      setPassEmail(v.email);
+      setMemberEmailInput(v.email);
+      setMemberName(info.member.name ?? "");
+      setPassActive(active);
+      if (info.member.member_code) setPassMemberCodeInput(info.member.member_code);
+      persistTrainerPass(v.email, info.member.member_code || passMemberCodeInput, active);
+      if (active) {
+        setPassJustPaid(false);
+        setPassMsg(null);
+      } else if (passJustPaid) {
+        setPassMsg("決済の反映を確認しています。数十秒後にもう一度お試しください。");
+      } else if (!opts?.silent) {
+        setPassMsg("このメールではまだパスがありません。上のボタンから申し込めます。");
+      }
+      return { ok: true, active };
+    } catch (e: any) {
+      // 照会失敗で既存のパス表示を消さない
+      if (!opts?.silent) setPassMsg(e?.message ?? "会員情報の取得に失敗しました");
+      return { ok: false };
+    } finally {
+      setPassBusy(false);
+    }
+  }
+
+  async function completeFromCheckout(sessionId: string) {
+    setPassBusy(true);
+    setPassMsg(null);
+    try {
+      const info = await apiGet<{
+        email: string;
+        member?: { name?: string; member_code?: string };
+        trainer_visibility_pass?: { active?: boolean };
+      }>(`/api/booking-v2/trainer-pass/from-checkout?session_id=${encodeURIComponent(sessionId)}`);
+      const email = String(info.email ?? "").trim();
+      setPassEmail(email);
+      setPassEmailInput(email);
+      setMemberEmailInput(email);
+      setMemberName(info.member?.name ?? "");
+      if (info.member?.member_code) setPassMemberCodeInput(info.member.member_code);
+      setPassActive(true);
+      setPassJustPaid(false);
+      setPassMsg(null);
+      persistTrainerPass(email, info.member?.member_code ?? "", true);
+      try {
+        window.history.replaceState({}, "", "/booking");
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setPassMsg(e?.message ?? "決済の確認に失敗しました。会員登録と同じメールで決済したか確認してください。");
+    } finally {
+      setPassBusy(false);
+    }
+  }
+
+  async function goToTrainerPassCheckout() {
+    const v = validateMemberEmail(passEmailInput);
+    const memberCode = passMemberCodeInput.trim();
+    if (!v.ok) {
+      setPassMsg("課金する前に、会員登録のメールアドレスを入力してください。");
+      return;
+    }
+    if (!memberCode) {
+      setPassMsg("課金する前に、会員番号も入力してください。");
+      return;
+    }
+    const result = await lookupTrainerPass(v.email);
+    if (!result.ok) return;
+    if (result.active) return;
+    try {
+      if (selectedStoreId) {
+        sessionStorage.setItem(PASS_STORE_KEY, selectedStoreId);
+        localStorage.setItem(PASS_STORE_KEY, selectedStoreId);
+      }
+      persistTrainerPass(v.email, memberCode, false);
+    } catch {
+      // ignore
+    }
+    const qs = new URLSearchParams({ email: v.email, member_code: memberCode });
+    window.location.href = `/api/booking-v2/trainer-pass/checkout?${qs.toString()}`;
+  }
+
+  useEffect(() => {
+    if (!passCheckoutSessionId) return;
+    void completeFromCheckout(passCheckoutSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passCheckoutSessionId]);
+
+  useEffect(() => {
+    if (!passRestoreEmail) return;
+    if (passCheckoutSessionId) return;
+    void lookupTrainerPass(passRestoreEmail, { silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passRestoreEmail, passCheckoutSessionId]);
+
+  useEffect(() => {
+    if (passJustPaid) setPassMenuOpen(true);
+  }, [passJustPaid]);
+
+  useEffect(() => {
+    if (!passJustPaid || passActive || !passEmail) return;
+    const t = window.setTimeout(() => {
+      void lookupTrainerPass(passEmail, { silent: true });
+    }, 2500);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passJustPaid, passActive, passEmail]);
+
   async function lookupMemberAndGoToConfirm() {
     const v = validateMemberEmail(memberEmailInput);
     if (!v.ok) {
@@ -343,11 +561,24 @@ export default function BookingPage() {
     try {
       const qs = new URLSearchParams({ email: v.email });
       if (selectedStoreId) qs.set("store_id", selectedStoreId);
-      const info = await apiGet<{ member: { id: string; member_code: string; name: string } }>(
+      const info = await apiGet<{
+        member: { id: string; member_code: string; name: string };
+        trainer_visibility_pass?: { active?: boolean; subscribe_url?: string | null };
+      }>(
         `/api/booking-v2/member?${qs.toString()}`
       );
       setMemberEmailInput(v.email.trim());
       setMemberName(info.member.name ?? "");
+      const pass = (info as { trainer_visibility_pass?: { active?: boolean; subscribe_url?: string | null } })
+        .trainer_visibility_pass;
+      setPassEmail(v.email);
+      setMemberEmailInput(v.email);
+      const nextActive = resolveTrainerVisibilityPassActive(pass?.active, v.email, info.member.member_code);
+      setPassActive((prev) => {
+        const merged = v.email === passEmail ? prev || nextActive : nextActive;
+        persistTrainerPass(v.email, info.member.member_code, merged);
+        return merged;
+      });
       setStep(6);
     } catch (e: any) {
       setMemberName("");
@@ -443,7 +674,7 @@ export default function BookingPage() {
 
   function goToDate(ymd: string, slot?: Slot | null) {
     setSelectedDate(ymd);
-    setMemberEmailInput("");
+    if (!passEmail) setMemberEmailInput("");
     setSessionType("store");
     if (slot) {
       const daySlots = monthSlots?.[ymd];
@@ -466,6 +697,88 @@ export default function BookingPage() {
       status === "available" ? "var(--ok)" : status === "limited" ? "var(--warn)" : "var(--muted)";
     return { symbol, color };
   }
+
+  const trainerPassBanner = (
+    <div className="rounded-xl border border-line bg-white px-4 py-3 space-y-2">
+      {passActive ? (
+        <>
+          <div className="text-sm font-semibold">担当トレーナー表示中</div>
+          <div className="text-xs text-ink-500">各日・各時間の出勤トレーナーを表示しています。</div>
+        </>
+      ) : !passMenuOpen ? (
+        <button
+          type="button"
+          onClick={() => setPassMenuOpen(true)}
+          className="w-full rounded-xl border px-4 py-3 text-sm font-semibold"
+          style={{ borderColor: "var(--accentBorder)", color: "var(--accent)" }}
+        >
+          担当トレーナー表示（オプション）
+        </button>
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-ink-700">会員登録のメールアドレス</div>
+            <button
+              type="button"
+              onClick={() => setPassMenuOpen(false)}
+              className="text-xs text-ink-500 underline-offset-2 hover:underline"
+            >
+              閉じる
+            </button>
+          </div>
+          <input
+            value={passEmailInput}
+            onChange={(e) => setPassEmailInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void lookupTrainerPass(passEmailInput);
+              }
+            }}
+            placeholder="example@email.com"
+            inputMode="email"
+            autoCapitalize="none"
+            className="w-full rounded-xl border border-line px-3 py-2 text-sm outline-none"
+          />
+          <div className="text-xs font-semibold text-ink-700">会員番号</div>
+          <input
+            value={passMemberCodeInput}
+            onChange={(e) => setPassMemberCodeInput(e.target.value)}
+            placeholder="例: EBI020"
+            autoCapitalize="characters"
+            className="w-full rounded-xl border border-line px-3 py-2 text-sm outline-none"
+          />
+          <button
+            type="button"
+            disabled={passBusy}
+            onClick={() => void goToTrainerPassCheckout()}
+            className="w-full rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+            style={{ background: "var(--accent)" }}
+          >
+            {passBusy ? "確認中…" : "オプション追加してトレーナーを表示する"}
+          </button>
+          <div className="pt-1 text-xs text-ink-500 leading-relaxed">
+            すでに登録済みの方は、同じアドレスで下のボタンを押してください。課金した人は、このメールで会員と紐づきます。
+          </div>
+          <button
+            type="button"
+            disabled={passBusy}
+            onClick={() => void lookupTrainerPass(passEmailInput)}
+            className="w-full rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-60"
+            style={{ borderColor: "var(--accentBorder)", color: "var(--accent)" }}
+          >
+            {passBusy ? "確認中…" : "メールで表示する"}
+          </button>
+        </>
+      )}
+      {passJustPaid && !passActive ? (
+        <div className="text-xs" style={{ color: "var(--accent)" }}>
+          決済を確認しています…
+        </div>
+      ) : null}
+      {passMsg ? <div className="text-xs text-ink-500">{passMsg}</div> : null}
+    </div>
+  );
 
   return (
     <main
@@ -509,6 +822,10 @@ export default function BookingPage() {
         </div>
       ) : null}
 
+      <div className="sticky top-0 z-20 -mx-1 bg-white/95 px-1 py-1 backdrop-blur">
+        {trainerPassBanner}
+      </div>
+
       {/* Step 1: store */}
       {step === 1 ? (
         <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
@@ -526,6 +843,12 @@ export default function BookingPage() {
                   type="button"
                   onClick={() => {
                     setSelectedStoreId(s.id);
+                    try {
+                      sessionStorage.setItem(PASS_STORE_KEY, s.id);
+                      localStorage.setItem(PASS_STORE_KEY, s.id);
+                    } catch {
+                      // ignore
+                    }
                     setMonth(DateTime.now().setZone(TZ).startOf("month"));
                     setSessionType("store");
                     setStep(2);
@@ -631,6 +954,7 @@ export default function BookingPage() {
                     const status = meta?.status ?? "full";
                     const { symbol, color } = dayStatusMeta(status);
                     const isPast = ymd ? ymd < todayYmd : false;
+                    const names = formatTrainerNames(meta?.trainers);
                     const disabled = !inMonth || !ymd || isPast || (meta?.slotCount ?? 0) === 0;
                     const selected = ymd && selectedDate === ymd;
 
@@ -641,7 +965,8 @@ export default function BookingPage() {
                         disabled={disabled || !selectedStoreId}
                         onClick={() => goToDate(ymd)}
                         className={[
-                          "aspect-square rounded-xl border p-2 text-left transition-colors",
+                          "rounded-xl border p-1.5 text-left transition-colors",
+                          passActive ? "min-h-[76px]" : "aspect-square p-2",
                           !inMonth ? "border-transparent bg-transparent" : "border-line bg-white",
                           disabled && inMonth ? "opacity-50" : "hover:bg-[#F9FAFB]",
                         ].join(" ")}
@@ -652,11 +977,14 @@ export default function BookingPage() {
                         }
                       >
                         {inMonth ? (
-                          <div className="h-full flex flex-col justify-between">
-                            <div className="text-sm font-medium">{dayNum}</div>
-                            <div className="text-sm font-semibold" style={{ color }}>
-                              {symbol}
+                          <div className="h-full flex flex-col justify-between gap-0.5">
+                            <div className="flex items-start justify-between gap-0.5">
+                              <div className="text-sm font-medium">{dayNum}</div>
+                              <div className="text-xs font-semibold" style={{ color }}>
+                                {symbol}
+                              </div>
                             </div>
+                            {names ? <div className="text-[9px] leading-tight text-ink-500 line-clamp-3">{names}</div> : null}
                           </div>
                         ) : (
                           <div />
@@ -683,7 +1011,14 @@ export default function BookingPage() {
                       onClick={() => goToDate(d.date)}
                       className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
                     >
-                      <div className="text-sm font-semibold">{formatJstDateLabel(d.date)}</div>
+                      <div>
+                        <div className="text-sm font-semibold">{formatJstDateLabel(d.date)}</div>
+                        {formatTrainerNames(d.trainers) ? (
+                          <div className="pt-0.5 text-[11px] font-normal text-ink-500">
+                            {formatTrainerNames(d.trainers)}
+                          </div>
+                        ) : null}
+                      </div>
                       <div className="text-xs font-medium" style={{ color }}>
                         {symbol} {d.slotCount}枠
                       </div>
@@ -697,10 +1032,15 @@ export default function BookingPage() {
                           key={`${s.startAt}|${s.endAt}`}
                           type="button"
                           onClick={() => goToDate(d.date, s)}
-                          className="rounded-xl border px-3 py-2 text-sm font-medium"
+                          className="rounded-xl border px-3 py-2 text-left text-sm font-medium"
                           style={{ borderColor: "#E5E7EB", background: "#fff" }}
                         >
-                          {formatJstTime(s.startAt)}
+                          <div>{formatJstTime(s.startAt)}</div>
+                          {formatTrainerNames(s.trainers) ? (
+                            <div className="pt-0.5 text-[11px] font-normal text-ink-500">
+                              {formatTrainerNames(s.trainers)}
+                            </div>
+                          ) : null}
                         </button>
                       ))}
                     </div>
@@ -796,10 +1136,11 @@ export default function BookingPage() {
             <div className="text-sm text-ink-500">{selectedStoreName} / {selectedDate ? formatJstDateLabel(selectedDate) : "-"}</div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className={passActive ? "grid grid-cols-2 gap-2" : "grid grid-cols-3 gap-2"}>
             {(slots ?? []).map((s) => {
               const k = `${s.startAt}|${s.endAt}`;
               const selected = selectedSlotKey === k;
+              const names = formatTrainerNames(s.trainers);
               return (
                 <button
                   key={k}
@@ -808,7 +1149,7 @@ export default function BookingPage() {
                     setSelectedSlotKey(k);
                     setStep(5);
                   }}
-                  className="rounded-xl border px-3 py-3 text-center transition-colors"
+                  className="rounded-xl border px-3 py-3 text-left transition-colors"
                   style={
                     selected
                       ? { borderColor: "var(--accentBorder)", background: "var(--accentSoft)" }
@@ -816,6 +1157,7 @@ export default function BookingPage() {
                   }
                 >
                   <div className="text-sm font-medium">{formatJstTime(s.startAt)}</div>
+                  {names ? <div className="pt-1 text-[11px] text-ink-500">{names}</div> : null}
                 </button>
               );
             })}
@@ -889,6 +1231,9 @@ export default function BookingPage() {
               <div className="text-base font-medium">
                 {selectedSlot ? formatJstTimeRange(selectedSlot.startAt, selectedSlot.endAt) : "-"}
               </div>
+              {formatTrainerNames(selectedSlot?.trainers) ? (
+                <div className="text-sm text-ink-500">出勤: {formatTrainerNames(selectedSlot?.trainers)}</div>
+              ) : null}
             </div>
             <div className="space-y-1">
               <div className="text-xs text-ink-500">会員</div>

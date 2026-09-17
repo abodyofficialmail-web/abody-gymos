@@ -8,6 +8,10 @@ import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
 import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import { isBookingClosedDate } from "@/lib/bookingClosedDates";
+import { trainerIdsOnShiftForSlot } from "@/lib/onShiftTrainers";
+import { fetchTrainerVisibilityPassForEmail, isTrainerVisibilityTestAccount } from "@/lib/trainerVisibilityPass";
+import { dropInviteOnlyShifts } from "@/lib/inviteShiftBooking";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 export async function OPTIONS() {
@@ -22,10 +26,6 @@ const querySchema = z.object({
   include_past: z.enum(["1", "true"]).optional(),
 });
 const SLOT_MINUTES = 30;
-function isApril2026Closed(ymd: string) {
-  // 要望: 2026年4月の予約を一旦閉じる
-  return String(ymd).startsWith("2026-04-");
-}
 type ShiftRow = {
   id: string;
   trainer_id: string;
@@ -90,6 +90,7 @@ function createServiceClient():
 export type AvailableSlotDto = {
   start_at: string;
   end_at: string;
+  trainers?: Array<{ id: string; display_name: string }>;
 };
 export async function GET(request: Request) {
   try {
@@ -108,12 +109,23 @@ export async function GET(request: Request) {
     const shouldApplyCutoff = !ignore_cutoff;
     const shouldIncludePast = Boolean(include_past);
     console.log("slots debug", { store_id, date });
-    if (isApril2026Closed(date)) {
+    if (isBookingClosedDate(date)) {
       return jsonResponse([], 200);
     }
     const client = createServiceClient();
     if (client.errorResponse) return client.errorResponse;
     const supabase = client.supabase;
+    const emailRaw = (url.searchParams.get("email") ?? "").trim();
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(emailRaw) ? emailRaw : "";
+    let revealTrainers = isTrainerVisibilityTestAccount(email);
+    if (email && !revealTrainers) {
+      try {
+        const found = await fetchTrainerVisibilityPassForEmail(supabase, email, store_id);
+        revealTrainers = Boolean(found?.pass.active);
+      } catch (e) {
+        console.error("trainer visibility pass lookup failed", e);
+      }
+    }
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
       .select("id, name, timezone, booking_cutoff_prev_day_time")
@@ -231,6 +243,7 @@ export async function GET(request: Request) {
         }
       }
     }
+    shifts = await dropInviteOnlyShifts(supabase, shifts);
     console.log("shifts found", shifts);
     if (shifts.length === 0) {
       return jsonResponse([] satisfies AvailableSlotDto[], 200);
@@ -414,6 +427,43 @@ export async function GET(request: Request) {
     }
 
     results.sort((a, b) => a.start_at.localeCompare(b.start_at));
+
+    if (revealTrainers && results.length > 0) {
+      const idsByKey = new Map<string, string[]>();
+      const allIds = new Set<string>();
+      for (const se of results) {
+        const startLocal = DateTime.fromISO(se.start_at).setZone(zone);
+        const endLocal = DateTime.fromISO(se.end_at).setZone(zone);
+        const slotStartMin = startLocal.hour * 60 + startLocal.minute;
+        const slotEndMin = endLocal.hour * 60 + endLocal.minute;
+        const ids = trainerIdsOnShiftForSlot({
+          shifts,
+          breaksByShiftId,
+          slotStartMin,
+          slotEndMin,
+        });
+        idsByKey.set(`${se.start_at}|${se.end_at}`, ids);
+        for (const id of ids) allIds.add(id);
+      }
+      const nameById = new Map<string, string>();
+      if (allIds.size > 0) {
+        const { data: trainerRows } = await supabase
+          .from("trainers")
+          .select("id, display_name")
+          .in("id", Array.from(allIds));
+        for (const t of trainerRows ?? []) {
+          nameById.set(String(t.id), String(t.display_name ?? "").trim());
+        }
+      }
+      for (const se of results) {
+        const trainers = (idsByKey.get(`${se.start_at}|${se.end_at}`) ?? [])
+          .map((id) => ({ id, display_name: nameById.get(id) ?? "" }))
+          .filter((t) => t.display_name)
+          .sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
+        if (trainers.length > 0) se.trainers = trainers;
+      }
+    }
+
     return jsonResponse(results satisfies AvailableSlotDto[], 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

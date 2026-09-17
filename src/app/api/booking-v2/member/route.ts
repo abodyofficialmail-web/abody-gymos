@@ -2,6 +2,12 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Database } from "@/types/database";
 import { jsonResponse } from "../_cors";
+import { pickBookableMember } from "@/lib/memberMembershipStatus";
+import {
+  fetchTrainerVisibilityPassForMemberId,
+  isTrainerVisibilityTestAccount,
+  trainerVisibilityPassPriceLabel,
+} from "@/lib/trainerVisibilityPass";
 
 export async function OPTIONS() {
   return jsonResponse({}, 200);
@@ -17,17 +23,9 @@ type MemberRow = {
   member_code: string;
   name: string | null;
   is_active: boolean | null;
+  membership_status?: string | null;
   store_id?: string | null;
 };
-
-function pickActiveMember(rows: MemberRow[], storeId?: string): MemberRow | null {
-  // メールは店舗を跨いで重複し得るため、予約作成 API と同じ優先順位で1件選ぶ
-  if (storeId) {
-    const home = rows.find((m) => m?.is_active && String(m?.store_id ?? "") === storeId);
-    if (home) return home;
-  }
-  return rows.find((m) => m?.is_active) ?? null;
-}
 
 export async function GET(request: Request) {
   try {
@@ -58,19 +56,41 @@ export async function GET(request: Request) {
     });
 
     const email = parsed.data.email.trim();
-    const { data: rows, error } = await supabase
-      .from("members")
-      .select("id, member_code, name, is_active, store_id")
-      .ilike("email", email)
-      .limit(10);
+    const selectWithStatus = "id, member_code, name, is_active, membership_status, store_id";
+    const selectLegacy = "id, member_code, name, is_active, store_id";
+    const first = await supabase.from("members").select(selectWithStatus).ilike("email", email).limit(10);
+    let rows: MemberRow[] = [];
+    let error = first.error;
+    if (error && /membership_status/i.test(error.message ?? "")) {
+      const retry = await supabase.from("members").select(selectLegacy).ilike("email", email).limit(10);
+      rows = (retry.data ?? []) as MemberRow[];
+      error = retry.error;
+    } else {
+      rows = (first.data ?? []) as MemberRow[];
+    }
 
     if (error) {
       return jsonResponse({ error: "会員の取得に失敗しました", detail: error.message }, 500);
     }
 
-    const member = pickActiveMember((rows ?? []) as MemberRow[], parsed.data.store_id);
+    const member = pickBookableMember(rows, parsed.data.store_id);
     if (!member) {
       return jsonResponse({ error: "会員が見つかりません" }, 404);
+    }
+
+    let trainerVisibilityPass = {
+      active: false,
+      status: "inactive",
+      current_period_end: null as string | null,
+      subscribe_url: null as string | null,
+    };
+    try {
+      trainerVisibilityPass = await fetchTrainerVisibilityPassForMemberId(supabase, member.id, email);
+    } catch (e) {
+      console.error("trainer visibility pass lookup failed", e);
+    }
+    if (!trainerVisibilityPass.active && isTrainerVisibilityTestAccount(email, member.member_code)) {
+      trainerVisibilityPass = { active: true, status: "test", current_period_end: null, subscribe_url: null };
     }
 
     return jsonResponse(
@@ -79,6 +99,10 @@ export async function GET(request: Request) {
           id: member.id,
           member_code: member.member_code,
           name: member.name ?? "",
+        },
+        trainer_visibility_pass: {
+          ...trainerVisibilityPass,
+          price_label: trainerVisibilityPassPriceLabel(),
         },
       },
       200

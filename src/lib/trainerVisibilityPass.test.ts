@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   isTrainerVisibilityPassActive,
   isTrainerVisibilityTestAccount,
+  pickTrainerVisibilityPassSource,
   resolveTrainerVisibilityPassActive,
 } from "./trainerVisibilityPass.ts";
 import { formatOnShiftTrainerNames, trainerIdsOnShiftForSlot } from "./onShiftTrainers.ts";
@@ -55,6 +56,39 @@ describe("isTrainerVisibilityTestAccount", () => {
     assert.equal(isTrainerVisibilityTestAccount("someone@example.com", "ebi020"), true);
     assert.equal(isTrainerVisibilityTestAccount("someone@example.com", "other"), false);
     assert.equal(isTrainerVisibilityTestAccount(""), false);
+  });
+});
+
+describe("pickTrainerVisibilityPassSource", () => {
+  it("keeps an active pass even when the store-matched row is inactive", () => {
+    const picked = pickTrainerVisibilityPassSource(
+      [
+        {
+          id: "ueno",
+          member_code: "UEN001",
+          name: "川井",
+          email: "kawai@example.com",
+          is_active: true,
+          store_id: "store-ueno",
+          trainer_visibility_pass_status: "inactive",
+        },
+        {
+          id: "shinjuku",
+          member_code: "SHI001",
+          name: "川井",
+          email: "kawai@example.com",
+          is_active: true,
+          store_id: "store-shinjuku",
+          trainer_visibility_pass_status: "active",
+          trainer_visibility_pass_current_period_end: "2026-10-02T00:00:00.000Z",
+        },
+      ],
+      "kawai@example.com",
+      "store-ueno"
+    );
+    assert.equal(picked?.member.id, "ueno");
+    assert.equal(picked?.passRow.id, "shinjuku");
+    assert.equal(isTrainerVisibilityPassActive(picked?.passRow), true);
   });
 });
 

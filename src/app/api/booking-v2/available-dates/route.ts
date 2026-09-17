@@ -5,6 +5,9 @@ import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
 import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import { isBookingClosedDate } from "@/lib/bookingClosedDates";
+import { fetchTrainerVisibilityPassForEmail, isTrainerVisibilityTestAccount } from "@/lib/trainerVisibilityPass";
+import { dropInviteOnlyShifts } from "@/lib/inviteShiftBooking";
 export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
@@ -14,10 +17,6 @@ const querySchema = z.object({
   trainer_id: z.string().uuid("trainer_id は有効なUUIDである必要があります").optional(),
 });
 const SLOT_MINUTES = 30;
-function isApril2026Closed(ymd: string) {
-  // 要望: 2026年4月の予約を一旦閉じる
-  return String(ymd).startsWith("2026-04-");
-}
 type ShiftRow = {
   id: string;
   trainer_id: string;
@@ -79,7 +78,7 @@ function createServiceClient():
   });
   return { supabase, errorResponse: null };
 }
-type DateCount = { date: string; count: number };
+type DateCount = { date: string; count: number; trainers?: Array<{ id: string; display_name: string }> };
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -95,6 +94,17 @@ export async function GET(request: Request) {
     const client = createServiceClient();
     if (client.errorResponse) return client.errorResponse;
     const supabase = client.supabase;
+    const emailRaw = (url.searchParams.get("email") ?? "").trim();
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(emailRaw) ? emailRaw : "";
+    let revealTrainers = isTrainerVisibilityTestAccount(email);
+    if (email && !revealTrainers) {
+      try {
+        const found = await fetchTrainerVisibilityPassForEmail(supabase, email, store_id);
+        revealTrainers = Boolean(found?.pass.active);
+      } catch (e) {
+        console.error("trainer visibility pass lookup failed", e);
+      }
+    }
     const { data: storeRow, error: storeErr } = await supabase
       .from("stores")
       .select("id, name, timezone, booking_cutoff_prev_day_time")
@@ -151,6 +161,7 @@ export async function GET(request: Request) {
         shifts = (shiftsRaw ?? []) as unknown as ShiftRow[];
       }
     }
+    shifts = await dropInviteOnlyShifts(supabase, shifts);
     const monthStartUtc = monthStartLocal.startOf("day").toUTC();
     const nextMonthStartUtc = monthStartLocal.plus({ months: 1 }).startOf("month").toUTC();
     async function fetchReservationsForMonth(selectCols: string) {
@@ -375,9 +386,37 @@ export async function GET(request: Request) {
         { zone }
       ).minus({ days: 1 });
       const allowed = now.toMillis() <= cutoff.toMillis();
-      if (isApril2026Closed(d.date)) return { ...d, count: 0 };
+      if (isBookingClosedDate(d.date)) return { ...d, count: 0 };
       return allowed ? d : { ...d, count: 0 };
     });
+
+    if (revealTrainers) {
+      const idsByDate = new Map<string, Set<string>>();
+      for (const shift of shifts) {
+        if (shift.is_break) continue;
+        const day = String(shift.shift_date ?? "").slice(0, 10);
+        if (!day) continue;
+        const set = idsByDate.get(day) ?? new Set<string>();
+        if (shift.trainer_id) set.add(shift.trainer_id);
+        idsByDate.set(day, set);
+      }
+      const allIds = Array.from(new Set(Array.from(idsByDate.values()).flatMap((s) => Array.from(s))));
+      const nameById = new Map<string, string>();
+      if (allIds.length > 0) {
+        const { data: trainerRows } = await supabase.from("trainers").select("id, display_name").in("id", allIds);
+        for (const t of trainerRows ?? []) {
+          nameById.set(String(t.id), String(t.display_name ?? "").trim());
+        }
+      }
+      for (const d of dates2) {
+        const trainers = Array.from(idsByDate.get(d.date) ?? [])
+          .map((id) => ({ id, display_name: nameById.get(id) ?? "" }))
+          .filter((t) => t.display_name)
+          .sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
+        if (trainers.length > 0) d.trainers = trainers;
+      }
+    }
+
     return jsonResponse({ dates: dates2 }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
