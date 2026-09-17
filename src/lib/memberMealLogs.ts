@@ -141,6 +141,7 @@ export function isMissingMealPersonalTable(err: { code?: string; message?: strin
     m.includes("member_lifestyle_logs") ||
     m.includes("meal_personal_reminder_dispatches") ||
     m.includes("member_meal_reminder_settings") ||
+    m.includes("meal_barcode_products") ||
     m.includes("Could not find the table")
   );
 }

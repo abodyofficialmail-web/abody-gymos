@@ -5,7 +5,13 @@ import { loadMealPersonalDashboard } from "@/lib/memberMealDashboard";
 import { estimateMealFromPhoto, sanitizeMealEstimate, type MealEstimate } from "@/lib/memberMealEstimate";
 import { applyMealCatalog } from "@/lib/memberMealCatalog";
 import { applyMextFoods } from "@/lib/memberMealFoodDb";
-import { applyOpenFoodFacts, isJapaneseRetailBarcode, isMealBarcode, lookupMealBarcode } from "@/lib/memberMealFoodFacts";
+import { applyOpenFoodFacts, isMealBarcode, lookupMealBarcode } from "@/lib/memberMealFoodFacts";
+import {
+  lookupMealBarcodeProduct,
+  mealBarcodeProductToEstimate,
+  mealEstimateProductName,
+  upsertMealBarcodeProduct,
+} from "@/lib/memberMealBarcodeMaster";
 import {
   buildMealChatContext,
   formatMealLogForChat,
@@ -178,16 +184,13 @@ async function estimateFromBarcodeExtras(params: {
 }): Promise<MealEstimate | null> {
   const name = String(params.productName ?? "").trim();
   const image = params.image;
-  const japanese = isJapaneseRetailBarcode(params.barcode);
-  if (!name && !image && !japanese) return null;
+  if (!name && !image) return null;
   const dishes: MealDishInput[] = name
     ? [{ menu: name, grams: null, count: 1, count_unit: "個", serving: null }]
     : [];
   const dishesHint = name
     ? `${JP_RETAIL_HINT} 商品名は「${name}」。1個または1パック。JAN ${params.barcode}`
-    : image
-      ? `JAN ${params.barcode}。${JP_RETAIL_HINT} 写真のラベルの商品名と栄養成分を優先し、1個または1パックで推定する。`
-      : `JAN ${params.barcode} は日本の流通用バーコード。${JP_RETAIL_HINT} この番号で一意に特定できる公式商品があればその1個分を使う。特定できなければ confidence は 0.2、name は「不明な市販品」。`;
+    : `JAN ${params.barcode}。${JP_RETAIL_HINT} 写真のラベルの商品名と栄養成分を優先し、1個または1パックで推定する。`;
   const estimated = await estimateMealFromPhoto({
     images: image ? [{ base64: image.base64, mimeType: image.mimeType }] : undefined,
     dishesHint,
@@ -195,8 +198,6 @@ async function estimateFromBarcodeExtras(params: {
     slotLabel: "食事",
   });
   if (!estimated.ok || estimated.estimate.kcal <= 0) return null;
-  const unknown = /不明/.test(estimated.estimate.items.join(" ") + (estimated.estimate.note ?? ""));
-  if (!name && !image && (estimated.estimate.confidence < 0.5 || unknown)) return null;
   return refineEstimate(estimated.estimate, dishes);
 }
 
@@ -336,6 +337,16 @@ export async function POST(req: Request) {
         if (!isMealBarcode(barcode)) {
           return jsonResponse({ error: "バーコードは8〜14桁の数字で入力してください" }, 400);
         }
+        const master = await lookupMealBarcodeProduct(supabase, barcode);
+        if (master) {
+          const estimate = mealBarcodeProductToEstimate(master);
+          return jsonResponse({
+            ok: true,
+            preview: true,
+            estimate,
+            estimate_note: estimate.note,
+          });
+        }
         const found = await lookupMealBarcode(barcode);
         if (found.estimate) {
           return jsonResponse({
@@ -359,13 +370,13 @@ export async function POST(req: Request) {
             estimate_note: fromExtras.note,
           });
         }
-        return jsonResponse(
-          {
-            error:
-              "日本のコンビニ・スーパーの商品はデータベースに無いことがあります。パッケージの商品名を入れるか、成分表を撮ってください。",
-          },
-          404
-        );
+        return jsonResponse({
+          ok: true,
+          needs_name: true,
+          barcode,
+          error:
+            "番号は読み取れました。パッケージの商品名・成分表を入れてください。一度記録したJANは次回から出ます。",
+        });
       }
 
       if (raw.kind === "delete_meal") {
@@ -636,6 +647,19 @@ export async function POST(req: Request) {
     if (!saved.ok) {
       if (saved.missingTable) return jsonResponse({ error: "食事パーソナルの準備ができていません。SQLを適用してください。" }, 503);
       return jsonResponse({ error: "食事の保存に失敗しました", detail: saved.error }, 500);
+    }
+
+    const barcodeRaw = String(form.get("barcode") ?? "").trim();
+    if (isMealBarcode(barcodeRaw)) {
+      await upsertMealBarcodeProduct(supabase, {
+        barcode: barcodeRaw,
+        name: mealEstimateProductName(refined, itemNames[0] || "バーコード商品"),
+        kcal: refined.kcal,
+        proteinG: refined.protein_g,
+        fatG: refined.fat_g,
+        carbG: refined.carb_g,
+        memberId: resolved.memberId,
+      });
     }
 
     const data = await dash(supabase, resolved.memberId);

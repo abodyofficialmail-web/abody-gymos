@@ -216,6 +216,8 @@ async function fetchOffProduct(barcode: string): Promise<OffProduct | null> {
 export function isJapaneseRetailBarcode(raw: string): boolean {
   const n = digitsOnly(raw);
   const code = n.length === 14 && n.startsWith("0") ? n.slice(1) : n;
+  if (code.length < 8) return false;
+  if (code.startsWith("02") || /^2[0-9]/.test(code)) return true;
   return (code.length === 8 || code.length === 13) && (code.startsWith("45") || code.startsWith("49"));
 }
 

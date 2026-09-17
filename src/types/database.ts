@@ -1206,6 +1206,45 @@ export interface Database {
         };
         Relationships: [];
       };
+      meal_barcode_products: {
+        Row: {
+          barcode: string;
+          name: string;
+          kcal: number;
+          protein_g: number;
+          fat_g: number;
+          carb_g: number;
+          confirm_count: number;
+          last_member_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          barcode: string;
+          name: string;
+          kcal: number;
+          protein_g: number;
+          fat_g: number;
+          carb_g: number;
+          confirm_count?: number;
+          last_member_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          barcode?: string;
+          name?: string;
+          kcal?: number;
+          protein_g?: number;
+          fat_g?: number;
+          carb_g?: number;
+          confirm_count?: number;
+          last_member_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       member_lifestyle_logs: {
         Row: {
           id: string;

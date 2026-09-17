@@ -58,6 +58,7 @@ type MealDashboard = {
   estimate_note?: string;
   preview?: boolean;
   estimate?: MealEstimate;
+  needs_name?: boolean;
   error?: string;
   reply?: string;
   ready?: boolean;
@@ -265,6 +266,7 @@ export function MealPersonalPanel({
   const [chatInput, setChatInput] = useState("");
   const [barcodeMiss, setBarcodeMiss] = useState<string | null>(null);
   const [barcodeName, setBarcodeName] = useState("");
+  const [activeBarcode, setActiveBarcode] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
     items: string;
@@ -410,6 +412,9 @@ export function MealPersonalPanel({
       setDishes([{ ...EMPTY_DISH }]);
       setChatMessages([{ role: "assistant", text: MEAL_CHAT_GREETING }]);
       setChatInput("");
+      setActiveBarcode(null);
+      setBarcodeMiss(null);
+      setBarcodeName("");
       setTab("home");
     } catch (e) {
       setErr(String((e as Error)?.message ?? "保存に失敗しました"));
@@ -465,6 +470,7 @@ export function MealPersonalPanel({
     setBusy(true);
     setErr(null);
     setBarcodeMiss(null);
+    setActiveBarcode(digits);
     setSavedMsg(null);
     try {
       let imageBase64: string | undefined;
@@ -496,6 +502,14 @@ export function MealPersonalPanel({
       if (!res.ok) throw new Error(json.error || "商品の取得に失敗しました");
       if (json.estimate) {
         setPending(json.estimate);
+        return;
+      }
+      if (json.needs_name) {
+        setBarcodeMiss(digits);
+        setErr(
+          json.error ||
+            "番号は読み取れました。パッケージの商品名・成分表を入れてください。一度記録したJANは次回から出ます。"
+        );
         return;
       }
       throw new Error("商品の栄養情報が見つかりませんでした");
@@ -541,6 +555,8 @@ export function MealPersonalPanel({
       const blob = await compressImage(photo.file);
       form.append("photos", new File([blob], "meal.jpg", { type: "image/jpeg" }));
     }
+    const barcode = activeBarcode || barcodeMiss;
+    if (barcode) form.set("barcode", barcode);
     return form;
   }
 
@@ -1136,7 +1152,7 @@ export function MealPersonalPanel({
         {addBack}
         <div className="text-sm font-bold text-slate-900">バーコードで記録</div>
         <p className="text-xs leading-relaxed text-slate-500">
-          日本のコンビニ・スーパーのJANに対応しています。カメラはバーコードと商品名が見えるように向けてください。
+          スキャン後、見つからない場合はパッケージの成分表を入力してください。同じJANは2回目から出ます。
         </p>
       </div>
       {slotButtons}

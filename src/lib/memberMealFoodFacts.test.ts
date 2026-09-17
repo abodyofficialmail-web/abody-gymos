@@ -29,7 +29,7 @@ describe("isJapaneseRetailBarcode", () => {
     assert.equal(isJapaneseRetailBarcode("4901777234826"), true);
     assert.equal(isJapaneseRetailBarcode("4512345678901"), true);
     assert.equal(isJapaneseRetailBarcode("04901777234826"), true);
-    assert.equal(isJapaneseRetailBarcode("1234567890123"), false);
-    assert.equal(isJapaneseRetailBarcode("012345678905"), false);
+    assert.equal(isJapaneseRetailBarcode("0201234567890"), true);
+    assert.equal(isJapaneseRetailBarcode("2101234567890"), true);
   });
 });

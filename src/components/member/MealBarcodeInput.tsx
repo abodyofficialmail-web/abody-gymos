@@ -6,7 +6,7 @@ type NativeDetector = {
   detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue?: string }>>;
 };
 
-const NATIVE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "itf"] as const;
+const NATIVE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "itf", "codabar"] as const;
 
 function NativeBarcodeDetector(): (new (opts?: { formats?: string[] }) => NativeDetector) | null {
   const Ctor = (window as unknown as { BarcodeDetector?: new (opts?: { formats?: string[] }) => NativeDetector })
@@ -205,6 +205,9 @@ export function MealBarcodeInput({
             library.BarcodeFormat.UPC_E,
             library.BarcodeFormat.CODE_128,
             library.BarcodeFormat.ITF,
+            library.BarcodeFormat.RSS_14,
+            library.BarcodeFormat.RSS_EXPANDED,
+            library.BarcodeFormat.CODABAR,
           ]);
           hints.set(library.DecodeHintType.TRY_HARDER, true);
         }
