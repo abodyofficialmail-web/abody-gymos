@@ -5,7 +5,7 @@ import { loadMealPersonalDashboard } from "@/lib/memberMealDashboard";
 import { estimateMealFromPhoto, sanitizeMealEstimate, type MealEstimate } from "@/lib/memberMealEstimate";
 import { applyMealCatalog } from "@/lib/memberMealCatalog";
 import { applyMextFoods } from "@/lib/memberMealFoodDb";
-import { applyOpenFoodFacts, isMealBarcode, lookupMealBarcode } from "@/lib/memberMealFoodFacts";
+import { applyOpenFoodFacts, isJapaneseRetailBarcode, isMealBarcode, lookupMealBarcode } from "@/lib/memberMealFoodFacts";
 import {
   buildMealChatContext,
   formatMealLogForChat,
@@ -168,6 +168,9 @@ function barcodeImageFromJson(raw: Record<string, unknown>): { base64: string; m
   return { base64, mimeType: mime.toLowerCase() === "image/jpg" ? "image/jpeg" : mime };
 }
 
+const JP_RETAIL_HINT =
+  "日本のコンビニ（セブンイレブン、ファミリーマート、ローソン、ミニストップ、セイコーマート、デイリーヤマザキ）とスーパー（イオン、まいばすけっと、ダイエー、ライフ、サミット、成城石井、業務スーパー、ヨーク、オーケー、ベルク、カスミ）の包装食品・惣菜・飲料。セブンプレミアム、ファミマル、ローソンセレクト、トップバリュ、みなさまのお墨付き、くらし良好などのPBも含む。店やメーカーが公開している1個・1本・1パックあたりの栄養成分を優先する。";
+
 async function estimateFromBarcodeExtras(params: {
   barcode: string;
   productName?: string | null;
@@ -175,19 +178,25 @@ async function estimateFromBarcodeExtras(params: {
 }): Promise<MealEstimate | null> {
   const name = String(params.productName ?? "").trim();
   const image = params.image;
-  if (!name && !image) return null;
+  const japanese = isJapaneseRetailBarcode(params.barcode);
+  if (!name && !image && !japanese) return null;
   const dishes: MealDishInput[] = name
     ? [{ menu: name, grams: null, count: 1, count_unit: "個", serving: null }]
     : [];
+  const dishesHint = name
+    ? `${JP_RETAIL_HINT} 商品名は「${name}」。1個または1パック。JAN ${params.barcode}`
+    : image
+      ? `JAN ${params.barcode}。${JP_RETAIL_HINT} 写真のラベルの商品名と栄養成分を優先し、1個または1パックで推定する。`
+      : `JAN ${params.barcode} は日本の流通用バーコード。${JP_RETAIL_HINT} この番号で一意に特定できる公式商品があればその1個分を使う。特定できなければ confidence は 0.2、name は「不明な市販品」。`;
   const estimated = await estimateMealFromPhoto({
     images: image ? [{ base64: image.base64, mimeType: image.mimeType }] : undefined,
-    dishesHint: name
-      ? `まいばすけっと等の日本の市販品「${name}」1個または1パック。JAN ${params.barcode}`
-      : `JAN ${params.barcode}。日本のスーパー（まいばすけっと・トップバリュ・イオン）やコンビニの包装食品。ラベルに書いてある商品名と栄養成分を優先し、1個または1パックで推定する。`,
+    dishesHint,
     note: `JAN ${params.barcode}。公開されている栄養成分を優先する。`,
     slotLabel: "食事",
   });
   if (!estimated.ok || estimated.estimate.kcal <= 0) return null;
+  const unknown = /不明/.test(estimated.estimate.items.join(" ") + (estimated.estimate.note ?? ""));
+  if (!name && !image && (estimated.estimate.confidence < 0.5 || unknown)) return null;
   return refineEstimate(estimated.estimate, dishes);
 }
 
@@ -353,7 +362,7 @@ export async function POST(req: Request) {
         return jsonResponse(
           {
             error:
-              "まいばすけっと等の日本の市販品はデータベースに無いことがあります。パッケージの商品名を入れるか、成分表を撮ってください。",
+              "日本のコンビニ・スーパーの商品はデータベースに無いことがあります。パッケージの商品名を入れるか、成分表を撮ってください。",
           },
           404
         );

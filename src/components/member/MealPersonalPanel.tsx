@@ -1136,7 +1136,7 @@ export function MealPersonalPanel({
         {addBack}
         <div className="text-sm font-bold text-slate-900">バーコードで記録</div>
         <p className="text-xs leading-relaxed text-slate-500">
-          市販品のJANをカメラか番号で読みます。まいばすけっと等はパッケージ写真と商品名からも推定します。
+          日本のコンビニ・スーパーのJANに対応しています。カメラはバーコードと商品名が見えるように向けてください。
         </p>
       </div>
       {slotButtons}
@@ -1149,7 +1149,7 @@ export function MealPersonalPanel({
             <input
               value={barcodeName}
               onChange={(e) => setBarcodeName(e.target.value)}
-              placeholder="例: トップバリュ サラダチキン"
+              placeholder="例: セブンプレミアム サラダチキン"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal"
             />
           </label>
@@ -1194,7 +1194,7 @@ export function MealPersonalPanel({
         [
           { id: "chat" as const, title: "チャット", desc: "相談しながら記録する", icon: MessageCircle },
           { id: "record" as const, title: "手入力", desc: "メニュー・グラム・写真で記録する", icon: Keyboard },
-          { id: "barcode" as const, title: "バーコード", desc: "市販品のJANを読んで記録する", icon: ScanBarcode },
+          { id: "barcode" as const, title: "バーコード", desc: "コンビニ・スーパーのJANを読んで記録する", icon: ScanBarcode },
         ] as const
       ).map((item) => {
         const Icon = item.icon;

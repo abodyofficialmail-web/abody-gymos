@@ -213,6 +213,12 @@ async function fetchOffProduct(barcode: string): Promise<OffProduct | null> {
   }
 }
 
+export function isJapaneseRetailBarcode(raw: string): boolean {
+  const n = digitsOnly(raw);
+  const code = n.length === 14 && n.startsWith("0") ? n.slice(1) : n;
+  return (code.length === 8 || code.length === 13) && (code.startsWith("45") || code.startsWith("49"));
+}
+
 export async function lookupMealBarcode(barcodeRaw: string): Promise<{
   estimate: MealEstimate | null;
   productName: string | null;

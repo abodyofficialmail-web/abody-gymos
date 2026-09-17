@@ -338,7 +338,7 @@ export function MealBarcodeInput({
         </button>
       </div>
       <p className="text-[11px] leading-relaxed text-slate-500">
-        カメラは画面いっぱいに開きます。バーコード全体とパッケージの商品名が見えるように撮ると、まいばすけっと等の市販品も推定できます。
+        カメラは画面いっぱいに開きます。セブン・ファミマ・ローソン・イオンなど、バーコード全体とパッケージの商品名が見えるように撮ってください。
       </p>
       <label className="block text-xs font-semibold text-slate-700">
         JAN / バーコード番号
