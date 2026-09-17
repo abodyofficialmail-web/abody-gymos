@@ -223,6 +223,14 @@ async function main() {
 
   const fullShiftAndFree = futureRanked.filter((s) => s.allOnShiftAndFree);
   const fullShiftOnly = futureRanked.filter((s) => s.allOnShift);
+  /** セッション予約・トレーナーeventと重ならず全員参加可（シフトは不問） */
+  const allAvailable = futureRanked.filter((s) => s.availableCount === trainers.length);
+  const allAvailableByDate = {};
+  for (const s of allAvailable) {
+    const key = `${s.date} (${s.dow})`;
+    if (!allAvailableByDate[key]) allAvailableByDate[key] = [];
+    allAvailableByDate[key].push(s.time);
+  }
 
   console.log(
     JSON.stringify(
