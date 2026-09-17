@@ -1,6 +1,6 @@
 /**
  * 9月MTG: 予約・シフトを踏まえ参加可能トレーナーが最多の1時間枠を探索
- * node scripts/find-mtg-slots-max-trainers-2026-09.mjs
+ * node scripts/find-mtg-slots-max-trainers-2026-09.mjs（JST当日以降を探索）
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
