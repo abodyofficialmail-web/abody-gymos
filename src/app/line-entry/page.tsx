@@ -2,6 +2,7 @@
 
 import Script from "next/script";
 import { useEffect, useState } from "react";
+import { signedPayloadDestination } from "@/lib/goalHearingParams";
 import { sessionSurveyPagePath } from "@/lib/sessionSurveyPaths";
 import {
   captureSurveyParamsFromLocation,
@@ -44,6 +45,11 @@ export default function LineEntryPage() {
     if (surveyParams) {
       const q = toSurveyApiQuery(surveyParams);
       if (q) {
+        const dest = surveyParams.s ? signedPayloadDestination(surveyParams.s) : null;
+        if (dest === "/goal-hearing" || dest === "/pre-session-survey") {
+          window.location.replace(`${dest}?${q}`);
+          return;
+        }
         window.location.replace(sessionSurveyPagePath(q));
         return;
       }

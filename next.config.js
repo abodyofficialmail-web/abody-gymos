@@ -11,6 +11,15 @@ const nextConfig = {
       },
     ];
   },
+  async rewrites() {
+    return [
+      // LINE が /goal-hearing + s= を /goal-hearings= と連結したときの復元
+      {
+        source: "/goal-hearings=:rest*",
+        destination: "/goal-hearing",
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

@@ -33,7 +33,7 @@ export function buildGoalHearingInviteMessages(surveyUrl: string) {
   return [
     {
       type: "text" as const,
-      text: GOAL_HEARING_INVITE_BODY,
+      text: `${GOAL_HEARING_INVITE_BODY}\n${surveyUrl}`,
     },
     {
       type: "flex" as const,
@@ -60,6 +60,12 @@ export function buildGoalHearingInviteMessages(surveyUrl: string) {
               size: "sm" as const,
               color: "#334155",
             },
+          ],
+        },
+        footer: {
+          type: "box" as const,
+          layout: "vertical" as const,
+          contents: [
             {
               type: "button" as const,
               style: "primary" as const,
