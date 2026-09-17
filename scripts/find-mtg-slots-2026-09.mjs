@@ -3,7 +3,7 @@
  * - 参加者: こうへい以外（コア6名）
  * - 条件: 参加者のうちだいき以外（ゆうと・たけはる・ひろむ・せいや・りょう）が全員シフトイン
  *
- * node --env-file=.env.local scripts/find-mtg-slots-2026-09.mjs
+ * node scripts/find-mtg-slots-2026-09.mjs（JST当日以降）
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
