@@ -14,6 +14,15 @@ const SEARCH_END = 21 * 60;
 
 const MONTH_START = `${MONTH}-01T00:00:00+09:00`;
 const MONTH_END = "2026-10-01T00:00:00+09:00";
+/** 予約枠（booking-v2 と同じ 30 分） */
+const SESSION_SLOT_MIN = 30;
+
+/** 以前提案した MTG 候補（監査用・JST） */
+const PREVIOUSLY_SUGGESTED_WINDOWS = [
+  { date: "2026-09-17", fromMin: 18 * 60, toMin: 20 * 60, label: "9/17 18:00-20:00" },
+  { date: "2026-09-25", fromMin: 16 * 60, toMin: 21 * 60, label: "9/25 16:00-21:00" },
+  { date: "2026-09-29", fromMin: 16 * 60, toMin: 19 * 60 + 30, label: "9/29 16:00-19:30" },
+];
 
 function toMinutes(hhmm) {
   const [h, m] = String(hhmm).slice(0, 5).split(":").map(Number);
@@ -43,6 +52,79 @@ function isoToJstParts(iso) {
   const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);
   const hm = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
   return { ymd, min: toMinutes(hm) };
+}
+
+function fmtHm(min) {
+  return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+}
+
+function slotIntervalMs(ymd, slotStartMin, slotEndMin) {
+  const startMs = Date.parse(`${ymd}T${fmtHm(slotStartMin)}:00+09:00`);
+  const endMs = Date.parse(`${ymd}T${fmtHm(slotEndMin)}:00+09:00`);
+  return { startMs, endMs };
+}
+
+function reservationIntervalMs(r) {
+  const startMs = Date.parse(r.start_at);
+  if (!Number.isFinite(startMs)) return null;
+  let endMs = Date.parse(r.end_at);
+  if (!Number.isFinite(endMs) || endMs <= startMs) {
+    endMs = startMs + SESSION_SLOT_MIN * 60 * 1000;
+  }
+  return { startMs, endMs };
+}
+
+function overlapsMs(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/** 予約の JST 上の開始日・分（終了は同日補正） */
+function reservationJstWindow(r) {
+  const start = isoToJstParts(r.start_at);
+  const endRaw = isoToJstParts(r.end_at);
+  let endMin = endRaw.min;
+  if (endRaw.ymd === start.ymd && endMin > start.min) {
+    // ok
+  } else if (endRaw.ymd !== start.ymd) {
+    endMin = Math.min(22 * 60, start.min + SESSION_SLOT_MIN);
+  } else {
+    endMin = start.min + SESSION_SLOT_MIN;
+  }
+  return { ymd: start.ymd, startMin: start.min, endMin };
+}
+
+function isBlockingReservation(r) {
+  if (r.status === "cancelled") return false;
+  if (r.blocks_capacity === false) return false;
+  return Boolean(r.member_id || r.trainer_id);
+}
+
+async function fetchSeptemberReservations(supabase) {
+  const applyOverlap = (q) =>
+    q
+      .lt("start_at", MONTH_END)
+      .gt("end_at", MONTH_START)
+      .neq("status", "cancelled");
+
+  try {
+    return await fetchAllChecked(
+      supabase,
+      "reservations",
+      "trainer_id, store_id, member_id, start_at, end_at, status, blocks_capacity",
+      applyOverlap,
+      "reservations.september.overlap",
+    );
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (!/blocks_capacity|does not exist|column/i.test(msg)) throw e;
+    return fetchAllChecked(
+      supabase,
+      "reservations",
+      "trainer_id, store_id, member_id, start_at, end_at, status",
+      applyOverlap,
+      "reservations.september.overlap.noBlocksCapacity",
+    );
+  }
 }
 
 async function main() {
@@ -75,18 +157,7 @@ async function main() {
           .eq("is_break", false),
       "trainer_shifts.september",
     ),
-    fetchAllChecked(
-      supabase,
-      "reservations",
-      "trainer_id, start_at, end_at, status",
-      (q) =>
-        q
-          .gte("start_at", MONTH_START)
-          .lt("start_at", MONTH_END)
-          .neq("status", "cancelled")
-          .not("trainer_id", "is", null),
-      "reservations.september",
-    ),
+    fetchSeptemberReservations(supabase),
     fetchAllChecked(
       supabase,
       "trainer_events",
@@ -98,6 +169,11 @@ async function main() {
 
   const trainers = trainersResult.rows;
   const trainerNameById = Object.fromEntries(trainers.map((t) => [t.id, t.display_name]));
+  const trainerStoreById = Object.fromEntries(trainers.map((t) => [t.id, t.store_id]));
+
+  const blockingReservations = reservationsResult.rows.filter(isBlockingReservation);
+  const reservationsAssigned = blockingReservations.filter((r) => r.trainer_id).length;
+  const reservationsUnassigned = blockingReservations.length - reservationsAssigned;
 
   const shiftsByTrainerDate = new Map();
   for (const s of shiftsResult.rows) {
@@ -105,13 +181,6 @@ async function main() {
     const list = shiftsByTrainerDate.get(key) ?? [];
     list.push({ startMin: toMinutes(s.start_local), endMin: toMinutes(s.end_local) });
     shiftsByTrainerDate.set(key, list);
-  }
-
-  const reservationsByTrainer = new Map();
-  for (const r of reservationsResult.rows) {
-    const list = reservationsByTrainer.get(r.trainer_id) ?? [];
-    list.push(r);
-    reservationsByTrainer.set(r.trainer_id, list);
   }
 
   const eventsByTrainerDate = new Map();
@@ -122,15 +191,40 @@ async function main() {
     eventsByTrainerDate.set(key, list);
   }
 
-  function hasReservationConflict(trainerId, ymd, slotStart, slotEnd) {
-    const list = reservationsByTrainer.get(trainerId) ?? [];
-    for (const r of list) {
-      const { ymd: rYmd, min: rStart } = isoToJstParts(r.start_at);
-      const { min: rEnd } = isoToJstParts(r.end_at);
-      if (rYmd !== ymd) continue;
-      if (overlaps(slotStart, slotEnd, rStart, rEnd)) return true;
+  function reservationConflictDetail(trainerId, ymd, slotStart, slotEnd) {
+    const storeId = trainerStoreById[trainerId];
+    const slot = slotIntervalMs(ymd, slotStart, slotEnd);
+    for (const r of blockingReservations) {
+      const iv = reservationIntervalMs(r);
+      if (!iv || !overlapsMs(slot.startMs, slot.endMs, iv.startMs, iv.endMs)) continue;
+
+      if (r.trainer_id === trainerId) {
+        const w = reservationJstWindow(r);
+        return {
+          kind: "assigned",
+          startAt: r.start_at,
+          endAt: r.end_at,
+          window: formatRange(w.startMin, w.endMin),
+        };
+      }
+
+      if (!r.trainer_id && r.store_id && storeId && r.store_id === storeId) {
+        const w = reservationJstWindow(r);
+        if (w.ymd === ymd && isOnShift(trainerId, ymd, w.startMin, w.endMin)) {
+          return {
+            kind: "unassigned_on_shift",
+            startAt: r.start_at,
+            endAt: r.end_at,
+            window: formatRange(w.startMin, w.endMin),
+          };
+        }
+      }
     }
-    return false;
+    return null;
+  }
+
+  function hasReservationConflict(trainerId, ymd, slotStart, slotEnd) {
+    return reservationConflictDetail(trainerId, ymd, slotStart, slotEnd) != null;
   }
 
   function hasEventConflict(trainerId, ymd, slotStart, slotEnd) {
@@ -232,6 +326,31 @@ async function main() {
     allAvailableByDate[key].push(s.time);
   }
 
+  const previouslySuggestedAudit = PREVIOUSLY_SUGGESTED_WINDOWS.map((win) => {
+    const slots = [];
+    for (let start = win.fromMin; start + MTG_DURATION_MIN <= win.toMin; start += SLOT_STEP_MIN) {
+      const end = start + MTG_DURATION_MIN;
+      const ev = evaluateSlot(win.date, start, end);
+      const reservationBlocked = [];
+      for (const t of trainers) {
+        const detail = reservationConflictDetail(t.id, win.date, start, end);
+        if (detail) {
+          reservationBlocked.push({
+            name: t.display_name ?? t.id,
+            ...detail,
+          });
+        }
+      }
+      slots.push({
+        time: formatRange(start, end),
+        availableCount: ev.availableCount,
+        blockedByReservation: reservationBlocked,
+        blockedByEvent: ev.blocked.filter((b) => b.reasons.includes("event")).map((b) => b.name),
+      });
+    }
+    return { label: win.label, date: win.date, slots };
+  });
+
   console.log(
     JSON.stringify(
       {
@@ -243,14 +362,21 @@ async function main() {
           slotStep: "30分",
           searchStart: "08:00",
           searchEnd: "21:00開始まで",
-          available: "予約・トレーナー予定（event）と重ならない active トレーナー",
-          onShiftNote: "シフトイン中の人数は参考（当日シフト内の空き）",
+          available:
+            "セッション予約（cancelled除外）・トレーナーeventと重ならない active トレーナー全員",
+          onShiftNote: "シフトイン中の人数は参考（MTGは休み日参加も可の前提）",
         },
+        allAvailableSlotCount: allAvailable.length,
+        allAvailableByDate,
         fetched: {
           shifts: shiftsResult.count,
           reservations: reservationsResult.count,
+          blockingReservations: blockingReservations.length,
+          reservationsAssigned,
+          reservationsUnassigned,
           events: eventsResult.count,
         },
+        previouslySuggestedAudit,
         checkedFromJst: todayYmd,
         maxAvailableCount: maxCount,
         fullShiftAndFreeCount: fullShiftAndFree.length,
@@ -276,6 +402,26 @@ async function main() {
       2,
     ),
   );
+
+  console.log("\n--- 以前提案した時間帯の予約重なり監査 ---");
+  for (const win of previouslySuggestedAudit) {
+    console.log(`\n### ${win.label}`);
+    for (const s of win.slots) {
+      const names = s.blockedByReservation.map((b) => `${b.name}(${b.kind} ${b.window})`);
+      console.log(
+        `${s.time} → 参加可 ${s.availableCount}/${trainers.length}名` +
+          (names.length ? ` / 予約重なり: ${names.join("、")}` : " / 予約重なりなし") +
+          (s.blockedByEvent.length ? ` / event: ${s.blockedByEvent.join("、")}` : ""),
+      );
+    }
+  }
+
+  console.log("\n--- 全員参加可（セッション予約・eventなし・シフト不問） ---");
+  console.log(`該当: ${allAvailable.length}枠 / アクティブ ${trainers.length}名\n`);
+  for (const [dateLabel, times] of Object.entries(allAvailableByDate)) {
+    console.log(`### ${dateLabel}`);
+    for (const t of times) console.log(`- ${t}`);
+  }
 
   console.log("\n--- 全員シフトイン＆予約/eventなし（1時間MTG可） ---");
   console.log(`該当: ${fullShiftAndFree.length}枠 / アクティブ ${trainers.length}名\n`);
