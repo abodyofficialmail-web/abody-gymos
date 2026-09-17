@@ -104,6 +104,20 @@ export function isMealBarcode(raw: string): boolean {
   return n.length >= 8 && n.length <= 14;
 }
 
+export function mealBarcodeLookupCodes(raw: string): string[] {
+  const n = digitsOnly(raw);
+  const out: string[] = [];
+  const add = (code: string) => {
+    if (code && !out.includes(code)) out.push(code);
+  };
+  add(n);
+  if (n.length === 12) add(`0${n}`);
+  if (n.length === 13) add(`0${n}`);
+  if (n.length === 13 && n.startsWith("0")) add(n.slice(1));
+  if (n.length === 14 && n.startsWith("0")) add(n.slice(1));
+  return out;
+}
+
 function productNameOf(product: OffProduct): string {
   const brand = String(product.brands ?? "").split(",")[0]?.trim();
   const pname = String(product.product_name_ja || product.product_name || "").trim();
@@ -153,42 +167,70 @@ function estimateFromOffProduct(product: OffProduct): MealEstimate | null {
   };
 }
 
-async function fetchOffProduct(barcode: string): Promise<OffProduct | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  const urls = [
-    `https://jp.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`,
-    `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`,
-  ];
-  try {
-    for (const url of urls) {
+const OFF_HOSTS_PRIMARY = ["https://jp.openfoodfacts.org", "https://world.openfoodfacts.org"];
+const OFF_HOSTS_FALLBACK = ["https://world.openbeautyfacts.org", "https://world.openproductsfacts.org"];
+
+async function fetchOffProductFromHosts(
+  codes: string[],
+  hosts: string[],
+  signal: AbortSignal
+): Promise<OffProduct | null> {
+  const urls = codes.flatMap((code) =>
+    hosts.map((host) => `${host}/api/v2/product/${encodeURIComponent(code)}.json`)
+  );
+  const results = await Promise.all(
+    urls.map(async (url) => {
       try {
         const res = await fetch(url, {
-          signal: controller.signal,
+          signal,
           headers: {
             "User-Agent": "AbodyGymOS/1.0 (https://abody-gymos.vercel.app)",
             Accept: "application/json",
           },
         });
-        if (!res.ok) continue;
+        if (!res.ok) return null;
         const json = (await res.json().catch(() => ({}))) as { status?: number; product?: OffProduct };
         if (json.status === 1 && json.product) return json.product;
       } catch {
-        continue;
+        return null;
       }
-    }
-    return null;
+      return null;
+    })
+  );
+  return results.find((p): p is OffProduct => Boolean(p)) ?? null;
+}
+
+async function fetchOffProduct(barcode: string): Promise<OffProduct | null> {
+  const codes = mealBarcodeLookupCodes(barcode);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const primary = await fetchOffProductFromHosts(codes, OFF_HOSTS_PRIMARY, controller.signal);
+    if (primary) return primary;
+    return await fetchOffProductFromHosts(codes, OFF_HOSTS_FALLBACK, controller.signal);
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function lookupOpenFoodFactsBarcode(barcodeRaw: string): Promise<MealEstimate | null> {
+export async function lookupMealBarcode(barcodeRaw: string): Promise<{
+  estimate: MealEstimate | null;
+  productName: string | null;
+}> {
   const barcode = digitsOnly(barcodeRaw);
-  if (!isMealBarcode(barcode)) return null;
+  if (!isMealBarcode(barcode)) return { estimate: null, productName: null };
   const product = await fetchOffProduct(barcode);
-  if (!product) return null;
-  return estimateFromOffProduct(product);
+  if (!product) return { estimate: null, productName: null };
+  const name = productNameOf(product);
+  return {
+    estimate: estimateFromOffProduct(product),
+    productName: name === "商品" ? null : name,
+  };
+}
+
+export async function lookupOpenFoodFactsBarcode(barcodeRaw: string): Promise<MealEstimate | null> {
+  const found = await lookupMealBarcode(barcodeRaw);
+  return found.estimate;
 }
 
 export async function applyOpenFoodFacts(estimate: MealEstimate, dishes?: MealDishGrams[]): Promise<MealEstimate> {

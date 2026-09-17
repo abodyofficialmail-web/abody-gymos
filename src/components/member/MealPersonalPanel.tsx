@@ -263,6 +263,7 @@ export function MealPersonalPanel({
     { role: "assistant", text: MEAL_CHAT_GREETING },
   ]);
   const [chatInput, setChatInput] = useState("");
+  const [barcodeMiss, setBarcodeMiss] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
     items: string;
@@ -462,6 +463,7 @@ export function MealPersonalPanel({
     if (digits.length < 8) return;
     setBusy(true);
     setErr(null);
+    setBarcodeMiss(null);
     setSavedMsg(null);
     try {
       const res = await fetch(apiPath, {
@@ -481,9 +483,17 @@ export function MealPersonalPanel({
       }
       throw new Error("商品の栄養情報が見つかりませんでした");
     } catch (e) {
+      setBarcodeMiss(digits);
       setErr(String((e as Error)?.message ?? "商品の取得に失敗しました"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function continueBarcodeAsRecord(openCamera: boolean) {
+    setAddMode("record");
+    if (openCamera) {
+      window.setTimeout(() => cameraInputRef.current?.click(), 0);
     }
   }
 
@@ -1109,12 +1119,30 @@ export function MealPersonalPanel({
         {addBack}
         <div className="text-sm font-bold text-slate-900">バーコードで記録</div>
         <p className="text-xs leading-relaxed text-slate-500">
-          市販品のJANをカメラか番号で読みます。栄養成分が見つかったら確認して記録できます。
+          市販品のJANをカメラか番号で読みます。カメラは画面いっぱいに開き、バーコード全体が枠に入れば読み取れます。
         </p>
       </div>
       {slotButtons}
       {pendingCard}
       <MealBarcodeInput busy={busy} onLookup={(code) => void lookupBarcode(code)} />
+      {barcodeMiss ? (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => continueBarcodeAsRecord(false)}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-800"
+          >
+            手入力する
+          </button>
+          <button
+            type="button"
+            onClick={() => continueBarcodeAsRecord(true)}
+            className="rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white"
+          >
+            成分表を撮る
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 

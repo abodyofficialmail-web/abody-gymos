@@ -5,7 +5,7 @@ import { loadMealPersonalDashboard } from "@/lib/memberMealDashboard";
 import { estimateMealFromPhoto, sanitizeMealEstimate, type MealEstimate } from "@/lib/memberMealEstimate";
 import { applyMealCatalog } from "@/lib/memberMealCatalog";
 import { applyMextFoods } from "@/lib/memberMealFoodDb";
-import { applyOpenFoodFacts, isMealBarcode, lookupOpenFoodFactsBarcode } from "@/lib/memberMealFoodFacts";
+import { applyOpenFoodFacts, isMealBarcode, lookupMealBarcode } from "@/lib/memberMealFoodFacts";
 import {
   buildMealChatContext,
   formatMealLogForChat,
@@ -293,14 +293,39 @@ export async function POST(req: Request) {
         if (!isMealBarcode(barcode)) {
           return jsonResponse({ error: "バーコードは8〜14桁の数字で入力してください" }, 400);
         }
-        const estimate = await lookupOpenFoodFactsBarcode(barcode);
-        if (!estimate) {
-          return jsonResponse(
-            { error: "このバーコードの商品が見つかりませんでした。番号を確認するか、手入力してください。" },
-            404
-          );
+        const found = await lookupMealBarcode(barcode);
+        if (found.estimate) {
+          return jsonResponse({
+            ok: true,
+            preview: true,
+            estimate: found.estimate,
+            estimate_note: found.estimate.note,
+          });
         }
-        return jsonResponse({ ok: true, preview: true, estimate, estimate_note: estimate.note });
+        const productName = found.productName;
+        if (productName) {
+          const estimated = await estimateMealFromPhoto({
+            dishesHint: `${productName} 1個`,
+            note: `JAN ${barcode}。公開されている栄養成分を優先する。`,
+            slotLabel: "食事",
+          });
+          if (estimated.ok && estimated.estimate.confidence >= 0.5) {
+            const refined = await refineEstimate(estimated.estimate, []);
+            return jsonResponse({
+              ok: true,
+              preview: true,
+              estimate: refined,
+              estimate_note: refined.note,
+            });
+          }
+        }
+        return jsonResponse(
+          {
+            error:
+              "このバーコードの栄養情報が見つかりませんでした。番号を確認するか、手入力・成分表の写真で記録してください。",
+          },
+          404
+        );
       }
 
       if (raw.kind === "delete_meal") {
