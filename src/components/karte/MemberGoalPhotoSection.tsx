@@ -38,11 +38,20 @@ export function MemberGoalPhotoSection({ memberId }: { memberId: string }) {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const data = await apiGet<{ photos: GoalPhoto[]; response: GoalHearingMeta | null }>(
-        `/api/admin/members/${encodeURIComponent(memberId)}/goal-photos`
-      );
+      const data = await apiGet<{
+        photos: GoalPhoto[];
+        photo_errors?: string[];
+        response: GoalHearingMeta | null;
+      }>(`/api/admin/members/${encodeURIComponent(memberId)}/goal-photos`);
       setPhotos(data.photos ?? []);
       setMeta(data.response);
+      const submitted = data.response?.photo_count ?? 0;
+      const shown = (data.photos ?? []).length;
+      if (submitted > 0 && shown === 0) {
+        setErr("目標写真は提出済みですが、表示用URLの発行に失敗しました。");
+      } else if ((data.photo_errors ?? []).length > 0 && shown === 0) {
+        setErr("目標写真は提出済みですが、表示用URLの発行に失敗しました。");
+      }
     } catch (e) {
       setPhotos([]);
       setMeta(null);
