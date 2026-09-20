@@ -6,6 +6,8 @@
  *   node scripts/send-typhoon-sep21-notice-line.mjs --api --dry-run
  *   node scripts/send-typhoon-sep21-notice-line.mjs --api --confirm
  *   node scripts/send-typhoon-sep21-notice-line.mjs --api --confirm --date=2026-09-21 --exclude-store=福岡
+ *
+ * CI: [send-typhoon-line-dry-run] / [send-typhoon-line-confirm]
  */
 import fs from "fs";
 import path from "path";
