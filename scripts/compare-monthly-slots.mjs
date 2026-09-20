@@ -5,6 +5,7 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const TARGET = { 恵比寿: 276, 上野: 504, 新宿: 300, 桜木町: 384 };
@@ -95,6 +96,33 @@ async function loadMonthFromDb(month) {
   return effectiveStoreSlots(rows);
 }
 
+function isActiveMember(m) {
+  const ms = String(m.membership_status ?? "").toLowerCase();
+  if (ms === "active") return true;
+  if (ms === "hiatus" || ms === "withdrawn") return false;
+  return m.is_active === true;
+}
+
+async function loadActiveMembersByStore() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+
+  const supabase = createClient(url, key, { auth: { persistSession: false } });
+  const [membersResult, storesResult] = await Promise.all([
+    fetchAllChecked(supabase, "members", "store_id, is_active, membership_status", undefined, "members"),
+    fetchAllChecked(supabase, "stores", "id, name", (q) => q.in("name", STORES), "stores"),
+  ]);
+  const storeNameById = Object.fromEntries(storesResult.rows.map((s) => [s.id, s.name]));
+  const counts = Object.fromEntries(STORES.map((n) => [n, 0]));
+  for (const m of membersResult.rows) {
+    if (!isActiveMember(m)) continue;
+    const name = storeNameById[m.store_id];
+    if (name && counts[name] !== undefined) counts[name] += 1;
+  }
+  return counts;
+}
+
 function printTable(aug, sep) {
   const total = { aug: 0, sep: 0, target: 0 };
   console.log("| 店舗 | 8月実績 | 9月計画 | 目標 | 9月/目標 | 9月/8月 |");
@@ -114,22 +142,69 @@ function printTable(aug, sep) {
 }
 
 const sepOnly = process.argv.includes("--sep-only");
-const sep = await loadSepPlan();
+const sepReport = process.argv.includes("--sep-report");
+const sepPlan = await loadSepPlan();
 
 if (sepOnly) {
   console.log(JSON.stringify({
-    sep: Object.fromEntries(sep),
+    sepPlan: Object.fromEntries(sepPlan),
     target: TARGET,
-    vsTarget: Object.fromEntries(STORES.map((s) => [s, pct(sep.get(s), TARGET[s])])),
+    vsTarget: Object.fromEntries(STORES.map((s) => [s, pct(sepPlan.get(s), TARGET[s])])),
   }, null, 2));
   process.exit(0);
 }
 
+const sepActual = await loadMonthFromDb("2026-09");
+const activeByStore = await loadActiveMembersByStore();
+
+if (sepReport || sepActual) {
+  const memberSlots12 = activeByStore
+    ? Object.fromEntries(STORES.map((s) => [s, (activeByStore[s] ?? 0) * 12]))
+    : null;
+
+  const payload = {
+    note: "枠=30分コマ。9月実績=DB確定シフト、9月計画=sync-final-shifts-2026-09。会員枠=アクティブ会員×12（休会・退会除外）",
+    sepActual: sepActual ? Object.fromEntries(STORES.map((s) => [s, sepActual.get(s) ?? 0])) : null,
+    sepPlan: Object.fromEntries(sepPlan),
+    targetLegacy: TARGET,
+    activeMembers: activeByStore,
+    memberSlotBudget12x: memberSlots12,
+    sepActualVsMember12x: sepActual && memberSlots12
+      ? Object.fromEntries(STORES.map((s) => [s, pct(sepActual.get(s) ?? 0, memberSlots12[s])]))
+      : null,
+  };
+  console.log(JSON.stringify(payload, null, 2));
+
+  if (sepActual) {
+    console.log("\n--- 9月 店舗別枠数（30分コマ） ---");
+    console.log("| 店舗 | 9月実績(シフト) | 9月計画 | 会員数 | 会員×12 | 実績/会員×12 |");
+    console.log("|------|--------------:|--------:|-------:|--------:|-------------:|");
+    let tA = 0;
+    let tP = 0;
+    let tM = 0;
+    let tB = 0;
+    for (const store of STORES) {
+      const a = sepActual.get(store) ?? 0;
+      const p = sepPlan.get(store) ?? 0;
+      const m = activeByStore?.[store] ?? 0;
+      const b = m * 12;
+      tA += a;
+      tP += p;
+      tM += m;
+      tB += b;
+      console.log(`| ${store} | ${a} | ${p} | ${m} | ${b} | ${fmtPct(pct(a, b))} |`);
+    }
+    console.log(`| **合計** | **${tA}** | **${tP}** | **${tM}** | **${tB}** | **${fmtPct(pct(tA, tB))}** |`);
+  }
+}
+
+if (sepReport) process.exit(0);
+
 const aug = await loadMonthFromDb("2026-08");
 if (!aug) {
-  console.error("DB未接続のため8月実績は取得できません。--sep-only で9月のみ表示します。");
-  printTable(null, sep);
+  console.error("DB未接続のため8月実績は取得できません。--sep-only / --sep-report を利用してください。");
+  printTable(null, sepPlan);
   process.exit(0);
 }
 
-printTable(aug, sep);
+printTable(aug, sepPlan);
