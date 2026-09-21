@@ -6,7 +6,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  *
  * - 目標枠: アクティブ会員×12
  * - 同時1ブース
- * - たけはる 171h / 月、残り日・枠はりょう
+ * - たけはる 171h / 月、週2休（連勤抑制）、残り日・枠はりょう
  *
  * node --env-file=.env.local scripts/sync-sakuragicho-shifts-2026-10.mjs --dry-run
  */
@@ -18,6 +18,10 @@ const TRAINER_RYO = "りょう";
 const TRAINER_NAMES = [TRAINER_TAKE, TRAINER_RYO];
 const SHIFT_STATUS = "confirmed";
 const TAKE_TARGET_WORK_HOURS = 171;
+/** たけはる: 月〜日の週あたり休み日数 */
+const TAKE_OFF_PER_WEEK = 2;
+/** たけはる: 連勤上限（超えたら追加休み） */
+const TAKE_MAX_CONSECUTIVE_WORK = 5;
 
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
 
@@ -166,32 +170,152 @@ function takeHoursForPmEnd(pmEnd) {
   ]);
 }
 
-function assignTrainerDays(dates) {
-  const takeDays = [];
-  const ryoDays = [];
-  const flex = [];
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
 
-  for (const d of dates) {
-    const n = dayNum(d);
-    if (RYO_OFF_DAYS.has(n)) takeDays.push(d);
-    else if (TAKE_OFF_DAYS.has(n)) ryoDays.push(d);
-    else flex.push(d);
+function formatLocalDate(d) {
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function mondayWeekKey(dateStr) {
+  const d = parseLocalDate(dateStr);
+  const diff = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - diff);
+  return formatLocalDate(d);
+}
+
+function groupDatesByMondayWeek(dates) {
+  const byWeek = new Map();
+  for (const date of dates) {
+    const k = mondayWeekKey(date);
+    if (!byWeek.has(k)) byWeek.set(k, []);
+    byWeek.get(k).push(date);
+  }
+  return [...byWeek.values()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function takeWorksOnDay(day, takeOffDays) {
+  if (RYO_OFF_DAYS.has(day)) return true;
+  return !takeOffDays.has(day);
+}
+
+function maxTakeWorkStreak(dates, takeOffDays) {
+  let max = 0;
+  let cur = 0;
+  for (const date of dates) {
+    const n = dayNum(date);
+    if (takeWorksOnDay(n, takeOffDays)) {
+      cur++;
+      max = Math.max(max, cur);
+    } else {
+      cur = 0;
+    }
+  }
+  return max;
+}
+
+function takeOffCountInWeek(weekDates, takeOffDays) {
+  return weekDates.filter((d) => takeOffDays.has(dayNum(d))).length;
+}
+
+function weekOffTarget(weekDates) {
+  const eligible = weekDates.filter((d) => !RYO_OFF_DAYS.has(dayNum(d)));
+  if (eligible.length <= 1) return eligible.length;
+  return Math.min(TAKE_OFF_PER_WEEK, eligible.length);
+}
+
+function scoreTakeOffCandidate(date, dates, takeOffDays) {
+  const n = dayNum(date);
+  const dow = parseLocalDate(date).getDay();
+  let score = 0;
+  if (dow === 0 || dow === 6) score += 3;
+  const idx = dates.indexOf(date);
+  const prevWork = idx > 0 && takeWorksOnDay(dayNum(dates[idx - 1]), takeOffDays);
+  const nextWork = idx < dates.length - 1 && takeWorksOnDay(dayNum(dates[idx + 1]), takeOffDays);
+  if (prevWork && nextWork) score += 5;
+  return score;
+}
+
+function tryAddTakeOff(date, takeOffDays, dates) {
+  const n = dayNum(date);
+  if (RYO_OFF_DAYS.has(n) || takeOffDays.has(n)) return false;
+  takeOffDays.add(n);
+  return true;
+}
+
+function assignTrainerDays(dates) {
+  const takeOffDays = new Set(TAKE_OFF_DAYS);
+
+  for (const weekDates of groupDatesByMondayWeek(dates)) {
+    const target = weekOffTarget(weekDates);
+    let offCount = takeOffCountInWeek(weekDates, takeOffDays);
+    const candidates = weekDates.filter(
+      (d) => !RYO_OFF_DAYS.has(dayNum(d)) && !takeOffDays.has(dayNum(d)),
+    );
+    while (offCount < target && candidates.length) {
+      candidates.sort(
+        (a, b) => scoreTakeOffCandidate(b, dates, takeOffDays) - scoreTakeOffCandidate(a, dates, takeOffDays),
+      );
+      const pick = candidates.shift();
+      takeOffDays.add(dayNum(pick));
+      offCount++;
+    }
   }
 
-  const takeStdH = takeStandardHours();
-  const mandatoryTakeH = takeDays.length * takeStdH;
-  let needTakeFlex = Math.max(0, Math.ceil((TAKE_TARGET_WORK_HOURS - mandatoryTakeH) / takeStdH));
-  needTakeFlex = Math.min(needTakeFlex, flex.length);
+  const targetTakeWorkDays = Math.max(1, Math.round(TAKE_TARGET_WORK_HOURS / takeStandardHours()));
+  let takeWorkDays = dates.filter((d) => takeWorksOnDay(dayNum(d), takeOffDays)).length;
 
-  const flexForTake = flex.slice(0, needTakeFlex);
-  const flexForRyo = flex.slice(needTakeFlex);
+  const weeksGrouped = groupDatesByMondayWeek(dates);
 
-  takeDays.push(...flexForTake);
-  ryoDays.push(...flexForRyo);
+  while (takeWorkDays > targetTakeWorkDays) {
+    let best = null;
+    let bestScore = -1;
+    for (const date of dates) {
+      const n = dayNum(date);
+      if (!takeWorksOnDay(n, takeOffDays)) continue;
+      if (TAKE_OFF_DAYS.has(n)) continue;
+      const weekDates = weeksGrouped.find((w) => w.includes(date));
+      if (!weekDates) continue;
+      const offInWeek = takeOffCountInWeek(weekDates, takeOffDays);
+      if (offInWeek !== 2) continue;
+      const sc = scoreTakeOffCandidate(date, dates, takeOffDays);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = date;
+      }
+    }
+    if (!best || !tryAddTakeOff(best, takeOffDays, dates)) break;
+    takeWorkDays--;
+  }
 
-  takeDays.sort();
-  ryoDays.sort();
-  return { takeDays, ryoDays };
+  let guard = 0;
+  while (maxTakeWorkStreak(dates, takeOffDays) > TAKE_MAX_CONSECUTIVE_WORK && guard++ < 31) {
+    let best = null;
+    let bestScore = -1;
+    for (const date of dates) {
+      const n = dayNum(date);
+      if (!takeWorksOnDay(n, takeOffDays)) continue;
+      if (TAKE_OFF_DAYS.has(n)) continue;
+      const weekDates = weeksGrouped.find((w) => w.includes(date));
+      if (!weekDates) continue;
+      if (takeOffCountInWeek(weekDates, takeOffDays) >= 3) continue;
+      const sc = scoreTakeOffCandidate(date, dates, takeOffDays);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = date;
+      }
+    }
+    if (!best || !tryAddTakeOff(best, takeOffDays, dates)) break;
+  }
+
+  const takeDays = dates.filter((d) => takeWorksOnDay(dayNum(d), takeOffDays));
+  const ryoDays = dates.filter((d) => !takeWorksOnDay(dayNum(d), takeOffDays));
+  return { takeDays, ryoDays, takeOffDays: [...takeOffDays].sort((a, b) => a - b) };
 }
 
 function buildTakeRows(date, pmEnd = TAKE_PM_BASE) {
@@ -523,6 +647,12 @@ async function main() {
   const plan = buildRows(targetSlots);
   validateNoTrainerOverlap(plan.rows);
   validateSingleBoothPerDay(plan.rows);
+  const takeOffForMetrics = new Set(
+    allOctoberDates()
+      .filter((d) => !plan.takeDays.includes(d))
+      .map((d) => dayNum(d)),
+  );
+  const maxTakeStreak = maxTakeWorkStreak(allOctoberDates(), takeOffForMetrics);
   const summary = summarize(plan.rows, plan, targetSlots, activeMembers);
 
   const ownerByDate = Object.fromEntries([
@@ -553,6 +683,8 @@ async function main() {
     plan: {
       takeDays: plan.takeDays.length,
       ryoDays: plan.ryoDays.length,
+      takeOffDays: [...takeOffForMetrics].sort((a, b) => a - b),
+      maxTakeConsecutiveWork: maxTakeStreak,
       takeSlots: plan.takeSlots,
       ryoSlots: plan.ryoSlots,
       ryoTemplates: plan.ryoPlan,
