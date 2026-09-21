@@ -164,13 +164,40 @@ function solveHiromuEarlyLateCounts(needHiromuSlots, dayCount) {
   return { early, late, slots };
 }
 
-/** 省略する2日はひろむ候補日のうち末尾（従来14時開始になりやすい日） */
+function hiromuDayNum(date) {
+  return Number(date.slice(-2));
+}
+
+function datesAreConsecutive(a, b) {
+  return Math.abs(hiromuDayNum(a) - hiromuDayNum(b)) === 1;
+}
+
+/** 省略2日: 月末寄りを優先しつつ、カレンダー上連日にしない */
 function pickHiromuClosedDates(hiromuCandidates) {
   if (HIROMU_STORE_CLOSED_COUNT <= 0) return [];
-  if (hiromuCandidates.length <= HIROMU_STORE_CLOSED_COUNT) {
+  const need = HIROMU_STORE_CLOSED_COUNT;
+  if (hiromuCandidates.length <= need) {
     throw new Error("ひろむ候補日が休み日数より少ないです");
   }
-  return hiromuCandidates.slice(-HIROMU_STORE_CLOSED_COUNT);
+
+  const picked = [];
+  for (const d of [...hiromuCandidates].reverse()) {
+    if (picked.length >= need) break;
+    if (picked.some((p) => datesAreConsecutive(p, d))) continue;
+    picked.push(d);
+  }
+  if (picked.length < need) {
+    for (const d of hiromuCandidates) {
+      if (picked.includes(d)) continue;
+      if (picked.some((p) => datesAreConsecutive(p, d))) continue;
+      picked.push(d);
+      if (picked.length >= need) break;
+    }
+  }
+  if (picked.length < need) {
+    throw new Error("非連続の休み日を確保できませんでした");
+  }
+  return picked.sort();
 }
 
 /** 交互に early/late を割当し、目標コマ数に合わせて early 日数を調整 */
