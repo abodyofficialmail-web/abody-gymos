@@ -8,6 +8,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - 同時1ブース（2ブース開放なし）
  * - せいや希望日: 9–13 / 16–22
  * - ひろむ: 18:00終了日は 9:00〜（休憩1h）、21:00終了日は 14:00〜（休憩1h）
+ * - 10月は店舗開放を2日省略（14時開始日から優先して休み → 9時開始日を増やして会員×12を維持）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
  */
@@ -21,6 +22,9 @@ const HIROMU_BREAK_MINUTES = 60;
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野"]);
 
 const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]);
+
+/** 上野・ひろむ稼働なし（予約枠なし）の日数 */
+const HIROMU_STORE_CLOSED_COUNT = 2;
 
 /** 9:00〜18:00（13–14 休憩1h）→ 予約16コマ */
 const HIROMU_EARLY = {
@@ -141,7 +145,9 @@ function seiyaSlotsPerDay() {
 }
 
 function solveHiromuEarlyLateCounts(needHiromuSlots, dayCount) {
-  let early = Math.round((needHiromuSlots - HIROMU_LATE.slotsPerDay * dayCount) / (HIROMU_EARLY.slotsPerDay - HIROMU_LATE.slotsPerDay));
+  let early = Math.floor(
+    (needHiromuSlots - HIROMU_LATE.slotsPerDay * dayCount) / (HIROMU_EARLY.slotsPerDay - HIROMU_LATE.slotsPerDay),
+  );
   early = Math.max(0, Math.min(dayCount, early));
   let late = dayCount - early;
   let slots = early * HIROMU_EARLY.slotsPerDay + late * HIROMU_LATE.slotsPerDay;
@@ -156,6 +162,15 @@ function solveHiromuEarlyLateCounts(needHiromuSlots, dayCount) {
     slots = early * HIROMU_EARLY.slotsPerDay + late * HIROMU_LATE.slotsPerDay;
   }
   return { early, late, slots };
+}
+
+/** 省略する2日はひろむ候補日のうち末尾（従来14時開始になりやすい日） */
+function pickHiromuClosedDates(hiromuCandidates) {
+  if (HIROMU_STORE_CLOSED_COUNT <= 0) return [];
+  if (hiromuCandidates.length <= HIROMU_STORE_CLOSED_COUNT) {
+    throw new Error("ひろむ候補日が休み日数より少ないです");
+  }
+  return hiromuCandidates.slice(-HIROMU_STORE_CLOSED_COUNT);
 }
 
 /** 交互に early/late を割当し、目標コマ数に合わせて early 日数を調整 */
@@ -185,7 +200,9 @@ function assignHiromuPatterns(hiromuDates, needHiromuSlots) {
 
 function buildRows(targetSlots) {
   const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
-  const hiromuDates = allOctoberDates().filter((d) => !seiyaDates.includes(d)).sort();
+  const hiromuCandidates = allOctoberDates().filter((d) => !seiyaDates.includes(d)).sort();
+  const hiromuClosedDates = pickHiromuClosedDates(hiromuCandidates);
+  const hiromuDates = hiromuCandidates.filter((d) => !hiromuClosedDates.includes(d));
 
   const seiyaPerDay = seiyaSlotsPerDay();
   const seiyaTotal = seiyaDates.length * seiyaPerDay;
@@ -210,6 +227,7 @@ function buildRows(targetSlots) {
     slots,
     seiyaDates,
     hiromuDates,
+    hiromuClosedDates,
     targetSlots,
     seiyaSlotTotal: seiyaTotal,
     hiromuEarlyDays,
@@ -314,13 +332,15 @@ async function main() {
 
   const calendar = allOctoberDates().map((date) => {
     const dayNum = Number(date.slice(-2));
-    const owner = dayOwner(dayNum);
+    const closedHiromu = plan.hiromuClosedDates.includes(date);
+    const owner = closedHiromu ? null : dayOwner(dayNum);
     const dayRows = rows.filter((r) => r.shift_date === date);
     const open = dayRows.length > 0;
     const breakMin = dayRows.reduce((s, r) => s + (r.break_minutes ?? 0), 0);
     return {
       date,
       trainer: open ? owner : null,
+      closed: closedHiromu || undefined,
       blocks: dayRows.map((r) => `${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}`),
       breakMinutes: breakMin || undefined,
     };
@@ -337,6 +357,7 @@ async function main() {
       hiromuEarlyDays: plan.hiromuEarlyDays,
       hiromuLateDays: plan.hiromuLateDays,
       hiromuPmByDate: plan.hiromuPmByDate,
+      hiromuClosedDates: plan.hiromuClosedDates,
       hiromuBreakMinutesPerDay: HIROMU_BREAK_MINUTES,
     },
     calendar,
