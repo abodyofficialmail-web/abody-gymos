@@ -8,6 +8,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - 営業帯: 9:00–22:00（30分コマ）
  * - 同時1ブース（2ブース開放なし・重複シフトなし）
  * - せいや希望日を優先し、それ以外はひろむ
+ * - ひろむの夕方は 18:00 終了 / 21:00 終了を日数半々（交互）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run --active=40
@@ -131,58 +132,37 @@ function slotsForDay(pmEnd) {
   return countSlots(rows);
 }
 
-const PM_END_OPTIONS = ["22:00", "21:00", "20:00", "19:00", "18:00"];
+const HIROMU_PM_SHORT = "18:00";
+const HIROMU_PM_LONG = "21:00";
 
-/** せいや希望日は終日（9–13 / 16–22）。ひろむは残り全日・PM終了を調整して目標枠に合わせる */
+/** ひろむ勤務日: 夕方 18:00 終了 / 21:00 終了を交互（差1日まで） */
+function initialHiromuPmByDate(hiromuDates) {
+  const map = new Map();
+  hiromuDates.forEach((d, i) => {
+    map.set(d, i % 2 === 0 ? HIROMU_PM_LONG : HIROMU_PM_SHORT);
+  });
+  return map;
+}
+
+function countHiromuPmEnds(hiromuPmByDate) {
+  let shortN = 0;
+  let longN = 0;
+  for (const end of hiromuPmByDate.values()) {
+    if (end === HIROMU_PM_SHORT) shortN += 1;
+    else if (end === HIROMU_PM_LONG) longN += 1;
+  }
+  return { shortN, longN };
+}
+
+/** せいや希望日は終日（9–13 / 16–22）。ひろむは残り全日・PM18/21半々 */
 function buildRows(targetSlots) {
   const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
   const hiromuDates = allOctoberDates().filter((d) => !seiyaDates.includes(d));
 
   const seiyaSlotsPerDay = slotsForDay("22:00");
   const seiyaTotal = seiyaDates.length * seiyaSlotsPerDay;
-  let needFromHiromu = Math.max(0, targetSlots - seiyaTotal);
 
-  const hiromuPmByDate = new Map(hiromuDates.map((d) => [d, "18:00"]));
-
-  function hiromuSlotsTotal() {
-    let t = 0;
-    for (const d of hiromuDates) {
-      t += slotsForDay(hiromuPmByDate.get(d));
-    }
-    return t;
-  }
-
-  while (hiromuSlotsTotal() < needFromHiromu) {
-    let progressed = false;
-    for (const end of PM_END_OPTIONS) {
-      for (const d of hiromuDates) {
-        const cur = hiromuPmByDate.get(d);
-        const curIdx = PM_END_OPTIONS.indexOf(cur);
-        const endIdx = PM_END_OPTIONS.indexOf(end);
-        if (endIdx < curIdx) {
-          hiromuPmByDate.set(d, end);
-          progressed = true;
-          if (hiromuSlotsTotal() >= needFromHiromu) break;
-        }
-      }
-      if (hiromuSlotsTotal() >= needFromHiromu) break;
-    }
-    if (!progressed) break;
-  }
-
-  while (hiromuSlotsTotal() > needFromHiromu) {
-    let progressed = false;
-    for (const d of [...hiromuDates].reverse()) {
-      const cur = hiromuPmByDate.get(d);
-      const curIdx = PM_END_OPTIONS.indexOf(cur);
-      if (curIdx < PM_END_OPTIONS.length - 1) {
-        hiromuPmByDate.set(d, PM_END_OPTIONS[curIdx + 1]);
-        progressed = true;
-        if (hiromuSlotsTotal() <= needFromHiromu) break;
-      }
-    }
-    if (!progressed) break;
-  }
+  const hiromuPmByDate = initialHiromuPmByDate(hiromuDates);
 
   const rows = [];
   for (const d of seiyaDates) {
@@ -192,13 +172,20 @@ function buildRows(targetSlots) {
     rows.push(...buildDayRows(d, "ひろむ", hiromuPmByDate.get(d)));
   }
 
+  const pmEnds = countHiromuPmEnds(hiromuPmByDate);
+  const slots = countSlots(rows);
+
   return {
     rows,
-    slots: countSlots(rows),
+    slots,
     seiyaDates,
     hiromuDates,
     targetSlots,
+    seiyaSlotTotal: seiyaTotal,
     hiromuPmByDate: Object.fromEntries(hiromuPmByDate),
+    hiromuPm18Days: pmEnds.shortN,
+    hiromuPm21Days: pmEnds.longN,
+    slotPctOfTarget: targetSlots ? Math.round((slots / targetSlots) * 1000) / 10 : null,
   };
 }
 
