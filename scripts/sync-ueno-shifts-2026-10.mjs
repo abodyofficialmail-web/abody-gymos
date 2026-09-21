@@ -5,29 +5,44 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * 2026-10 上野店シフト（ひろむ・せいやのみ）
  *
  * - 目標枠: アクティブ会員×12（休会・退会除外）
- * - 営業帯: 9:00–22:00（30分コマ）
- * - 同時1ブース（2ブース開放なし・重複シフトなし）
- * - せいや希望日を優先し、それ以外はひろむ
- * - ひろむの夕方は 18:00 終了 / 21:00 終了を日数半々（交互）
+ * - 同時1ブース（2ブース開放なし）
+ * - せいや希望日: 9–13 / 16–22
+ * - ひろむ: 18:00終了日は 9:00〜（休憩1h）、21:00終了日は 14:00〜（休憩1h）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
- * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run --active=40
  */
 const MONTH = "2026-10";
 const MONTH_LAST_DAY = "31";
 const STORE_NAME = "上野";
 const TRAINER_NAMES = ["ひろむ", "せいや"];
-/** 予約サイトに枠を出す */
 const SHIFT_STATUS = "confirmed";
+const HIROMU_BREAK_MINUTES = 60;
 
-/** 2ブース換算なし（上野も同時1枠でカウント） */
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野"]);
 
-/** せいや 終日希望（10月） */
 const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]);
 
-const AM = ["09:00", "13:00"];
-const PM = ["16:00", "22:00"];
+/** 9:00〜18:00（13–14 休憩1h）→ 予約16コマ */
+const HIROMU_EARLY = {
+  kind: "early",
+  label: "9-18",
+  segments: [
+    ["09:00", "13:00"],
+    ["14:00", "18:00"],
+  ],
+  slotsPerDay: 16,
+};
+
+/** 14:00〜21:00（17–18 休憩1h）→ 予約12コマ */
+const HIROMU_LATE = {
+  kind: "late",
+  label: "14-21",
+  segments: [
+    ["14:00", "17:00"],
+    ["18:00", "21:00"],
+  ],
+  slotsPerDay: 12,
+};
 
 function isActiveMember(m) {
   const ms = String(m.membership_status ?? "").toLowerCase();
@@ -58,14 +73,14 @@ function toMinutes(hhmm) {
   return hh * 60 + mm;
 }
 
-function row(date, start, end, trainer) {
+function row(date, start, end, trainer, break_minutes = 0) {
   return {
     shift_date: date,
     start_local: toHHMMSS(start),
     end_local: toHHMMSS(end),
     trainer_name: trainer,
     store_name: STORE_NAME,
-    break_minutes: 0,
+    break_minutes,
   };
 }
 
@@ -83,15 +98,12 @@ function dayOwner(dayNum) {
   return SEIYA_DAY_NUMBERS.has(dayNum) ? "せいや" : "ひろむ";
 }
 
-function blocksForDay(pmEnd = "22:00") {
-  return [
-    [AM[0], AM[1]],
-    [PM[0], pmEnd],
-  ];
+function buildSeiyaDayRows(date) {
+  return [row(date, "09:00", "13:00", "せいや", 0), row(date, "16:00", "22:00", "せいや", 0)];
 }
 
-function buildDayRows(date, trainer, pmEnd = "22:00") {
-  return blocksForDay(pmEnd).map(([s, e]) => row(date, s, e, trainer));
+function buildHiromuDayRows(date, pattern) {
+  return pattern.segments.map(([s, e], i) => row(date, s, e, "ひろむ", i === 0 ? HIROMU_BREAK_MINUTES : 0));
 }
 
 function effectiveStoreSlots(rows) {
@@ -124,56 +136,74 @@ function countSlots(rows) {
   return effectiveStoreSlots(rows);
 }
 
-function slotsForDay(pmEnd) {
-  const rows = [
-    row("2000-01-01", AM[0], AM[1], "x"),
-    row("2000-01-01", PM[0], pmEnd, "x"),
-  ];
-  return countSlots(rows);
+function seiyaSlotsPerDay() {
+  return countSlots(buildSeiyaDayRows("2000-01-01"));
 }
 
-const HIROMU_PM_SHORT = "18:00";
-const HIROMU_PM_LONG = "21:00";
-
-/** ひろむ勤務日: 夕方 18:00 終了 / 21:00 終了を交互（差1日まで） */
-function initialHiromuPmByDate(hiromuDates) {
-  const map = new Map();
-  hiromuDates.forEach((d, i) => {
-    map.set(d, i % 2 === 0 ? HIROMU_PM_LONG : HIROMU_PM_SHORT);
-  });
-  return map;
-}
-
-function countHiromuPmEnds(hiromuPmByDate) {
-  let shortN = 0;
-  let longN = 0;
-  for (const end of hiromuPmByDate.values()) {
-    if (end === HIROMU_PM_SHORT) shortN += 1;
-    else if (end === HIROMU_PM_LONG) longN += 1;
+function solveHiromuEarlyLateCounts(needHiromuSlots, dayCount) {
+  let early = Math.round((needHiromuSlots - HIROMU_LATE.slotsPerDay * dayCount) / (HIROMU_EARLY.slotsPerDay - HIROMU_LATE.slotsPerDay));
+  early = Math.max(0, Math.min(dayCount, early));
+  let late = dayCount - early;
+  let slots = early * HIROMU_EARLY.slotsPerDay + late * HIROMU_LATE.slotsPerDay;
+  while (slots > needHiromuSlots && early > 0) {
+    early -= 1;
+    late += 1;
+    slots = early * HIROMU_EARLY.slotsPerDay + late * HIROMU_LATE.slotsPerDay;
   }
-  return { shortN, longN };
+  while (slots < needHiromuSlots && early < dayCount) {
+    early += 1;
+    late -= 1;
+    slots = early * HIROMU_EARLY.slotsPerDay + late * HIROMU_LATE.slotsPerDay;
+  }
+  return { early, late, slots };
 }
 
-/** せいや希望日は終日（9–13 / 16–22）。ひろむは残り全日・PM18/21半々 */
-function buildRows(targetSlots) {
-  const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
-  const hiromuDates = allOctoberDates().filter((d) => !seiyaDates.includes(d));
-
-  const seiyaSlotsPerDay = slotsForDay("22:00");
-  const seiyaTotal = seiyaDates.length * seiyaSlotsPerDay;
-
-  const hiromuPmByDate = initialHiromuPmByDate(hiromuDates);
-
-  const rows = [];
-  for (const d of seiyaDates) {
-    rows.push(...buildDayRows(d, "せいや", "22:00"));
+/** 交互に early/late を割当し、目標コマ数に合わせて early 日数を調整 */
+function assignHiromuPatterns(hiromuDates, needHiromuSlots) {
+  const { early: earlyTarget } = solveHiromuEarlyLateCounts(needHiromuSlots, hiromuDates.length);
+  const typeByDate = new Map();
+  let earlyAssigned = 0;
+  for (let i = 0; i < hiromuDates.length; i++) {
+    const d = hiromuDates[i];
+    const preferEarly = i % 2 === 0;
+    if (preferEarly && earlyAssigned < earlyTarget) {
+      typeByDate.set(d, HIROMU_EARLY);
+      earlyAssigned += 1;
+    } else {
+      typeByDate.set(d, HIROMU_LATE);
+    }
   }
   for (const d of hiromuDates) {
-    rows.push(...buildDayRows(d, "ひろむ", hiromuPmByDate.get(d)));
+    if (earlyAssigned >= earlyTarget) break;
+    if (typeByDate.get(d) === HIROMU_LATE) {
+      typeByDate.set(d, HIROMU_EARLY);
+      earlyAssigned += 1;
+    }
   }
+  return typeByDate;
+}
 
-  const pmEnds = countHiromuPmEnds(hiromuPmByDate);
+function buildRows(targetSlots) {
+  const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
+  const hiromuDates = allOctoberDates().filter((d) => !seiyaDates.includes(d)).sort();
+
+  const seiyaPerDay = seiyaSlotsPerDay();
+  const seiyaTotal = seiyaDates.length * seiyaPerDay;
+  const needHiromu = Math.max(0, targetSlots - seiyaTotal);
+
+  const hiromuPatternByDate = assignHiromuPatterns(hiromuDates, needHiromu);
+
+  const rows = [];
+  for (const d of seiyaDates) rows.push(...buildSeiyaDayRows(d));
+  for (const d of hiromuDates) rows.push(...buildHiromuDayRows(d, hiromuPatternByDate.get(d)));
+
+  const hiromuEarlyDays = [...hiromuPatternByDate.values()].filter((p) => p.kind === "early").length;
+  const hiromuLateDays = hiromuDates.length - hiromuEarlyDays;
   const slots = countSlots(rows);
+
+  const hiromuPmByDate = Object.fromEntries(
+    [...hiromuPatternByDate.entries()].map(([d, p]) => [d, p.kind === "early" ? "18:00" : "21:00"]),
+  );
 
   return {
     rows,
@@ -182,10 +212,10 @@ function buildRows(targetSlots) {
     hiromuDates,
     targetSlots,
     seiyaSlotTotal: seiyaTotal,
-    hiromuPmByDate: Object.fromEntries(hiromuPmByDate),
-    hiromuPm18Days: pmEnds.shortN,
-    hiromuPm21Days: pmEnds.longN,
-    slotPctOfTarget: targetSlots ? Math.round((slots / targetSlots) * 1000) / 10 : null,
+    hiromuEarlyDays,
+    hiromuLateDays,
+    hiromuPmByDate,
+    hiromuPatternByDate,
   };
 }
 
@@ -230,9 +260,10 @@ function validateSingleBoothPerDay(rows) {
 function summarize(rows, targetSlots, activeMembers) {
   const byTrainer = new Map();
   for (const r of rows) {
-    const t = byTrainer.get(r.trainer_name) ?? { days: new Set(), minutes: 0 };
+    const t = byTrainer.get(r.trainer_name) ?? { days: new Set(), workMinutes: 0, breakMinutes: 0 };
     t.days.add(r.shift_date);
-    t.minutes += toMinutes(r.end_local) - toMinutes(r.start_local);
+    t.workMinutes += toMinutes(r.end_local) - toMinutes(r.start_local);
+    t.breakMinutes += r.break_minutes ?? 0;
     byTrainer.set(r.trainer_name, t);
   }
   const slots = countSlots(rows);
@@ -245,9 +276,9 @@ function summarize(rows, targetSlots, activeMembers) {
     trainers: [...byTrainer.entries()].map(([name, v]) => ({
       name,
       days: v.days.size,
-      hours: Math.round((v.minutes / 60) * 10) / 10,
+      workHours: Math.round((v.workMinutes / 60) * 10) / 10,
+      breakHours: Math.round((v.breakMinutes / 60) * 10) / 10,
     })),
-    meta: {},
   };
 }
 
@@ -279,22 +310,19 @@ async function main() {
   const { rows } = plan;
   validateNoTrainerOverlap(rows);
   validateSingleBoothPerDay(rows);
-  const summary = {
-    ...summarize(rows, targetSlots, activeMembers),
-    meta: {
-      hiromuPmByDate: plan.hiromuPmByDate,
-    },
-  };
+  const summary = summarize(rows, targetSlots, activeMembers);
 
   const calendar = allOctoberDates().map((date) => {
     const dayNum = Number(date.slice(-2));
     const owner = dayOwner(dayNum);
     const dayRows = rows.filter((r) => r.shift_date === date);
     const open = dayRows.length > 0;
+    const breakMin = dayRows.reduce((s, r) => s + (r.break_minutes ?? 0), 0);
     return {
       date,
       trainer: open ? owner : null,
       blocks: dayRows.map((r) => `${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}`),
+      breakMinutes: breakMin || undefined,
     };
   });
 
@@ -306,7 +334,10 @@ async function main() {
     plan: {
       seiyaDays: plan.seiyaDates.length,
       hiromuDays: plan.hiromuDates.length,
+      hiromuEarlyDays: plan.hiromuEarlyDays,
+      hiromuLateDays: plan.hiromuLateDays,
       hiromuPmByDate: plan.hiromuPmByDate,
+      hiromuBreakMinutesPerDay: HIROMU_BREAK_MINUTES,
     },
     calendar,
     rowCount: rows.length,
@@ -350,6 +381,7 @@ async function main() {
     end_local: r.end_local,
     status: SHIFT_STATUS,
     is_break: false,
+    break_minutes: r.break_minutes ?? 0,
   }));
 
   if (dryRun) {
@@ -362,15 +394,14 @@ async function main() {
     const { error } = await supabase.from("trainer_shifts").delete().in("id", ids.slice(i, i + 200));
     if (error) throw error;
   }
-  for (let i = 0; i < payload.length; i += 200) {
-    const { error } = await supabase.from("trainer_shifts").insert(payload.slice(i, i + 200));
-    if (error) throw error;
-  }
 
-  console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: payload.length, ...summary }, null, 2));
+  const { data: inserted, error: insErr } = await supabase.from("trainer_shifts").insert(payload).select("id, shift_date, start_local, trainer_id");
+  if (insErr) throw insErr;
+
+  console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: inserted?.length ?? payload.length, ...summary }, null, 2));
 }
 
-export { buildRows, countSlots, SEIYA_DAY_NUMBERS };
+export { buildRows, countSlots, SEIYA_DAY_NUMBERS, HIROMU_EARLY, HIROMU_LATE };
 
 main().catch((e) => {
   console.error(e);
