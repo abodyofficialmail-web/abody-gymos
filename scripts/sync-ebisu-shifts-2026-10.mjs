@@ -9,7 +9,7 @@ import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-sh
  * - 目標枠: 約190（--slots= で上書き可）
  * - 土曜: 店舗休み
  * - 平日: 16:00–22:00
- * - 日曜: 10:00–16:00
+ * - 日曜: 10:00–15:00
  * - ひろむ: 月4日（上野・新宿と同日不可）
  * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可（ひろむ恵比寿日は除外）
  *
@@ -26,12 +26,13 @@ const SHIFT_STATUS = "confirmed";
 const DEFAULT_TARGET_SLOTS = 190;
 const HIROMU_EBISU_DAY_COUNT = 4;
 const YUTO_OFF_PER_WEEK = 2;
-const SLOTS_PER_OPEN_DAY = 12;
+const WEEKDAY_SLOTS = 12;
+const SUNDAY_SLOTS = 10;
 
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
 
 const WEEKDAY_TEMPLATE = { key: "weekday", segments: [["16:00", "22:00"]], breakMinutes: 0 };
-const SUNDAY_TEMPLATE = { key: "sunday", segments: [["10:00", "16:00"]], breakMinutes: 0 };
+const SUNDAY_TEMPLATE = { key: "sunday", segments: [["10:00", "15:00"]], breakMinutes: 0 };
 
 function isActiveMember(m) {
   const ms = String(m.membership_status ?? "").toLowerCase();
@@ -164,6 +165,17 @@ function countSlots(rows) {
   return effectiveStoreSlots(rows);
 }
 
+function slotsForOpenDate(date) {
+  return countSlots(rowsForTemplate(date, "x", templateForDate(date)));
+}
+
+function totalOpenSlots(hiromuDays, yutoWorkDays) {
+  let sum = 0;
+  for (const d of hiromuDays) sum += slotsForOpenDate(d);
+  for (const d of yutoWorkDays) sum += slotsForOpenDate(d);
+  return sum;
+}
+
 function openCandidateDates() {
   return allOctoberDates().filter((d) => parseLocalDate(d).getDay() !== 6);
 }
@@ -177,7 +189,7 @@ function trainerDatesElsewhere(rows, trainer, excludeStore) {
 function loadCrossStoreBusy(uenoActive, sakuraActive) {
   const cross = loadCrossStoreContext(uenoActive, sakuraActive);
   const ueno = buildUenoPlan(uenoActive * 12);
-  const shinjuku = buildShinjukuPlan(350, cross);
+  const shinjuku = buildShinjukuPlan(380, cross);
   const hiromuBusy = new Set([
     ...trainerDatesElsewhere(ueno.rows, TRAINER_HIROMU, STORE_NAME),
     ...trainerDatesElsewhere(shinjuku.rows, TRAINER_HIROMU, STORE_NAME),
@@ -264,18 +276,19 @@ function pickYutoEbisuWorkDays(candidates, hiromuDays, yutoShinjukuDates) {
     }
 
     for (const d of pool) {
-      if (!isYutoShinjukuWeekday(d, shinjukuSet, hiromuSet)) continue;
-      if (yutoRest.has(d)) continue;
-      yutoWork.add(d);
-      yutoDualPmDays.add(d);
-    }
-
-    for (const d of pool) {
       if (hiromuSet.has(d)) continue;
       if (yutoRest.has(d)) continue;
       if (yutoWork.has(d)) continue;
+      if (isYutoShinjukuWeekday(d, shinjukuSet, hiromuSet)) continue;
       yutoWork.add(d);
     }
+  }
+
+  for (const d of yutoShinjukuDates) {
+    if (!isYutoShinjukuWeekday(d, shinjukuSet, hiromuSet)) continue;
+    if (yutoRest.has(d)) continue;
+    yutoWork.add(d);
+    yutoDualPmDays.add(d);
   }
 
   return {
@@ -286,17 +299,24 @@ function pickYutoEbisuWorkDays(candidates, hiromuDays, yutoShinjukuDates) {
 }
 
 function trimYutoDaysToTarget(yutoWorkDays, hiromuDays, targetSlots, protectedDays) {
-  const openCount = hiromuDays.length + yutoWorkDays.length;
-  const slots = openCount * SLOTS_PER_OPEN_DAY;
-  if (slots <= targetSlots + SLOTS_PER_OPEN_DAY / 2) {
-    return { yutoWorkDays, storeClosedExtra: [] };
+  /** 新宿午前+恵比寿夕方の日は従来恵比寿休だった分だけ枠を上乗せ */
+  let workDays = [...yutoWorkDays].sort();
+  let slots = totalOpenSlots(hiromuDays, workDays);
+  const effectiveTarget = targetSlots + protectedDays.size * WEEKDAY_SLOTS;
+  if (slots <= effectiveTarget + 2) {
+    return { yutoWorkDays: workDays, storeClosedExtra: [] };
   }
-  const maxOpen = Math.ceil(targetSlots / SLOTS_PER_OPEN_DAY);
-  const needRemove = openCount - maxOpen;
-  const removable = yutoWorkDays.filter((d) => !protectedDays.has(d)).sort((a, b) => dayNum(b) - dayNum(a));
-  const removed = removable.splice(0, needRemove);
-  const kept = yutoWorkDays.filter((d) => !removed.includes(d));
-  return { yutoWorkDays: kept.sort(), storeClosedExtra: removed.sort() };
+  const removed = [];
+  const removable = () =>
+    workDays.filter((d) => !protectedDays.has(d)).sort((a, b) => dayNum(b) - dayNum(a));
+  let guard = 0;
+  while (slots > effectiveTarget + 2 && removable().length && guard++ < 40) {
+    const drop = removable()[0];
+    workDays = workDays.filter((d) => d !== drop);
+    removed.push(drop);
+    slots = totalOpenSlots(hiromuDays, workDays);
+  }
+  return { yutoWorkDays: workDays.sort(), storeClosedExtra: removed.sort() };
 }
 
 function validateYutoWeeklyRest(candidates, hiromuDays, yutoWorkDays) {
@@ -563,14 +583,7 @@ async function main() {
   console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: payload.length }, null, 2));
 }
 
-export {
-  buildRows,
-  loadCrossStoreBusy,
-  openCandidateDates,
-  pickHiromuEbisuDays,
-  pickYutoEbisuWorkDays,
-  validateYutoWeeklyRest,
-};
+export { buildRows, loadCrossStoreBusy, openCandidateDates };
 
 import { pathToFileURL } from "url";
 const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
