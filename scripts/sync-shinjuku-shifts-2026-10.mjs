@@ -9,7 +9,8 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
  * - 目標枠: 350（--slots= で変更可。未指定時は350）
  * - 店休日あり・ゆうと枠上限・りょうは長時間テンプレ優先
  * - ひろむ: 上野10月案を考慮、週2休、新宿で約60h
- * - りょう: 桜木町勤務日・休み希望(1,7,14,20,26)以外を新宿
+ * - りょう: 休み希望(1,7,14,20,26)最優先、桜木町勤務日以外。
+ *   ひろむ新宿予定日は eligible ならりょうへ優先振替
  * - ゆうと: 残り枠
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
@@ -372,7 +373,14 @@ function buildRows(targetSlots, crossStore) {
   const { hiromuUenoDates, sakuraRyoDates } = crossStore;
 
   const hiromuRestDays = pickHiromuRestDays(dates, hiromuUenoDates);
-  const hiromuShinjukuDays = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays);
+  const plannedHiromuShinjuku = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays);
+  /** りょう可なら新宿はりょうへ。桜木町りょう日のみひろむ新宿。休み希望日はひろむ不可 */
+  const hiromuHandoffToRyo = plannedHiromuShinjuku.filter((d) => isRyoShinjukuEligible(d, sakuraRyoDates));
+  const hiromuShinjukuDays = plannedHiromuShinjuku.filter((d) => {
+    if (isRyoShinjukuEligible(d, sakuraRyoDates)) return false;
+    if (RYO_OFF_DAY_NUMS.has(dayNum(d))) return false;
+    return sakuraRyoDates.has(d);
+  });
   const storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
   let owners = assignDayOwners(dates, hiromuShinjukuDays, sakuraRyoDates, storeClosedDates);
 
@@ -411,6 +419,8 @@ function buildRows(targetSlots, crossStore) {
     slots: countSlots(rows),
     targetSlots,
     hiromuShinjukuDays,
+    hiromuHandoffToRyo,
+    plannedHiromuShinjuku,
     hiromuRestDays: [...hiromuRestDays].sort(),
     hiromuUenoDates: [...hiromuUenoDates].sort(),
     storeClosedDates: storeClosedAll,
@@ -550,6 +560,7 @@ async function main() {
     plan: {
       targetSlots,
       hiromuShinjukuDays: plan.hiromuShinjukuDays.length,
+      hiromuHandoffToRyo: plan.hiromuHandoffToRyo.map((d) => dayNum(d)),
       hiromuRestDays: plan.hiromuRestDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
       yutoOffDays: plan.yutoOffDays.map((d) => dayNum(d)),
