@@ -6,11 +6,11 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
 /**
  * 2026-10 新宿店（ひろむ・りょう・ゆうと）
  *
- * - 目標枠: 380–400（デフォルト390、--slots=）
+ * - 目標枠: 約380（デフォルト380、--slots=）
  * - 1ブース（2ブースなし）
  * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約130h
- * - ゆうと: 残り日・残り枠
- * - ひろむ: 新宿勤務なし（上野案はクロス参照のみ）
+ * - ゆうと: 残り日・残り枠（枠調整は月末連休にならないよう分散削除）
+ * - ひろむ: 新宿2日（9–14/17–22・上野勤務日・週2休と被らない）
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
  */
@@ -23,11 +23,11 @@ const TRAINER_YUTO = "ゆうと";
 const TRAINER_NAMES = [TRAINER_HIROMU, TRAINER_RYO, TRAINER_YUTO];
 const SHIFT_STATUS = "confirmed";
 
-const HIROMU_SHINJUKU_TARGET_HOURS = 60;
+const HIROMU_SHINJUKU_DAY_COUNT = 2;
 const HIROMU_OFF_PER_WEEK = 2;
-/** 10月新宿の開放目標（380–400の中央値） */
-const DEFAULT_TARGET_SLOTS = 390;
-const TARGET_SLOTS_CEILING = 400;
+/** 10月新宿の開放目標 */
+const DEFAULT_TARGET_SLOTS = 380;
+const TARGET_SLOTS_CEILING = 388;
 /** 予約枠なしの店休日数（枠超過時のみ追加） */
 const STORE_CLOSED_DAY_COUNT = 0;
 /** りょうの新宿勤務時間目標 */
@@ -38,11 +38,16 @@ const RYO_OFF_DAY_NUMS = new Set([1, 7, 14, 20, 26]);
 
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
 
-const HIROMU_SHINJUKU_TEMPLATES = [
-  { key: "day", segments: [["10:00", "13:00"], ["14:00", "22:00"]], breakMinutes: 60 },
-  { key: "mid", segments: [["10:00", "15:00"], ["16:00", "19:00"]], breakMinutes: 60 },
-  { key: "am", segments: [["10:00", "15:00"]], breakMinutes: 0 },
-];
+/** 9–14 / 17–22（14–17は3時間中抜け・休憩枠なし） */
+const HIROMU_SHINJUKU_SPLIT_TEMPLATE = {
+  key: "split",
+  segments: [
+    ["09:00", "14:00"],
+    ["17:00", "22:00"],
+  ],
+  breakMinutes: 0,
+};
+const HIROMU_SHINJUKU_TEMPLATES = [HIROMU_SHINJUKU_SPLIT_TEMPLATE];
 
 const RYO_SHINJUKU_TEMPLATES = [
   { key: "long", segments: [["09:00", "14:00"], ["15:00", "22:00"]], breakMinutes: 60 },
@@ -235,14 +240,56 @@ function pickHiromuRestDays(dates, hiromuUenoDates) {
   return rest;
 }
 
-function pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays) {
-  const candidates = dates.filter((d) => !hiromuUenoDates.has(d) && !hiromuRestDays.has(d));
-  const dayTpl = HIROMU_SHINJUKU_TEMPLATES.find((t) => t.key === "day");
-  const dayH = templateWorkHours(dayTpl);
-  const needDays = Math.max(1, Math.round(HIROMU_SHINJUKU_TARGET_HOURS / dayH));
+function hiromuShinjukuPickScore(date, hiromuUenoDates) {
+  if (hiromuUenoDates.has(date)) return -1000;
+  const n = dayNum(date);
+  let s = 0;
+  if (n >= 24 && n !== 26) s += 20;
+  if (parseLocalDate(date).getDay() === 0 || parseLocalDate(date).getDay() === 6) s += 3;
+  return s;
+}
 
-  const picked = candidates.slice(0, needDays);
-  return picked.sort();
+/** 上野勤務日・週2休以外から新宿2日（月末の店休を避けるため後半を優先） */
+function pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates) {
+  const candidates = dates.filter(
+    (d) =>
+      !hiromuUenoDates.has(d) &&
+      !hiromuRestDays.has(d) &&
+      isRyoShinjukuEligible(d, sakuraRyoDates),
+  );
+  const sorted = [...candidates].sort(
+    (a, b) => hiromuShinjukuPickScore(b, hiromuUenoDates) - hiromuShinjukuPickScore(a, hiromuUenoDates),
+  );
+  return sorted.slice(0, HIROMU_SHINJUKU_DAY_COUNT).sort();
+}
+
+function trailingClosedStreakAfterDrop(allDates, closedSet, dropDate) {
+  const closed = new Set(closedSet);
+  closed.add(dropDate);
+  let streak = 0;
+  for (let i = allDates.length - 1; i >= 0; i--) {
+    const d = allDates[i];
+    if (closed.has(d)) streak++;
+    else break;
+  }
+  return streak;
+}
+
+/** 枠削減でゆうと勤務日を1日外す（月末連続店休を最小化） */
+function pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, allDates) {
+  if (!yutoWorkDays.length) return null;
+  let best = yutoWorkDays[0];
+  let bestScore = Infinity;
+  for (const d of yutoWorkDays) {
+    const streak = trailingClosedStreakAfterDrop(allDates, storeClosedDates, d);
+    const n = dayNum(d);
+    const score = streak * 100 - n;
+    if (score < bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  return best;
 }
 
 function isRyoShinjukuEligible(date, sakuraRyoDates) {
@@ -427,7 +474,7 @@ function buildRows(targetSlots, crossStore) {
   const hiromuRestDays = pickHiromuRestDays(dates, hiromuUenoDates);
   const plannedHiromuShinjuku = [];
   const hiromuHandoffToRyo = [];
-  const hiromuShinjukuDays = [];
+  const hiromuShinjukuDays = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates);
   let storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
   const hiromuSet = new Set(hiromuShinjukuDays);
   const isClosed = (d) => storeClosedDates.includes(d);
@@ -442,7 +489,7 @@ function buildRows(targetSlots, crossStore) {
   let owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
 
   const hiromuRows = hiromuShinjukuDays.flatMap((d) =>
-    rowsForTemplate(d, TRAINER_HIROMU, HIROMU_SHINJUKU_TEMPLATES.find((t) => t.key === "day")),
+    rowsForTemplate(d, TRAINER_HIROMU, HIROMU_SHINJUKU_SPLIT_TEMPLATE),
   );
   let hiromuSlots = countSlots(hiromuRows);
 
@@ -476,22 +523,25 @@ function buildRows(targetSlots, crossStore) {
 
   let slots = rebuildYuto();
 
-  let guardTrim = 0;
-  while (slots > TARGET_SLOTS_CEILING && yutoWorkDays.length > 0 && guardTrim++ < 40) {
-    const drop = yutoWorkDays.pop();
+  function trimOneYutoDay() {
+    const drop = pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, dates);
+    if (!drop) return false;
+    yutoWorkDays = yutoWorkDays.filter((d) => d !== drop);
     storeClosedDates.push(drop);
     storeClosedDates.sort();
     owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
     slots = rebuildYuto();
+    return true;
+  }
+
+  let guardTrim = 0;
+  while (slots > TARGET_SLOTS_CEILING && yutoWorkDays.length > 0 && guardTrim++ < 40) {
+    if (!trimOneYutoDay()) break;
   }
 
   guardTrim = 0;
-  while (slots > targetSlots + 8 && yutoWorkDays.length > 0 && guardTrim++ < 20) {
-    const drop = yutoWorkDays.pop();
-    storeClosedDates.push(drop);
-    storeClosedDates.sort();
-    owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
-    slots = rebuildYuto();
+  while (slots > targetSlots + 6 && yutoWorkDays.length > 0 && guardTrim++ < 20) {
+    if (!trimOneYutoDay()) break;
   }
 
   const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
