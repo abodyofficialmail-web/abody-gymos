@@ -667,6 +667,11 @@ async function main() {
   const plan = buildRows(targetSlots, crossStore);
   validateNoTrainerOverlap(plan.rows);
   validateSingleBoothPerDay(plan.rows);
+  for (const d of plan.hiromuShinjukuDays) {
+    if (crossStore.hiromuUenoDates.has(d)) {
+      throw new Error(`ひろむ新宿日が上野勤務と重複: ${d}`);
+    }
+  }
   const summary = summarize(plan.rows, plan, targetSlots, activeMembers);
 
   const calendar = allOctoberDates().map((date) => {
@@ -695,6 +700,7 @@ async function main() {
     plan: {
       targetSlots,
       hiromuShinjukuDays: plan.hiromuShinjukuDays.length,
+      hiromuShinjukuDayNums: plan.hiromuShinjukuDays.map((d) => dayNum(d)),
       hiromuHandoffToRyo: plan.hiromuHandoffToRyo.map((d) => dayNum(d)),
       hiromuRestDays: plan.hiromuRestDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
