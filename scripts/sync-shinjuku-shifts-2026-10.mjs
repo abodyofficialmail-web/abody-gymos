@@ -6,12 +6,11 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
 /**
  * 2026-10 新宿店（ひろむ・りょう・ゆうと）
  *
- * - 目標枠: 350（--slots= で変更可。未指定時は350）
- * - 店休日あり・ゆうと枠上限・りょうは長時間テンプレ優先
- * - ひろむ: 上野10月案を考慮、週2休、新宿で約60h
- * - りょう: 休み希望(1,7,14,20,26)最優先、桜木町勤務日以外。
- *   ひろむ新宿予定日は eligible ならりょうへ優先振替
- * - ゆうと: 残り枠
+ * - 目標枠: 380–400（デフォルト390、--slots=）
+ * - 1ブース（2ブースなし）
+ * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約150h
+ * - ゆうと: 残り日・残り枠
+ * - ひろむ: 上野500枠案を考慮、週2休、新宿は桜木町りょう日など限定
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
  */
@@ -26,12 +25,13 @@ const SHIFT_STATUS = "confirmed";
 
 const HIROMU_SHINJUKU_TARGET_HOURS = 60;
 const HIROMU_OFF_PER_WEEK = 2;
-/** 10月新宿の開放目標（旧300→350） */
-const DEFAULT_TARGET_SLOTS = 350;
-/** 予約枠なしの店休日数 */
-const STORE_CLOSED_DAY_COUNT = 3;
-/** ゆうと担当日の枠上限（mini中心・出勤日数も抑制） */
-const YUTO_SLOTS_CAP = 42;
+/** 10月新宿の開放目標（380–400の中央値） */
+const DEFAULT_TARGET_SLOTS = 390;
+const TARGET_SLOTS_CEILING = 400;
+/** 予約枠なしの店休日数（枠超過時のみ追加） */
+const STORE_CLOSED_DAY_COUNT = 0;
+/** りょうの新宿勤務時間目標 */
+const RYO_TARGET_WORK_HOURS = 150;
 
 /** 桜木町・りょう休み希望（新宿も休み） */
 const RYO_OFF_DAY_NUMS = new Set([1, 7, 14, 20, 26]);
@@ -204,7 +204,7 @@ function slotsForTemplate(template) {
 }
 
 function loadCrossStoreContext(uenoActive, sakuraActive) {
-  const ueno = buildUenoPlan(uenoActive * 12);
+  const ueno = buildUenoPlan(500);
   const sakura = buildSakuraPlan(sakuraActive * 12);
   const hiromuUenoDates = new Set(ueno.hiromuDates);
   const sakuraRyoDates = new Set(sakura.ryoDays);
@@ -252,22 +252,48 @@ function isRyoShinjukuEligible(date, sakuraRyoDates) {
   return true;
 }
 
-function pickYutoWorkDays(yutoDates, slotsCap) {
-  const perDay = slotsForTemplate(YUTO_WEEKDAY_TEMPLATE);
-  const needDays = Math.min(yutoDates.length, Math.max(1, Math.ceil(slotsCap / perDay)));
-  const sakuraSide = yutoDates.filter((d) => !RYO_OFF_DAY_NUMS.has(dayNum(d)));
-  const offSide = yutoDates.filter((d) => RYO_OFF_DAY_NUMS.has(dayNum(d)));
-  const ordered = [...sakuraSide, ...offSide];
-  const picked = [];
-  const step = Math.max(1, Math.floor(ordered.length / needDays));
-  for (let i = 0; i < ordered.length && picked.length < needDays; i += step) {
-    picked.push(ordered[i]);
+/** 約150hになるまで eligible 日にテンプレ付与（超過分はゆうとへ） */
+function pickRyoShinjukuPlanByHours(eligibleDates, targetHours) {
+  const full = RYO_SHINJUKU_TEMPLATES.find((t) => t.key === "full");
+  const long = RYO_SHINJUKU_TEMPLATES.find((t) => t.key === "long");
+  const med = RYO_SHINJUKU_TEMPLATES.find((t) => t.key === "med");
+  if (!full || !long) throw new Error("りょうテンプレート未定義");
+
+  const sorted = [...eligibleDates].sort();
+  const plan = [];
+  let hours = 0;
+
+  for (const date of sorted) {
+    if (hours >= targetHours - 1) break;
+    const hLong = templateWorkHours(long);
+    const hFull = templateWorkHours(full);
+    let template = full;
+    if (hours + hLong <= targetHours + 4) template = long;
+    else if (hours + hFull <= targetHours + 6) template = full;
+    else if (med && hours + templateWorkHours(med) <= targetHours + 4) template = med;
+    else continue;
+    plan.push({ date, template, key: template.key });
+    hours += templateWorkHours(template);
   }
-  for (const d of ordered) {
-    if (picked.length >= needDays) break;
-    if (!picked.includes(d)) picked.push(d);
+
+  let guard = 0;
+  while (hours < targetHours - 2 && guard++ < 200) {
+    let upgraded = false;
+    for (let i = 0; i < plan.length; i++) {
+      if (plan[i].key === "long") continue;
+      const next = long;
+      const delta = templateWorkHours(next) - templateWorkHours(plan[i].template);
+      if (hours + delta <= targetHours + 6) {
+        hours += delta;
+        plan[i] = { date: plan[i].date, template: next, key: next.key };
+        upgraded = true;
+        break;
+      }
+    }
+    if (!upgraded) break;
   }
-  return picked.sort();
+
+  return { plan, ryoWorkHours: hours };
 }
 
 function pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates) {
@@ -293,17 +319,32 @@ function pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates) {
   return picked.sort();
 }
 
-function assignDayOwners(dates, hiromuShinjukuDays, sakuraRyoDates, storeClosedDates) {
+function assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates) {
   const hiromuSet = new Set(hiromuShinjukuDays);
+  const ryoSet = new Set(ryoDates);
   const closedSet = new Set(storeClosedDates);
   const owners = new Map();
   for (const date of dates) {
     if (closedSet.has(date)) owners.set(date, null);
     else if (hiromuSet.has(date)) owners.set(date, TRAINER_HIROMU);
-    else if (isRyoShinjukuEligible(date, sakuraRyoDates)) owners.set(date, TRAINER_RYO);
+    else if (ryoSet.has(date)) owners.set(date, TRAINER_RYO);
     else owners.set(date, TRAINER_YUTO);
   }
   return owners;
+}
+
+function pickExtraStoreClosedDates(candidates, needCount) {
+  if (needCount <= 0 || !candidates.length) return [];
+  const picked = [];
+  const step = Math.max(1, Math.floor(candidates.length / (needCount + 1)));
+  for (let i = step - 1; i < candidates.length && picked.length < needCount; i += step) {
+    picked.push(candidates[i]);
+  }
+  for (const d of candidates) {
+    if (picked.length >= needCount) break;
+    if (!picked.includes(d)) picked.push(d);
+  }
+  return picked.sort();
 }
 
 function pickTemplatesForDays(
@@ -392,44 +433,79 @@ function buildRows(targetSlots, crossStore) {
     if (RYO_OFF_DAY_NUMS.has(dayNum(d))) return false;
     return sakuraRyoDates.has(d);
   });
-  const storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
-  let owners = assignDayOwners(dates, hiromuShinjukuDays, sakuraRyoDates, storeClosedDates);
+  let storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
+  const hiromuSet = new Set(hiromuShinjukuDays);
+  const isClosed = (d) => storeClosedDates.includes(d);
 
-  const hiromuDates = dates.filter((d) => owners.get(d) === TRAINER_HIROMU);
-  const ryoDates = dates.filter((d) => owners.get(d) === TRAINER_RYO);
-  const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
+  const ryoEligible = dates.filter(
+    (d) => !isClosed(d) && !hiromuSet.has(d) && isRyoShinjukuEligible(d, sakuraRyoDates),
+  );
+  let { plan: ryoPlan, ryoWorkHours } = pickRyoShinjukuPlanByHours(ryoEligible, RYO_TARGET_WORK_HOURS);
+  let ryoDates = ryoPlan.map((p) => p.date);
 
-  const hiromuRows = hiromuDates.flatMap((d) =>
+  let yutoWorkDays = dates.filter((d) => !isClosed(d) && !hiromuSet.has(d) && !ryoDates.includes(d));
+  let owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
+
+  const hiromuRows = hiromuShinjukuDays.flatMap((d) =>
     rowsForTemplate(d, TRAINER_HIROMU, HIROMU_SHINJUKU_TEMPLATES.find((t) => t.key === "day")),
   );
-  const hiromuSlots = countSlots(hiromuRows);
+  let hiromuSlots = countSlots(hiromuRows);
 
-  const yutoWorkDays = pickYutoWorkDays(yutoDates, YUTO_SLOTS_CAP);
-  const yutoOffDays = yutoDates.filter((d) => !yutoWorkDays.includes(d));
-  const storeClosedAll = [...new Set([...storeClosedDates, ...yutoOffDays])].sort();
-  for (const d of yutoOffDays) owners.set(d, null);
+  let ryoRows = ryoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_RYO, template));
+  let ryoSlots = countSlots(ryoRows);
 
-  const yutoNeedCap = Math.min(YUTO_SLOTS_CAP, Math.max(0, targetSlots - hiromuSlots));
-  const yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeedCap, {
-    slotCeilingExtra: 0,
+  let yutoNeed = Math.max(0, targetSlots - hiromuSlots - ryoSlots);
+  let yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeed, {
+    slotCeilingExtra: 8,
     maxTemplateKey: "am",
   });
-  const yutoRows = yutoPlan.flatMap(({ date, template }) =>
+  let yutoRows = yutoPlan.flatMap(({ date, template }) =>
     rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
   );
-  const yutoSlots = countSlots(yutoRows);
+  let yutoSlots = countSlots(yutoRows);
+  let rows;
 
-  const needRyoSlots = Math.max(0, targetSlots - hiromuSlots - yutoSlots);
-  const ryoPlan = pickTemplatesForDays(ryoDates, RYO_SHINJUKU_TEMPLATES, needRyoSlots, {
-    slotCeilingExtra: 16,
-    minTemplateKey: "full",
-  });
-  const ryoRows = ryoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_RYO, template));
+  function rebuildYuto() {
+    yutoNeed = Math.max(0, targetSlots - hiromuSlots - ryoSlots);
+    yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeed, {
+      slotCeilingExtra: 4,
+      maxTemplateKey: "am",
+    });
+    yutoRows = yutoPlan.flatMap(({ date, template }) =>
+      rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
+    );
+    yutoSlots = countSlots(yutoRows);
+    rows = [...hiromuRows, ...ryoRows, ...yutoRows];
+    return countSlots(rows);
+  }
 
-  const rows = [...hiromuRows, ...ryoRows, ...yutoRows];
+  let slots = rebuildYuto();
+
+  let guardTrim = 0;
+  while (slots > TARGET_SLOTS_CEILING && yutoWorkDays.length > 0 && guardTrim++ < 40) {
+    const drop = yutoWorkDays.pop();
+    storeClosedDates.push(drop);
+    storeClosedDates.sort();
+    owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
+    slots = rebuildYuto();
+  }
+
+  guardTrim = 0;
+  while (slots > targetSlots + 8 && yutoWorkDays.length > 0 && guardTrim++ < 20) {
+    const drop = yutoWorkDays.pop();
+    storeClosedDates.push(drop);
+    storeClosedDates.sort();
+    owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
+    slots = rebuildYuto();
+  }
+
+  const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
+  const yutoOffDays = yutoDates.filter((d) => !yutoWorkDays.includes(d));
+  const storeClosedAll = [...new Set([...storeClosedDates, ...yutoOffDays])].sort();
+
   return {
     rows,
-    slots: countSlots(rows),
+    slots,
     targetSlots,
     hiromuShinjukuDays,
     hiromuHandoffToRyo,
@@ -444,8 +520,9 @@ function buildRows(targetSlots, crossStore) {
     owners,
     ryoPlan,
     yutoPlan,
+    ryoWorkHours,
     hiromuSlots,
-    ryoSlots: countSlots(ryoRows),
+    ryoSlots,
     yutoSlots,
   };
 }
@@ -579,6 +656,7 @@ async function main() {
       yutoOffDays: plan.yutoOffDays.map((d) => dayNum(d)),
       ryoShinjukuDays: plan.ryoDates.length,
       yutoDays: plan.yutoDates.length,
+      ryoWorkHours: plan.ryoWorkHours,
       slotSplit: {
         hiromu: plan.hiromuSlots,
         ryo: plan.ryoSlots,
