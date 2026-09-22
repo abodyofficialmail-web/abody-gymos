@@ -52,11 +52,22 @@ const RYO_SHINJUKU_TEMPLATES = [
   { key: "mini", segments: [["16:00", "19:00"]], breakMinutes: 0 },
 ];
 
-/** ゆうとは短時間枠のみ（枠削減） */
+/** ゆうとは短時間枠のみ（枠削減）・土曜は 9–15 固定 */
+const YUTO_SATURDAY_TEMPLATE = {
+  key: "sat",
+  segments: [["09:00", "15:00"]],
+  breakMinutes: 0,
+};
 const YUTO_TEMPLATES = [
   { key: "pm", segments: [["14:00", "18:00"], ["19:00", "21:00"]], breakMinutes: 60 },
   { key: "mini", segments: [["17:00", "21:00"]], breakMinutes: 30 },
+  YUTO_SATURDAY_TEMPLATE,
 ];
+
+function yutoTemplateForDate(date, plannedTemplate) {
+  if (parseLocalDate(date).getDay() === 6) return YUTO_SATURDAY_TEMPLATE;
+  return plannedTemplate;
+}
 
 function isActiveMember(m) {
   const ms = String(m.membership_status ?? "").toLowerCase();
@@ -403,7 +414,9 @@ function buildRows(targetSlots, crossStore) {
     slotCeilingExtra: 0,
     maxTemplateKey: "mini",
   });
-  const yutoRows = yutoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_YUTO, template));
+  const yutoRows = yutoPlan.flatMap(({ date, template }) =>
+    rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
+  );
   const yutoSlots = countSlots(yutoRows);
 
   const needRyoSlots = Math.max(0, targetSlots - hiromuSlots - yutoSlots);
