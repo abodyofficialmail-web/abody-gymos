@@ -52,21 +52,22 @@ const RYO_SHINJUKU_TEMPLATES = [
   { key: "mini", segments: [["16:00", "19:00"]], breakMinutes: 0 },
 ];
 
-/** ゆうとは短時間枠のみ（枠削減）・土曜は 9–15 固定 */
+/** ゆうと: 平日 9–13 / 土曜 9–15（午後は恵比寿16–22と同日可） */
+const YUTO_WEEKDAY_TEMPLATE = {
+  key: "am",
+  segments: [["09:00", "13:00"]],
+  breakMinutes: 0,
+};
 const YUTO_SATURDAY_TEMPLATE = {
   key: "sat",
   segments: [["09:00", "15:00"]],
   breakMinutes: 0,
 };
-const YUTO_TEMPLATES = [
-  { key: "pm", segments: [["14:00", "18:00"], ["19:00", "21:00"]], breakMinutes: 60 },
-  { key: "mini", segments: [["17:00", "21:00"]], breakMinutes: 30 },
-  YUTO_SATURDAY_TEMPLATE,
-];
+const YUTO_TEMPLATES = [YUTO_WEEKDAY_TEMPLATE, YUTO_SATURDAY_TEMPLATE];
 
 function yutoTemplateForDate(date, plannedTemplate) {
   if (parseLocalDate(date).getDay() === 6) return YUTO_SATURDAY_TEMPLATE;
-  return plannedTemplate;
+  return YUTO_WEEKDAY_TEMPLATE;
 }
 
 function isActiveMember(m) {
@@ -252,8 +253,7 @@ function isRyoShinjukuEligible(date, sakuraRyoDates) {
 }
 
 function pickYutoWorkDays(yutoDates, slotsCap) {
-  const mini = YUTO_TEMPLATES.find((t) => t.key === "mini");
-  const perDay = slotsForTemplate(mini);
+  const perDay = slotsForTemplate(YUTO_WEEKDAY_TEMPLATE);
   const needDays = Math.min(yutoDates.length, Math.max(1, Math.ceil(slotsCap / perDay)));
   const sakuraSide = yutoDates.filter((d) => !RYO_OFF_DAY_NUMS.has(dayNum(d)));
   const offSide = yutoDates.filter((d) => RYO_OFF_DAY_NUMS.has(dayNum(d)));
@@ -412,7 +412,7 @@ function buildRows(targetSlots, crossStore) {
   const yutoNeedCap = Math.min(YUTO_SLOTS_CAP, Math.max(0, targetSlots - hiromuSlots));
   const yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeedCap, {
     slotCeilingExtra: 0,
-    maxTemplateKey: "mini",
+    maxTemplateKey: "am",
   });
   const yutoRows = yutoPlan.flatMap(({ date, template }) =>
     rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
