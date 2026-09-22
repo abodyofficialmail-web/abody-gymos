@@ -8,9 +8,9 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
  *
  * - 目標枠: 380–400（デフォルト390、--slots=）
  * - 1ブース（2ブースなし）
- * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約150h
+ * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約130h
  * - ゆうと: 残り日・残り枠
- * - ひろむ: 上野500枠案を考慮、週2休、新宿は桜木町りょう日など限定
+ * - ひろむ: 新宿勤務なし（上野案はクロス参照のみ）
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
  */
@@ -31,7 +31,7 @@ const TARGET_SLOTS_CEILING = 400;
 /** 予約枠なしの店休日数（枠超過時のみ追加） */
 const STORE_CLOSED_DAY_COUNT = 0;
 /** りょうの新宿勤務時間目標 */
-const RYO_TARGET_WORK_HOURS = 150;
+const RYO_TARGET_WORK_HOURS = 130;
 
 /** 桜木町・りょう休み希望（新宿も休み） */
 const RYO_OFF_DAY_NUMS = new Set([1, 7, 14, 20, 26]);
@@ -425,14 +425,9 @@ function buildRows(targetSlots, crossStore) {
   const { hiromuUenoDates, sakuraRyoDates } = crossStore;
 
   const hiromuRestDays = pickHiromuRestDays(dates, hiromuUenoDates);
-  const plannedHiromuShinjuku = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays);
-  /** りょう可なら新宿はりょうへ。桜木町りょう日のみひろむ新宿。休み希望日はひろむ不可 */
-  const hiromuHandoffToRyo = plannedHiromuShinjuku.filter((d) => isRyoShinjukuEligible(d, sakuraRyoDates));
-  const hiromuShinjukuDays = plannedHiromuShinjuku.filter((d) => {
-    if (isRyoShinjukuEligible(d, sakuraRyoDates)) return false;
-    if (RYO_OFF_DAY_NUMS.has(dayNum(d))) return false;
-    return sakuraRyoDates.has(d);
-  });
+  const plannedHiromuShinjuku = [];
+  const hiromuHandoffToRyo = [];
+  const hiromuShinjukuDays = [];
   let storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
   const hiromuSet = new Set(hiromuShinjukuDays);
   const isClosed = (d) => storeClosedDates.includes(d);
