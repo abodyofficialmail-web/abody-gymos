@@ -10,7 +10,8 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
  * - 1ブース（2ブースなし）
  * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約130h
  * - ゆうと: 残り日・残り枠（枠調整は月末連休にならないよう分散削除）
- * - ひろむ: 新宿2日（9–14/17–22・上野勤務日・週2休と被らない）
+ * - ひろむ: 新宿2日+差替1日（9–14/17–22）。ゆうと新宿午前+恵比寿午後の1日は
+ *   ひろむ 10–14/17–22（上野勤務日・週2休と被らない）
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
  */
@@ -48,6 +49,19 @@ const HIROMU_SHINJUKU_SPLIT_TEMPLATE = {
   breakMinutes: 0,
 };
 const HIROMU_SHINJUKU_TEMPLATES = [HIROMU_SHINJUKU_SPLIT_TEMPLATE];
+
+/** ゆうと新宿午前+恵比寿午後の候補（上野ひろむと被らない日を優先） */
+const YUTO_DUAL_SWAP_CANDIDATE_DAY_NUMS = [12, 1, 8];
+
+/** 差替日のひろむ新宿（10–14 / 17–22・中抜け3h） */
+const HIROMU_SHINJUKU_DUAL_SWAP_TEMPLATE = {
+  key: "dualSwap",
+  segments: [
+    ["10:00", "14:00"],
+    ["17:00", "22:00"],
+  ],
+  breakMinutes: 0,
+};
 
 const RYO_SHINJUKU_TEMPLATES = [
   { key: "long", segments: [["09:00", "14:00"], ["15:00", "22:00"]], breakMinutes: 60 },
@@ -263,6 +277,25 @@ function pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRy
   return sorted.slice(0, HIROMU_SHINJUKU_DAY_COUNT).sort();
 }
 
+function pickHiromuDualSwapDay(hiromuUenoDates) {
+  for (const n of YUTO_DUAL_SWAP_CANDIDATE_DAY_NUMS) {
+    const d = octDate(n);
+    if (hiromuUenoDates.has(d)) continue;
+    if (parseLocalDate(d).getDay() === 6) continue;
+    return d;
+  }
+  throw new Error("ゆうとダブル勤務→ひろむ差替日を確保できません");
+}
+
+function mergeHiromuDualSwapDay(hiromuShinjukuDays, swapDay) {
+  const merged = [...new Set([...hiromuShinjukuDays.filter((d) => d !== swapDay), swapDay])].sort();
+  return merged;
+}
+
+function hiromuShinjukuTemplateForDate(date, swapDay) {
+  return date === swapDay ? HIROMU_SHINJUKU_DUAL_SWAP_TEMPLATE : HIROMU_SHINJUKU_SPLIT_TEMPLATE;
+}
+
 function trailingClosedStreakAfterDrop(allDates, closedSet, dropDate) {
   const closed = new Set(closedSet);
   closed.add(dropDate);
@@ -474,7 +507,11 @@ function buildRows(targetSlots, crossStore) {
   const hiromuRestDays = pickHiromuRestDays(dates, hiromuUenoDates);
   const plannedHiromuShinjuku = [];
   const hiromuHandoffToRyo = [];
-  const hiromuShinjukuDays = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates);
+  const hiromuDualSwapDay = pickHiromuDualSwapDay(hiromuUenoDates);
+  const hiromuShinjukuDays = mergeHiromuDualSwapDay(
+    pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates),
+    hiromuDualSwapDay,
+  );
   let storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
   const hiromuSet = new Set(hiromuShinjukuDays);
   const isClosed = (d) => storeClosedDates.includes(d);
@@ -488,10 +525,17 @@ function buildRows(targetSlots, crossStore) {
   let yutoWorkDays = dates.filter((d) => !isClosed(d) && !hiromuSet.has(d) && !ryoDates.includes(d));
   let owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
 
-  const hiromuRows = hiromuShinjukuDays.flatMap((d) =>
-    rowsForTemplate(d, TRAINER_HIROMU, HIROMU_SHINJUKU_SPLIT_TEMPLATE),
+  let hiromuRows = hiromuShinjukuDays.flatMap((d) =>
+    rowsForTemplate(d, TRAINER_HIROMU, hiromuShinjukuTemplateForDate(d, hiromuDualSwapDay)),
   );
   let hiromuSlots = countSlots(hiromuRows);
+
+  function rebuildHiromuRows() {
+    hiromuRows = hiromuShinjukuDays.flatMap((d) =>
+      rowsForTemplate(d, TRAINER_HIROMU, hiromuShinjukuTemplateForDate(d, hiromuDualSwapDay)),
+    );
+    hiromuSlots = countSlots(hiromuRows);
+  }
 
   let ryoRows = ryoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_RYO, template));
   let ryoSlots = countSlots(ryoRows);
@@ -517,6 +561,7 @@ function buildRows(targetSlots, crossStore) {
       rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
     );
     yutoSlots = countSlots(yutoRows);
+    rebuildHiromuRows();
     rows = [...hiromuRows, ...ryoRows, ...yutoRows];
     return countSlots(rows);
   }
@@ -553,6 +598,7 @@ function buildRows(targetSlots, crossStore) {
     slots,
     targetSlots,
     hiromuShinjukuDays,
+    hiromuDualSwapDay,
     hiromuHandoffToRyo,
     plannedHiromuShinjuku,
     hiromuRestDays: [...hiromuRestDays].sort(),
@@ -701,6 +747,7 @@ async function main() {
       targetSlots,
       hiromuShinjukuDays: plan.hiromuShinjukuDays.length,
       hiromuShinjukuDayNums: plan.hiromuShinjukuDays.map((d) => dayNum(d)),
+      hiromuDualSwapDayNum: dayNum(plan.hiromuDualSwapDay),
       hiromuHandoffToRyo: plan.hiromuHandoffToRyo.map((d) => dayNum(d)),
       hiromuRestDays: plan.hiromuRestDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
