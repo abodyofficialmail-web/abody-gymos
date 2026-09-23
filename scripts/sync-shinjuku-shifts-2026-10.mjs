@@ -222,10 +222,16 @@ function slotsForTemplate(template) {
   return countSlots(rowsForTemplate("2000-01-01", "x", template));
 }
 
+function hiromuUenoWorkDates(uenoPlan) {
+  return new Set(
+    uenoPlan.rows.filter((r) => r.trainer_name === TRAINER_HIROMU).map((r) => r.shift_date),
+  );
+}
+
 function loadCrossStoreContext(uenoActive, sakuraActive) {
   const ueno = buildUenoPlan(500);
   const sakura = buildSakuraPlan(sakuraActive * 12);
-  const hiromuUenoDates = new Set(ueno.hiromuDates);
+  const hiromuUenoDates = hiromuUenoWorkDates(ueno);
   const sakuraRyoDates = new Set(sakura.ryoDays);
   return { hiromuUenoDates, sakuraRyoDates, ueno, sakura };
 }
@@ -284,7 +290,7 @@ function pickHiromuDualSwapDay(hiromuUenoDates) {
     if (parseLocalDate(d).getDay() === 6) continue;
     return d;
   }
-  throw new Error("ゆうとダブル勤務→ひろむ差替日を確保できません");
+  return null;
 }
 
 function mergeHiromuDualSwapDay(hiromuShinjukuDays, swapDay) {
@@ -508,10 +514,10 @@ function buildRows(targetSlots, crossStore) {
   const plannedHiromuShinjuku = [];
   const hiromuHandoffToRyo = [];
   const hiromuDualSwapDay = pickHiromuDualSwapDay(hiromuUenoDates);
-  const hiromuShinjukuDays = mergeHiromuDualSwapDay(
-    pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates),
-    hiromuDualSwapDay,
-  );
+  let hiromuShinjukuDays = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates);
+  if (hiromuDualSwapDay) {
+    hiromuShinjukuDays = mergeHiromuDualSwapDay(hiromuShinjukuDays, hiromuDualSwapDay);
+  }
   let storeClosedDates = pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates);
   const hiromuSet = new Set(hiromuShinjukuDays);
   const isClosed = (d) => storeClosedDates.includes(d);
@@ -747,7 +753,7 @@ async function main() {
       targetSlots,
       hiromuShinjukuDays: plan.hiromuShinjukuDays.length,
       hiromuShinjukuDayNums: plan.hiromuShinjukuDays.map((d) => dayNum(d)),
-      hiromuDualSwapDayNum: dayNum(plan.hiromuDualSwapDay),
+      hiromuDualSwapDayNum: plan.hiromuDualSwapDay ? dayNum(plan.hiromuDualSwapDay) : null,
       hiromuHandoffToRyo: plan.hiromuHandoffToRyo.map((d) => dayNum(d)),
       hiromuRestDays: plan.hiromuRestDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),

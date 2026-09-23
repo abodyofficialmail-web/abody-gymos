@@ -206,7 +206,7 @@ function trainerDatesElsewhere(rows, trainer, excludeStore) {
 
 function loadCrossStoreBusy(uenoActive, sakuraActive) {
   const cross = loadCrossStoreContext(uenoActive, sakuraActive);
-  const ueno = buildUenoPlan(uenoActive * 12);
+  const ueno = buildUenoPlan(500);
   const shinjuku = buildShinjukuPlan(380, cross);
   const hiromuBusy = new Set([
     ...trainerDatesElsewhere(ueno.rows, TRAINER_HIROMU, STORE_NAME),
