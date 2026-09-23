@@ -68,7 +68,7 @@ const HIROMU_SHINJUKU_DUAL_SWAP_TEMPLATE = {
 };
 
 const RYO_SHINJUKU_TEMPLATES = [
-  { key: "long", segments: [["09:00", "14:00"], ["15:00", "22:00"]], breakMinutes: 60 },
+  { key: "long", segments: [["09:00", "14:00"], ["17:00", "22:00"]], breakMinutes: 0 },
   { key: "full", segments: [["09:00", "13:00"], ["16:00", "22:00"]], breakMinutes: 60 },
   { key: "med", segments: [["10:00", "13:00"], ["16:00", "21:00"]], breakMinutes: 60 },
   { key: "short", segments: [["14:00", "17:00"], ["18:00", "20:00"]], breakMinutes: 60 },
