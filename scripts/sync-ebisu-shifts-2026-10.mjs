@@ -11,7 +11,8 @@ import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-sh
  * - 平日: 16:00–22:00
  * - 日曜: 10:00–15:00
  * - ひろむ: 恵比寿勤務なし
- * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可
+ * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可。
+ *   新宿をひろむに差替えた日（例:10/12）は恵比寿16–22のみ
  *
  * node scripts/sync-ebisu-shifts-2026-10.mjs --dry-run
  */
@@ -212,7 +213,8 @@ function loadCrossStoreBusy(uenoActive, sakuraActive) {
     ...trainerDatesElsewhere(shinjuku.rows, TRAINER_HIROMU, STORE_NAME),
   ]);
   const yutoShinjukuDates = [...trainerDatesElsewhere(shinjuku.rows, TRAINER_YUTO, STORE_NAME)].sort();
-  return { hiromuBusy, yutoShinjukuDates, cross };
+  const yutoEbisuPmOnlyDays = shinjuku.hiromuDualSwapDay ? [shinjuku.hiromuDualSwapDay] : [];
+  return { hiromuBusy, yutoShinjukuDates, yutoEbisuPmOnlyDays, cross };
 }
 
 function hiromuEbisuPickScore(date) {
@@ -325,12 +327,13 @@ function pickRestDaysForWeek(pool, offRequired, yutoWorkGlobal, shinjukuSet, can
   return fallback ?? pool.slice(0, offRequired);
 }
 
-function pickYutoEbisuWorkDays(candidates, yutoShinjukuDates) {
+function pickYutoEbisuWorkDays(candidates, yutoShinjukuDates, yutoEbisuPmOnlyDays = []) {
   const shinjukuSet = new Set(yutoShinjukuDates);
   const yutoDualPmDays = new Set(
     yutoShinjukuDates.filter((d) => isYutoShinjukuWeekday(d, shinjukuSet)),
   );
-  const protectedSet = yutoDualPmDays;
+  const pmOnlySet = new Set(yutoEbisuPmOnlyDays);
+  const protectedSet = new Set([...yutoDualPmDays, ...pmOnlySet]);
   const yutoWork = new Set(candidates);
 
   for (const weekDates of groupDatesByMondayWeek(candidates)) {
@@ -341,18 +344,22 @@ function pickYutoEbisuWorkDays(candidates, yutoShinjukuDates) {
   }
 
   for (const d of yutoDualPmDays) yutoWork.add(d);
+  for (const d of pmOnlySet) {
+    if (candidates.includes(d)) yutoWork.add(d);
+  }
 
   const beforeResolve = [...yutoWork].sort();
   const resolved = resolveStoreClosedStreaks(
     candidates,
     beforeResolve,
     shinjukuSet,
-    [...yutoDualPmDays],
+    [...protectedSet],
   );
   return {
     yutoWorkDays: resolved.yutoWorkDays,
     yutoRestDays: resolved.yutoRestDays,
     yutoDualPmDays,
+    yutoEbisuPmOnlyDays: [...pmOnlySet].sort(),
   };
 }
 
@@ -519,11 +526,13 @@ function validateMaxStoreClosedStreak(candidates, yutoWorkDays) {
 function buildRows(targetSlots, crossBusy) {
   const candidates = openCandidateDates();
   const hiromuDays = [];
-  let { yutoWorkDays, yutoRestDays, yutoDualPmDays } = pickYutoEbisuWorkDays(
+  let { yutoWorkDays, yutoRestDays, yutoDualPmDays, yutoEbisuPmOnlyDays } = pickYutoEbisuWorkDays(
     candidates,
     crossBusy.yutoShinjukuDates,
+    crossBusy.yutoEbisuPmOnlyDays ?? [],
   );
-  const trim = trimYutoDaysToTarget(yutoWorkDays, candidates, targetSlots, yutoDualPmDays);
+  const yutoProtectedDays = new Set([...yutoDualPmDays, ...yutoEbisuPmOnlyDays]);
+  const trim = trimYutoDaysToTarget(yutoWorkDays, candidates, targetSlots, yutoProtectedDays);
   for (const d of trim.storeClosedExtra) {
     yutoDualPmDays.delete(d);
   }
@@ -532,22 +541,23 @@ function buildRows(targetSlots, crossBusy) {
   yutoRestDays = [...new Set([...yutoRestDays, ...storeClosedExtra])].sort();
 
   const shinjukuSet = new Set(crossBusy.yutoShinjukuDates);
+  const protectedList = [...yutoProtectedDays];
   const resolved = resolveStoreClosedStreaks(
     candidates,
     yutoWorkDays,
     shinjukuSet,
-    [...yutoDualPmDays],
+    protectedList,
   );
-  yutoWorkDays = ensureWeeklyRest(candidates, resolved.yutoWorkDays, [...yutoDualPmDays]);
+  yutoWorkDays = ensureWeeklyRest(candidates, resolved.yutoWorkDays, protectedList);
   const resolved2 = resolveStoreClosedStreaks(
     candidates,
     yutoWorkDays,
     shinjukuSet,
-    [...yutoDualPmDays],
+    protectedList,
   );
   yutoWorkDays = resolved2.yutoWorkDays;
   yutoRestDays = resolved2.yutoRestDays;
-  validateYutoWeeklyRest(candidates, yutoWorkDays, [...yutoDualPmDays]);
+  validateYutoWeeklyRest(candidates, yutoWorkDays, protectedList);
   validateMaxStoreClosedStreak(candidates, yutoWorkDays);
 
   const owners = new Map();
@@ -572,6 +582,7 @@ function buildRows(targetSlots, crossBusy) {
     yutoWorkDays,
     yutoRestDays,
     yutoDualPmDays: [...yutoDualPmDays].sort(),
+    yutoEbisuPmOnlyDays,
     storeClosedDates,
     storeClosedExtra,
     owners,
@@ -720,6 +731,7 @@ async function main() {
       hiromuEbisuDays: plan.hiromuDays.map((d) => dayNum(d)),
       yutoEbisuDays: plan.yutoWorkDays.map((d) => dayNum(d)),
       yutoEbisuDualPmDays: plan.yutoDualPmDays.map((d) => dayNum(d)),
+      yutoEbisuPmOnlyDays: plan.yutoEbisuPmOnlyDays.map((d) => dayNum(d)),
       yutoRestDays: plan.yutoRestDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
       trimmedForSlots: plan.storeClosedExtra.map((d) => dayNum(d)),
