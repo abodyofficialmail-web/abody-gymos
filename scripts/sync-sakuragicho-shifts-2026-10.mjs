@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+import { UENO_MAX_BOOTHS, UENO_STORE_NAME } from "./sync-ueno-shifts-2026-10.mjs";
 
 /**
  * 2026-10 桜木町店（たけはる・りょう）
@@ -23,7 +24,7 @@ const TAKE_OFF_PER_WEEK = 2;
 /** たけはる: 連勤上限（超えたら追加休み） */
 const TAKE_MAX_CONSECUTIVE_WORK = 5;
 
-const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 
 const RYO_OFF_DAYS = new Set([1, 7, 14, 20, 26]);
 /** 10/6・10/8 休み、10/15 は研修でシフトアウト */
@@ -136,7 +137,8 @@ function effectiveStoreSlots(rows) {
         if (s <= t && t + 30 <= e) cap++;
       }
       const store = dayRows[0]?.store_name;
-      if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      if (store === UENO_STORE_NAME) cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       daySlots += cap;
     }
     total += daySlots;

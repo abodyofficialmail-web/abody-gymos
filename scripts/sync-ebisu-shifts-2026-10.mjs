@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
-import { buildRows as buildUenoPlan } from "./sync-ueno-shifts-2026-10.mjs";
+import {
+  buildRows as buildUenoPlan,
+  UENO_MAX_BOOTHS,
+  UENO_STORE_NAME,
+} from "./sync-ueno-shifts-2026-10.mjs";
 import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-shinjuku-shifts-2026-10.mjs";
 
 /**
@@ -28,7 +32,7 @@ const HIROMU_EBISU_DAY_COUNT = 4;
 const YUTO_OFF_PER_WEEK = 2;
 const SLOTS_PER_OPEN_DAY = 12;
 
-const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 
 const WEEKDAY_TEMPLATE = { key: "weekday", segments: [["16:00", "22:00"]], breakMinutes: 0 };
 const SUNDAY_TEMPLATE = { key: "sunday", segments: [["10:00", "16:00"]], breakMinutes: 0 };
@@ -152,7 +156,8 @@ function effectiveStoreSlots(rows) {
         if (s <= t && t + 30 <= e) cap++;
       }
       const store = dayRows[0]?.store_name;
-      if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      if (store === UENO_STORE_NAME) cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       daySlots += cap;
     }
     total += daySlots;

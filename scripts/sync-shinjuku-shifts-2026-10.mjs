@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
-import { buildRows as buildUenoPlan } from "./sync-ueno-shifts-2026-10.mjs";
+import {
+  buildRows as buildUenoPlan,
+  UENO_MAX_BOOTHS,
+  UENO_STORE_NAME,
+} from "./sync-ueno-shifts-2026-10.mjs";
 import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.mjs";
 
 /**
@@ -37,7 +41,7 @@ const RYO_TARGET_WORK_HOURS = 130;
 /** 桜木町・りょう休み希望（新宿も休み） */
 const RYO_OFF_DAY_NUMS = new Set([1, 7, 14, 20, 26]);
 
-const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 
 /** 9–14 / 17–22（14–17は3時間中抜け・休憩枠なし） */
 const HIROMU_SHINJUKU_SPLIT_TEMPLATE = {
@@ -206,7 +210,8 @@ function effectiveStoreSlots(rows) {
         if (s <= t && t + 30 <= e) cap++;
       }
       const store = dayRows[0]?.store_name;
-      if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      if (store === UENO_STORE_NAME) cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       daySlots += cap;
     }
     total += daySlots;

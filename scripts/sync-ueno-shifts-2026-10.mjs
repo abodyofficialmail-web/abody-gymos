@@ -515,7 +515,15 @@ async function main() {
   console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: inserted?.length ?? payload.length, ...summary }, null, 2));
 }
 
-export { buildRows, countSlots, SEIYA_DAY_NUMBERS, HIROMU_EARLY, HIROMU_LATE };
+export {
+  buildRows,
+  countSlots,
+  SEIYA_DAY_NUMBERS,
+  HIROMU_EARLY,
+  HIROMU_LATE,
+  UENO_MAX_BOOTHS,
+  STORE_NAME as UENO_STORE_NAME,
+};
 
 import { pathToFileURL } from "url";
 const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
