@@ -7,7 +7,7 @@ import { UENO_MAX_BOOTHS, UENO_STORE_NAME } from "./sync-ueno-shifts-2026-10.mjs
  *
  * - 目標枠: アクティブ会員×12
  * - 同時1ブース
- * - たけはる 178h / 月（平日16–22・土日10–19）、週2休、残り日・枠はりょう
+ * - たけはる 163h / 月（平日16–22・土日10–19、午前削減4日で−15h）、週2休、残り日・枠はりょう
  * - りょう: 土日 10:00–19:00（10/10 のみ 10–16）、10/19 は休み
  * - たけはる土日（10/10除く）: 10:00–19:00（13–14 休憩1h）
  *
@@ -20,7 +20,7 @@ const TRAINER_TAKE = "たけはる";
 const TRAINER_RYO = "りょう";
 const TRAINER_NAMES = [TRAINER_TAKE, TRAINER_RYO];
 const SHIFT_STATUS = "confirmed";
-const TAKE_TARGET_WORK_HOURS = 178;
+const TAKE_TARGET_WORK_HOURS = 163;
 /** たけはる: 月〜日の週あたり休み日数 */
 const TAKE_OFF_PER_WEEK = 2;
 /** たけはる: 連勤上限（超えたら追加休み） */
@@ -31,6 +31,10 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 const RYO_OFF_DAYS = new Set([1, 7, 14, 19, 20, 26]);
 /** 10/6・10/8 休み、10/15 は研修でシフトアウト */
 const TAKE_OFF_DAYS = new Set([6, 8, 15]);
+/** 10–13 / 15–16 なし（16–22 のみ・非連続） */
+const TAKE_PM_ONLY_DAY_NUMS = new Set([2, 9, 16]);
+/** 10–13 のみなし（15–16 / 16–22 は維持） */
+const TAKE_DROP_MORNING_ONLY_DAY_NUMS = new Set([28]);
 /** たけはる不在日はりょうがフルにカバー */
 const RYO_COVER_FULL_DAYS = new Set([15]);
 /** たけはる休み（6・8）— りょうはフル不可 */
@@ -220,12 +224,29 @@ function takeHoursForPmEnd(pmEnd) {
   ]);
 }
 
+function takePmOnlyReducedDate(date) {
+  return TAKE_PM_ONLY_DAY_NUMS.has(dayNum(date)) && !takeWeekend1019Date(date);
+}
+
+function takeDropMorningOnlyDate(date) {
+  return TAKE_DROP_MORNING_ONLY_DAY_NUMS.has(dayNum(date)) && !takeWeekend1019Date(date);
+}
+
 function takeHoursForDate(date, pmEnd) {
   if (takeWeekend1019Date(date)) {
     return (
       workHoursForSegments(TAKE_WEEKEND_1019_TEMPLATE.segments) -
       (TAKE_WEEKEND_1019_TEMPLATE.breakMinutes ?? 0) / 60
     );
+  }
+  if (takePmOnlyReducedDate(date)) {
+    return workHoursForSegments([["16:00", pmEnd]]);
+  }
+  if (takeDropMorningOnlyDate(date)) {
+    return workHoursForSegments([
+      ["15:00", "16:00"],
+      ["16:00", pmEnd],
+    ]);
   }
   return takeHoursForPmEnd(pmEnd);
 }
@@ -381,6 +402,21 @@ function assignTrainerDays(dates) {
 function buildTakeRows(date, pmEnd = TAKE_PM_BASE) {
   if (takeWeekend1019Date(date)) {
     return rowsForTemplate(date, TRAINER_TAKE, TAKE_WEEKEND_1019_TEMPLATE);
+  }
+  if (takePmOnlyReducedDate(date)) {
+    return rowsForTemplate(date, TRAINER_TAKE, {
+      segments: [["16:00", pmEnd]],
+      breakMinutes: 0,
+    });
+  }
+  if (takeDropMorningOnlyDate(date)) {
+    return rowsForTemplate(date, TRAINER_TAKE, {
+      segments: [
+        ["15:00", "16:00"],
+        ["16:00", pmEnd],
+      ],
+      breakMinutes: 0,
+    });
   }
   const segments = [
     ["10:00", "13:00"],
