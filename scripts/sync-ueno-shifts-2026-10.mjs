@@ -6,7 +6,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  *
  * - 目標枠: 約500（--slots= / --active= で上書き可）
  * - 同時最大2ブース（上野のみ）
- * - せいや: 平日 9–13 / 16–22、土曜 9–13 / 14–17
+ * - せいや: 平日 9–13 / 16–22、土曜 9–14 / 17–22（14–17 中抜け1h勤務扱い）
  * - 2ブース: 月曜 5,12,19,26 のみ ひろむ 16–22
  * - ひろむ: 1–2 split、3/7–9/14–16/21–23 late、日曜10–18、29 split(10–14/17–22)
  * - 店休: 10/28, 10/30
@@ -31,7 +31,7 @@ const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]
 const UENO_REFERENCE_STORE_CLOSED_DAY_NUMS = new Set([28, 30]);
 /** 参照表: せいや+ひろむ16–22 */
 const UENO_REFERENCE_HIROMU_DUAL_DAY_NUMS = new Set([5, 12, 19, 26]);
-/** 参照表: せいや土曜 9–13 / 14–17 */
+/** 参照表: せいや土曜 9–14 / 17–22（14–17 中抜け3h→算定+1h） */
 const SEIYA_SATURDAY_DAY_NUMS = new Set([10, 17, 24, 31]);
 /** 参照表: ひろむ 9–14 / 17–22 */
 const UENO_HIROMU_SPLIT_DAY_NUMS = new Set([1, 2]);
@@ -189,7 +189,7 @@ function dayOwner(dayNum) {
 function buildSeiyaDayRows(date) {
   const n = hiromuDayNum(date);
   if (SEIYA_SATURDAY_DAY_NUMS.has(n)) {
-    return [row(date, "09:00", "13:00", "せいや", 0), row(date, "14:00", "17:00", "せいや", 0)];
+    return [row(date, "09:00", "14:00", "せいや", 0), row(date, "17:00", "22:00", "せいや", 0)];
   }
   return [row(date, "09:00", "13:00", "せいや", 0), row(date, "16:00", "22:00", "せいや", 0)];
 }
