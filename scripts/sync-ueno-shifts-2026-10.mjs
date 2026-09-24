@@ -7,13 +7,13 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - 目標枠: 約500（--slots= / --active= で上書き可）
  * - 同時最大2ブース（上野のみ）
  * - せいや希望日: 平日 9–13 / 16–22、土曜 9–17（13–14 休憩1h）
- * - せいや出勤日のうち週1日: ひろむ 16–22 を追加（夕方2ブース）
+ * - 2ブース日（せいや+ひろむ）: ひろむは 16–22 固定
  * - ひろむ: 日曜は 10–18（13–14 休憩1h）
  * - ひろむ 9–18 日の半分は中抜け 9–14 / 17–22
  * - ひろむ 10/29: 10–22（14–17 中抜け）
  * - その他単独日: 9–18 または 14–21（従来・休憩1h）
- * - ひろむ: 週2休（10月全体）。休みは上野単独日（せいや不在日）を優先し連休回避
- * - ひろむ稼働日は原則 9–14 / 17–22（日曜・10/29は従来ルール）
+ * - ひろむ: 月8休。休みは上野単独日（せいや不在日）を優先し連休回避
+ * - ひろむ単独日は原則 9–14 / 17–22（日曜・10/29は従来ルール）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
  */
@@ -30,8 +30,8 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 
 const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]);
 
-/** ひろむ: 月〜日の週あたり休み（上野・ひろむ単独日） */
-const HIROMU_OFF_PER_WEEK = 2;
+/** ひろむ: 10月の休み日数 */
+const HIROMU_OFF_DAYS_PER_MONTH = 8;
 
 /** 9:00〜18:00（13–14 休憩1h）→ 予約16コマ */
 const HIROMU_EARLY = {
@@ -208,11 +208,19 @@ function hiromuPatternForCalendarDate(date) {
   return HIROMU_SPLIT;
 }
 
-function buildSeiyaDayRowsForPlan(date, hiromuAlsoWorks, patternByDate) {
+function buildSeiyaDayRowsForPlan(date, hiromuAlsoWorks) {
   const rows = buildSeiyaDayRows(date);
-  if (hiromuAlsoWorks) {
-    const pattern = patternByDate?.get(date) ?? hiromuPatternForCalendarDate(date);
-    rows.push(...buildHiromuDayRows(date, pattern));
+  if (hiromuAlsoWorks) rows.push(...buildHiromuPmDualRows(date));
+  return rows;
+}
+
+function rebuildUenoRows(seiyaDates, hiromuSoloDates, hiromuRestSet, hiromuPatternByDate) {
+  const rows = [];
+  for (const d of seiyaDates) {
+    rows.push(...buildSeiyaDayRowsForPlan(d, !hiromuRestSet.has(d)));
+  }
+  for (const d of hiromuSoloDates) {
+    rows.push(...buildHiromuDayRows(d, hiromuPatternByDate.get(d)));
   }
   return rows;
 }
@@ -370,38 +378,41 @@ function hiromuRestPickScore(date, seiyaSet, closedSet) {
   return s;
 }
 
-/** 週2休（10月カレンダー全体）。休みは上野単独休み（非せいや日）を優先 */
-function pickHiromuWeeklyRestDates(allDates, seiyaDates) {
+/** 月8休。休みは上野単独休み（非せいや日）を優先 */
+function pickHiromuMonthlyRestDates(allDates, seiyaDates, offCount = HIROMU_OFF_DAYS_PER_MONTH) {
   const seiyaSet = new Set(seiyaDates);
   const rest = new Set();
+  const need = Math.min(offCount, Math.max(0, allDates.length - 1));
 
-  for (const weekDates of groupDatesByMondayWeek(allDates)) {
-    const pool = weekDates.filter((d) => allDates.includes(d)).sort();
-    const offRequired = Math.min(HIROMU_OFF_PER_WEEK, Math.max(0, pool.length - 1));
+  while (rest.size < need) {
+    const options = allDates
+      .filter((d) => !rest.has(d))
+      .sort((a, b) => hiromuRestPickScore(b, seiyaSet, rest) - hiromuRestPickScore(a, seiyaSet, rest));
 
-    for (let i = 0; i < offRequired; i++) {
-      const options = pool
-        .filter((d) => !rest.has(d))
-        .sort((a, b) => hiromuRestPickScore(b, seiyaSet, rest) - hiromuRestPickScore(a, seiyaSet, rest));
-
-      let picked = null;
-      for (const d of options) {
-        const trial = new Set(rest);
-        trial.add(d);
-        const uenoClosed = hiromuRestOnlyOnUenoClosedDays(trial, seiyaSet);
-        if (maxUenoHiromuOnlyClosedStreak(seiyaDates, uenoClosed) <= 1) {
-          picked = d;
-          break;
-        }
+    let picked = null;
+    for (const d of options) {
+      const trial = new Set(rest);
+      trial.add(d);
+      const uenoClosed = hiromuRestOnlyOnUenoClosedDays(trial, seiyaSet);
+      if (maxUenoHiromuOnlyClosedStreak(seiyaDates, uenoClosed) <= 1) {
+        picked = d;
+        break;
       }
-      if (!picked && options.length) picked = options[0];
-      if (picked) rest.add(picked);
     }
+    if (!picked) {
+      picked = options.find((d) => !rest.has(d)) ?? null;
+    }
+    if (!picked) break;
+    rest.add(picked);
+  }
+
+  if (rest.size < need) {
+    throw new Error(`ひろむ月${need}休を確保できません（${rest.size} 日のみ）`);
   }
 
   const uenoClosed = hiromuRestOnlyOnUenoClosedDays(rest, seiyaSet);
   if (maxUenoHiromuOnlyClosedStreak(seiyaDates, uenoClosed) > 1) {
-    throw new Error("上野連休を避けたひろむ週2休を確保できません");
+    throw new Error("上野連休を避けたひろむ月8休を確保できません");
   }
   return [...rest].sort();
 }
@@ -435,49 +446,47 @@ function buildRows(targetSlots) {
   const allDates = allOctoberDates();
   const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
   const seiyaSet = new Set(seiyaDates);
-  const hiromuRestDates = pickHiromuWeeklyRestDates(allDates, seiyaDates);
+  const hiromuRestDates = pickHiromuMonthlyRestDates(allDates, seiyaDates);
   const hiromuRestSet = new Set(hiromuRestDates);
   const hiromuWorkDates = allDates.filter((d) => !hiromuRestSet.has(d));
   const hiromuClosedDates = hiromuRestDates.filter((d) => !seiyaSet.has(d));
   const hiromuSoloDates = hiromuWorkDates.filter((d) => !seiyaSet.has(d));
 
-  let seiyaBaseline = 0;
+  let seiyaWithHiromuPm = 0;
   for (const d of seiyaDates) {
-    seiyaBaseline += countSlots(buildSeiyaDayRows(d));
+    const dayRows = buildSeiyaDayRows(d);
+    if (!hiromuRestSet.has(d)) dayRows.push(...buildHiromuPmDualRows(d));
+    seiyaWithHiromuPm += countSlots(dayRows);
   }
-  const needHiromu = Math.max(0, targetSlots - seiyaBaseline);
+  const needHiromu = Math.max(0, targetSlots - seiyaWithHiromuPm);
 
-  const hiromuPatternByDate = assignHiromuPatternsWithRules(hiromuWorkDates, needHiromu);
+  const hiromuPatternByDate = assignHiromuPatternsWithRules(hiromuSoloDates, needHiromu);
 
-  const rows = [];
-  for (const d of seiyaDates) {
-    rows.push(...buildSeiyaDayRowsForPlan(d, !hiromuRestSet.has(d), hiromuPatternByDate));
-  }
-  for (const d of hiromuSoloDates) {
-    rows.push(...buildHiromuDayRows(d, hiromuPatternByDate.get(d)));
-  }
+  let rows = rebuildUenoRows(seiyaDates, hiromuSoloDates, hiromuRestSet, hiromuPatternByDate);
 
-  /** 固定ルール後に枠超過する場合、split 日を末尾から late に落とす（日曜・10/29は維持） */
+  /** 500枠: 単独日 split→late、不足時は late→split */
   let slotsNow = countSlots(rows);
-  const splitDemoteOrder = hiromuWorkDates
+  const soloSplitDemote = hiromuSoloDates
     .filter((d) => hiromuPatternByDate.get(d)?.kind === "split")
-    .sort((a, b) => {
-      const aCombo = seiyaSet.has(a) ? 0 : 1;
-      const bCombo = seiyaSet.has(b) ? 0 : 1;
-      if (aCombo !== bCombo) return aCombo - bCombo;
-      return b.localeCompare(a);
-    });
-  for (const d of splitDemoteOrder) {
+    .sort((a, b) => b.localeCompare(a));
+  for (const d of soloSplitDemote) {
     if (slotsNow <= targetSlots) break;
     hiromuPatternByDate.set(d, HIROMU_LATE);
-    rows.length = 0;
-    for (const sd of seiyaDates) {
-      rows.push(...buildSeiyaDayRowsForPlan(sd, !hiromuRestSet.has(sd), hiromuPatternByDate));
-    }
-    for (const hd of hiromuSoloDates) {
-      rows.push(...buildHiromuDayRows(hd, hiromuPatternByDate.get(hd)));
-    }
+    rows = rebuildUenoRows(seiyaDates, hiromuSoloDates, hiromuRestSet, hiromuPatternByDate);
     slotsNow = countSlots(rows);
+  }
+
+  const soloLatePromote = hiromuSoloDates
+    .filter((d) => hiromuPatternByDate.get(d)?.kind === "late")
+    .sort((a, b) => a.localeCompare(b));
+  for (const d of soloLatePromote) {
+    if (slotsNow >= targetSlots) break;
+    hiromuPatternByDate.set(d, HIROMU_SPLIT);
+    const nextRows = rebuildUenoRows(seiyaDates, hiromuSoloDates, hiromuRestSet, hiromuPatternByDate);
+    const nextSlots = countSlots(nextRows);
+    if (nextSlots > targetSlots + 4) continue;
+    rows = nextRows;
+    slotsNow = nextSlots;
   }
 
   const hiromuEarlyDays = [...hiromuPatternByDate.values()].filter((p) => p.kind === "early").length;
@@ -503,7 +512,7 @@ function buildRows(targetSlots) {
     hiromuWorkDates,
     hiromuClosedDates,
     targetSlots,
-    seiyaSlotTotal: seiyaBaseline,
+    seiyaSlotTotal: seiyaWithHiromuPm,
     hiromuEarlyDays,
     hiromuSplitDays,
     hiromuSundayDays,
