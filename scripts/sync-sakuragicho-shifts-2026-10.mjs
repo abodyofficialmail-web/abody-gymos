@@ -7,7 +7,7 @@ import { UENO_MAX_BOOTHS, UENO_STORE_NAME } from "./sync-ueno-shifts-2026-10.mjs
  *
  * - 目標枠: アクティブ会員×12
  * - 同時1ブース
- * - たけはる 171h / 月、週2休（連勤抑制）、残り日・枠はりょう
+ * - たけはる 178h / 月（平日16–22・土日10–19）、週2休、残り日・枠はりょう
  * - りょう: 土日 10:00–19:00（10/10 のみ 10–16）、10/19 は休み
  * - たけはる土日（10/10除く）: 10:00–19:00（13–14 休憩1h）
  *
@@ -20,7 +20,7 @@ const TRAINER_TAKE = "たけはる";
 const TRAINER_RYO = "りょう";
 const TRAINER_NAMES = [TRAINER_TAKE, TRAINER_RYO];
 const SHIFT_STATUS = "confirmed";
-const TAKE_TARGET_WORK_HOURS = 171;
+const TAKE_TARGET_WORK_HOURS = 178;
 /** たけはる: 月〜日の週あたり休み日数 */
 const TAKE_OFF_PER_WEEK = 2;
 /** たけはる: 連勤上限（超えたら追加休み） */
@@ -36,8 +36,8 @@ const RYO_COVER_FULL_DAYS = new Set([15]);
 /** たけはる休み（6・8）— りょうはフル不可 */
 const RYO_TAKE_OFF_COVER_DAYS = new Set([6, 8]);
 
-/** 10-13 / 15-16（中抜け1h勤務）/ 16-21（1hはりょう側へ振替） */
-const TAKE_PM_BASE = "21:00";
+/** 10-13 / 15-16（中抜け1h勤務）/ 16-22 */
+const TAKE_PM_BASE = "22:00";
 const TAKE_PM_MAX = "22:00";
 const TAKE_TEMPLATE = {
   segments: [
