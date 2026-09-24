@@ -46,6 +46,13 @@ const TAKE_TEMPLATE = {
   breakMinutes: 0,
 };
 
+/** 10/10 固定（10:00–16:00） */
+const RYO_DAY10_TEMPLATE = {
+  key: "day10",
+  segments: [["10:00", "16:00"]],
+  breakMinutes: 0,
+};
+
 const RYO_TEMPLATES = [
   { key: "full", segments: [["09:00", "13:00"], ["16:00", "22:00"]], breakMinutes: 60 },
   { key: "med", segments: [["10:00", "13:00"], ["16:00", "21:00"]], breakMinutes: 60 },
@@ -392,11 +399,13 @@ function planRyoWorkHours(plan) {
 }
 
 function minRyoTemplateKeyForDay(day) {
+  if (day === 10) return "day10";
   if (day === 6) return "short";
   return "mini";
 }
 
 function maxRyoTemplateKeyForDay(day) {
+  if (day === 10) return "day10";
   if (RYO_COVER_FULL_DAYS.has(day)) return "full";
   if (RYO_TAKE_OFF_COVER_DAYS.has(day)) return "miniLong";
   if (day >= 21) return "short";
@@ -404,7 +413,7 @@ function maxRyoTemplateKeyForDay(day) {
 }
 
 function templateRank(key) {
-  const order = ["mini", "miniLong", "miniLong2", "short", "pm", "med", "full"];
+  const order = ["day10", "mini", "miniLong", "miniLong2", "short", "pm", "med", "full"];
   const i = order.indexOf(key);
   return i >= 0 ? i : order.length;
 }
@@ -428,8 +437,13 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
 
   const shortOpt = opts.find((o) => o.template.key === "short") ?? opts[Math.min(2, opts.length - 1)];
 
+  const day10Slots = slotsForTemplate(RYO_DAY10_TEMPLATE);
+
   const plan = ryoDays.map((date) => {
     const day = dayNum(date);
+    if (day === 10) {
+      return { date, template: RYO_DAY10_TEMPLATE, slots: day10Slots, key: "day10" };
+    }
     if (RYO_COVER_FULL_DAYS.has(day)) {
       return { date, template: fullOpt.template, slots: fullOpt.slots, key: fullOpt.template.key };
     }
@@ -450,6 +464,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
   while (sum < slotsNeeded && guard++ < 500) {
     let upgraded = false;
     for (let i = 0; i < plan.length; i++) {
+      if (dayNum(plan[i].date) === 10) continue;
       if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
       for (const opt of opts) {
         if (opt.slots <= plan[i].slots) continue;
@@ -471,6 +486,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
     let downgraded = false;
     for (let i = 0; i < plan.length; i++) {
       const day = dayNum(plan[i].date);
+      if (day === 10) continue;
       if (RYO_COVER_FULL_DAYS.has(day)) continue;
       const minKey = minRyoTemplateKeyForDay(day);
       for (const opt of opts) {
@@ -500,6 +516,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
 
     let upgraded = false;
     for (const i of order) {
+      if (dayNum(plan[i].date) === 10) continue;
       if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
       const day = dayNum(plan[i].date);
       const maxKey = maxRyoTemplateKeyForDay(day);

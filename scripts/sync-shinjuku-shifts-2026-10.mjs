@@ -74,7 +74,15 @@ const HIROMU_SHINJUKU_DUAL_SWAP_TEMPLATE = {
   breakMinutes: 0,
 };
 
+/** 10/10 固定（10:00–16:00） */
+const RYO_DAY10_TEMPLATE = {
+  key: "day10",
+  segments: [["10:00", "16:00"]],
+  breakMinutes: 0,
+};
+
 const RYO_SHINJUKU_TEMPLATES = [
+  RYO_DAY10_TEMPLATE,
   { key: "long", segments: [["09:00", "14:00"], ["17:00", "22:00"]], breakMinutes: 0 },
   { key: "full", segments: [["09:00", "13:00"], ["16:00", "22:00"]], breakMinutes: 60 },
   { key: "med", segments: [["10:00", "13:00"], ["16:00", "21:00"]], breakMinutes: 60 },
@@ -444,11 +452,19 @@ function pickRyoShinjukuPlanByHours(eligibleDates, targetHours) {
   return { plan, ryoWorkHours: hours };
 }
 
-/** 希望休・桜木町・ひろむ新宿日を除く全日に 9–14 / 17–22 */
-function pickRyoShinjukuPlanMaxSlots(eligibleDates) {
+function ryoShinjukuTemplateForDate(date) {
+  if (dayNum(date) === 10) return RYO_DAY10_TEMPLATE;
   const long = RYO_SHINJUKU_TEMPLATES.find((t) => t.key === "long");
   if (!long) throw new Error("りょう long テンプレ未定義");
-  const plan = [...eligibleDates].sort().map((date) => ({ date, template: long, key: long.key }));
+  return long;
+}
+
+/** 希望休・桜木町・ひろむ新宿日を除く全日（10/10は10–16、他は9–14/17–22） */
+function pickRyoShinjukuPlanMaxSlots(eligibleDates) {
+  const plan = [...eligibleDates].sort().map((date) => {
+    const template = ryoShinjukuTemplateForDate(date);
+    return { date, template, key: template.key };
+  });
   const ryoWorkHours = plan.reduce((h, p) => h + templateWorkHours(p.template), 0);
   return { plan, ryoWorkHours };
 }
