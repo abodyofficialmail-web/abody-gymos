@@ -20,8 +20,7 @@ import {
  * - りょう: 休み希望(1,7,14,20,26)・桜木町りょう日は不可・ひろむ新宿日は不可
  *   上記以外の日は新宿 9–14 / 17–22（枠増）
  * - ゆうと: 残り日・残り枠（枠調整は月末連休にならないよう分散削除）
- * - ひろむ: 新宿2日+差替1日（9–14/17–22）。ゆうと新宿午前+恵比寿午後の1日は
- *   ひろむ 10–14/17–22（上野勤務日・週2休と被らない）
+ * - ひろむ: 上野休→新宿 7(9–14/17–22), 21(14–22), ほか2日+差替。該当日はゆうと新宿なし
  *
  * node --env-file=.env.local scripts/sync-shinjuku-shifts-2026-10.mjs --dry-run
  */
@@ -60,6 +59,17 @@ const HIROMU_SHINJUKU_SPLIT_TEMPLATE = {
   breakMinutes: 0,
 };
 const HIROMU_SHINJUKU_TEMPLATES = [HIROMU_SHINJUKU_SPLIT_TEMPLATE];
+
+/** 上野休→新宿（固定・ゆうと新宿なし） */
+const HIROMU_UENO_HANDOFF_DAY_NUMS = new Set([7, 21]);
+const HIROMU_SHINJUKU_PM1422_TEMPLATE = {
+  key: "pm1422",
+  segments: [
+    ["14:00", "17:00"],
+    ["18:00", "22:00"],
+  ],
+  breakMinutes: 60,
+};
 
 /** ゆうと新宿午前+恵比寿午後の候補（上野ひろむと被らない日を優先） */
 const YUTO_DUAL_SWAP_CANDIDATE_DAY_NUMS = [12, 1, 8];
@@ -296,9 +306,15 @@ function hiromuShinjukuPickScore(date, hiromuUenoDates) {
 }
 
 /** 上野勤務日・週2休以外から新宿2日（月末の店休を避けるため後半を優先） */
+function mergeHiromuUenoHandoffDays(hiromuShinjukuDays) {
+  const handoff = [...HIROMU_UENO_HANDOFF_DAY_NUMS].map((n) => octDate(n));
+  return [...new Set([...hiromuShinjukuDays, ...handoff])].sort();
+}
+
 function pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates) {
   const candidates = dates.filter(
     (d) =>
+      !HIROMU_UENO_HANDOFF_DAY_NUMS.has(dayNum(d)) &&
       !hiromuUenoDates.has(d) &&
       !hiromuRestDays.has(d) &&
       isRyoShinjukuEligible(d, sakuraRyoDates),
@@ -325,6 +341,9 @@ function mergeHiromuDualSwapDay(hiromuShinjukuDays, swapDay) {
 }
 
 function hiromuShinjukuTemplateForDate(date, swapDay) {
+  const n = dayNum(date);
+  if (n === 21) return HIROMU_SHINJUKU_PM1422_TEMPLATE;
+  if (HIROMU_UENO_HANDOFF_DAY_NUMS.has(n)) return HIROMU_SHINJUKU_SPLIT_TEMPLATE;
   return date === swapDay ? HIROMU_SHINJUKU_DUAL_SWAP_TEMPLATE : HIROMU_SHINJUKU_SPLIT_TEMPLATE;
 }
 
@@ -602,6 +621,7 @@ function buildRows(targetSlots, crossStore) {
   const hiromuHandoffToRyo = [];
   const hiromuDualSwapDay = pickHiromuDualSwapDay(hiromuUenoDates);
   let hiromuShinjukuDays = pickHiromuShinjukuDays(dates, hiromuUenoDates, hiromuRestDays, sakuraRyoDates);
+  hiromuShinjukuDays = mergeHiromuUenoHandoffDays(hiromuShinjukuDays);
   if (hiromuDualSwapDay) {
     hiromuShinjukuDays = mergeHiromuDualSwapDay(hiromuShinjukuDays, hiromuDualSwapDay);
   }

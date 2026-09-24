@@ -9,7 +9,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - せいや: 平日 9–13 / 16–22、土曜 9–14 / 17–22（14–17 中抜け1h勤務扱い）
  * - 2ブース: 月曜 5,12,19,26 のみ ひろむ 16–22
  * - ひろむ: 1–2 split、3/7–9/14–16/21–23 late、日曜10–18、29 split(10–14/17–22)
- * - 店休: 10/28, 10/30
+ * - 店休: 10/7, 10/21（ひろむ→新宿）, 10/28, 10/30
  * - 10月シフトは参照表固定（自動割当なし）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
@@ -28,7 +28,7 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]);
 
 /** 参照表: 上野店休 */
-const UENO_REFERENCE_STORE_CLOSED_DAY_NUMS = new Set([28, 30]);
+const UENO_REFERENCE_STORE_CLOSED_DAY_NUMS = new Set([7, 21, 28, 30]);
 /** 参照表: せいや+ひろむ16–22 */
 const UENO_REFERENCE_HIROMU_DUAL_DAY_NUMS = new Set([5, 12, 19, 26]);
 /** 参照表: せいや土曜 9–14 / 17–22（14–17 中抜け3h→算定+1h） */
@@ -36,7 +36,7 @@ const SEIYA_SATURDAY_DAY_NUMS = new Set([10, 17, 24, 31]);
 /** 参照表: ひろむ 9–14 / 17–22 */
 const UENO_HIROMU_SPLIT_DAY_NUMS = new Set([1, 2]);
 /** 参照表: ひろむ 14–21 */
-const UENO_HIROMU_LATE_DAY_NUMS = new Set([3, 7, 8, 9, 14, 15, 16, 21, 22, 23]);
+const UENO_HIROMU_LATE_DAY_NUMS = new Set([3, 8, 9, 14, 15, 16, 22, 23]);
 /** 参照表: ひろむ日曜 10–18 */
 const UENO_HIROMU_SUNDAY_DAY_NUMS = new Set([4, 11, 18, 25]);
 
