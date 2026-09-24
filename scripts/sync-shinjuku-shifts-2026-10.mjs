@@ -12,7 +12,8 @@ import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.
  *
  * - 目標枠: 約380（デフォルト380、--slots=）
  * - 1ブース（2ブースなし）
- * - りょう: 休み希望(1,7,14,20,26)最優先・桜木町りょう日は不可・約130h
+ * - りょう: 休み希望(1,7,14,20,26)・桜木町りょう日は不可・ひろむ新宿日は不可
+ *   上記以外の日は新宿 9–14 / 17–22（枠増）
  * - ゆうと: 残り日・残り枠（枠調整は月末連休にならないよう分散削除）
  * - ひろむ: 新宿2日+差替1日（9–14/17–22）。ゆうと新宿午前+恵比寿午後の1日は
  *   ひろむ 10–14/17–22（上野勤務日・週2休と被らない）
@@ -35,7 +36,7 @@ const DEFAULT_TARGET_SLOTS = 380;
 const TARGET_SLOTS_CEILING = 388;
 /** 予約枠なしの店休日数（枠超過時のみ追加） */
 const STORE_CLOSED_DAY_COUNT = 0;
-/** りょうの新宿勤務時間目標 */
+/** 旧: 時間目標で日数制限。現在は eligible 全日を long で配置 */
 const RYO_TARGET_WORK_HOURS = 130;
 
 /** 桜木町・りょう休み希望（新宿も休み） */
@@ -387,6 +388,15 @@ function pickRyoShinjukuPlanByHours(eligibleDates, targetHours) {
   return { plan, ryoWorkHours: hours };
 }
 
+/** 希望休・桜木町・ひろむ新宿日を除く全日に 9–14 / 17–22 */
+function pickRyoShinjukuPlanMaxSlots(eligibleDates) {
+  const long = RYO_SHINJUKU_TEMPLATES.find((t) => t.key === "long");
+  if (!long) throw new Error("りょう long テンプレ未定義");
+  const plan = [...eligibleDates].sort().map((date) => ({ date, template: long, key: long.key }));
+  const ryoWorkHours = plan.reduce((h, p) => h + templateWorkHours(p.template), 0);
+  return { plan, ryoWorkHours };
+}
+
 function pickStoreClosedDays(dates, hiromuShinjukuDays, sakuraRyoDates) {
   if (STORE_CLOSED_DAY_COUNT <= 0) return [];
   const hiromuSet = new Set(hiromuShinjukuDays);
@@ -530,7 +540,7 @@ function buildRows(targetSlots, crossStore) {
   const ryoEligible = dates.filter(
     (d) => !isClosed(d) && !hiromuSet.has(d) && isRyoShinjukuEligible(d, sakuraRyoDates),
   );
-  let { plan: ryoPlan, ryoWorkHours } = pickRyoShinjukuPlanByHours(ryoEligible, RYO_TARGET_WORK_HOURS);
+  let { plan: ryoPlan, ryoWorkHours } = pickRyoShinjukuPlanMaxSlots(ryoEligible);
   let ryoDates = ryoPlan.map((p) => p.date);
 
   let yutoWorkDays = dates.filter((d) => !isClosed(d) && !hiromuSet.has(d) && !ryoDates.includes(d));
@@ -590,15 +600,7 @@ function buildRows(targetSlots, crossStore) {
     return true;
   }
 
-  let guardTrim = 0;
-  while (slots > TARGET_SLOTS_CEILING && yutoWorkDays.length > 0 && guardTrim++ < 40) {
-    if (!trimOneYutoDay()) break;
-  }
-
-  guardTrim = 0;
-  while (slots > targetSlots + 6 && yutoWorkDays.length > 0 && guardTrim++ < 20) {
-    if (!trimOneYutoDay()) break;
-  }
+  /** りょう最大化後は枠削減トリムしない（開放枠増が目的） */
 
   const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
   const yutoOffDays = yutoDates.filter((d) => !yutoWorkDays.includes(d));
