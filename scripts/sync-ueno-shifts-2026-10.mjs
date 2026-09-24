@@ -12,7 +12,8 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - ひろむ 9–18 日の半分は中抜け 9–14 / 17–22
  * - ひろむ 10/29: 10–22（14–17 中抜け）
  * - その他単独日: 9–18 または 14–21（従来・休憩1h）
- * - ひろむ: 週2休（上野単独日）。休み日は店休扱いで、上野の連休にならないよう配置
+ * - ひろむ: 週2休（10月全体）。休みは上野単独日（せいや不在日）を優先し連休回避
+ * - ひろむ稼働日は原則 9–14 / 17–22（日曜・10/29は従来ルール）
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
  */
@@ -190,19 +191,29 @@ function buildHiromuPmDualRows(date) {
   return [row(date, "16:00", "22:00", "ひろむ", 0)];
 }
 
-/** せいや出勤日から、週1日ずつ夕方2ブース用にひろむ16–22を選ぶ */
-function pickSeiyaHiromuDualDays(seiyaDates) {
+/** せいや出勤日から、週1日ずつ夕方2ブース用にひろむ16–22（ひろむ休み日はスキップ） */
+function pickSeiyaHiromuDualDays(seiyaDates, hiromuRestSet) {
   const picked = [];
   for (const weekDates of groupDatesByMondayWeek(seiyaDates)) {
     const sorted = [...weekDates].sort((a, b) => a.localeCompare(b));
-    if (sorted.length) picked.push(sorted[0]);
+    const choice = sorted.find((d) => !hiromuRestSet.has(d));
+    if (choice) picked.push(choice);
   }
   return picked.sort();
 }
 
-function buildSeiyaDayRowsForPlan(date, dualDays) {
+function hiromuPatternForCalendarDate(date) {
+  if (hiromuDayNum(date) === HIROMU_OCT29_DAY_NUM) return HIROMU_OCT29;
+  if (isSunday(date)) return HIROMU_SUNDAY;
+  return HIROMU_SPLIT;
+}
+
+function buildSeiyaDayRowsForPlan(date, hiromuAlsoWorks, patternByDate) {
   const rows = buildSeiyaDayRows(date);
-  if (dualDays.includes(date)) rows.push(...buildHiromuPmDualRows(date));
+  if (hiromuAlsoWorks) {
+    const pattern = patternByDate?.get(date) ?? hiromuPatternForCalendarDate(date);
+    rows.push(...buildHiromuDayRows(date, pattern));
+  }
   return rows;
 }
 
@@ -235,9 +246,9 @@ function assignHiromuPatternsWithRules(hiromuDates, needHiromuSlots) {
   const patternSlots = (p) => p.slotsPerDay ?? countSlots(buildHiromuDayRows("2000-01-01", p));
 
   const fixedSlots = [...fixed.values()].reduce((sum, p) => sum + patternSlots(p), 0);
-  const splitCount = Math.floor(flexible.length / 2);
-  const splitDates = new Set(flexible.slice(0, splitCount));
-  const splitSlots = splitCount * patternSlots(HIROMU_SPLIT);
+  /** 平日は原則 9–14 / 17–22（枠超過時のみ late へ落とす） */
+  const splitDates = new Set(flexible);
+  const splitSlots = splitDates.size * patternSlots(HIROMU_SPLIT);
   const remainDates = flexible.filter((d) => !splitDates.has(d));
   const needRemain = Math.max(0, needHiromuSlots - fixedSlots - splitSlots);
   const baseAssign = assignHiromuPatterns(remainDates, needRemain);
@@ -339,8 +350,13 @@ function maxUenoHiromuOnlyClosedStreak(seiyaDates, hiromuClosedSet) {
   return max;
 }
 
+function hiromuRestOnlyOnUenoClosedDays(restSet, seiyaSet) {
+  return new Set([...restSet].filter((d) => !seiyaSet.has(d)));
+}
+
 function hiromuRestPickScore(date, seiyaSet, closedSet) {
   let s = 0;
+  if (!seiyaSet.has(date)) s += 500;
   const prev = adjacentOctoberDate(date, -1);
   const next = adjacentOctoberDate(date, 1);
   if (prev && seiyaSet.has(prev)) s += 40;
@@ -354,38 +370,40 @@ function hiromuRestPickScore(date, seiyaSet, closedSet) {
   return s;
 }
 
-/** 週2休。上野が連休（ひろむ単独日が連続店休）にならない日を優先 */
-function pickHiromuWeeklyRestDates(hiromuCandidates, seiyaDates) {
+/** 週2休（10月カレンダー全体）。休みは上野単独休み（非せいや日）を優先 */
+function pickHiromuWeeklyRestDates(allDates, seiyaDates) {
   const seiyaSet = new Set(seiyaDates);
-  const closed = new Set();
+  const rest = new Set();
 
-  for (const weekDates of groupDatesByMondayWeek(hiromuCandidates)) {
-    const pool = weekDates.filter((d) => hiromuCandidates.includes(d)).sort();
+  for (const weekDates of groupDatesByMondayWeek(allDates)) {
+    const pool = weekDates.filter((d) => allDates.includes(d)).sort();
     const offRequired = Math.min(HIROMU_OFF_PER_WEEK, Math.max(0, pool.length - 1));
 
     for (let i = 0; i < offRequired; i++) {
       const options = pool
-        .filter((d) => !closed.has(d))
-        .sort((a, b) => hiromuRestPickScore(b, seiyaSet, closed) - hiromuRestPickScore(a, seiyaSet, closed));
+        .filter((d) => !rest.has(d))
+        .sort((a, b) => hiromuRestPickScore(b, seiyaSet, rest) - hiromuRestPickScore(a, seiyaSet, rest));
 
       let picked = null;
       for (const d of options) {
-        const trial = new Set(closed);
+        const trial = new Set(rest);
         trial.add(d);
-        if (maxUenoHiromuOnlyClosedStreak(seiyaDates, trial) <= 1) {
+        const uenoClosed = hiromuRestOnlyOnUenoClosedDays(trial, seiyaSet);
+        if (maxUenoHiromuOnlyClosedStreak(seiyaDates, uenoClosed) <= 1) {
           picked = d;
           break;
         }
       }
       if (!picked && options.length) picked = options[0];
-      if (picked) closed.add(picked);
+      if (picked) rest.add(picked);
     }
   }
 
-  if (maxUenoHiromuOnlyClosedStreak(seiyaDates, closed) > 1) {
+  const uenoClosed = hiromuRestOnlyOnUenoClosedDays(rest, seiyaSet);
+  if (maxUenoHiromuOnlyClosedStreak(seiyaDates, uenoClosed) > 1) {
     throw new Error("上野連休を避けたひろむ週2休を確保できません");
   }
-  return [...closed].sort();
+  return [...rest].sort();
 }
 
 /** 交互に early/late を割当し、目標コマ数に合わせて early 日数を調整 */
@@ -414,35 +432,51 @@ function assignHiromuPatterns(hiromuDates, needHiromuSlots) {
 }
 
 function buildRows(targetSlots) {
+  const allDates = allOctoberDates();
   const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
-  const seiyaHiromuDualDays = pickSeiyaHiromuDualDays(seiyaDates);
-  const hiromuCandidates = allOctoberDates().filter((d) => !seiyaDates.includes(d)).sort();
-  const hiromuClosedDates = pickHiromuWeeklyRestDates(hiromuCandidates, seiyaDates);
-  const hiromuDates = hiromuCandidates.filter((d) => !hiromuClosedDates.includes(d));
+  const seiyaSet = new Set(seiyaDates);
+  const hiromuRestDates = pickHiromuWeeklyRestDates(allDates, seiyaDates);
+  const hiromuRestSet = new Set(hiromuRestDates);
+  const hiromuWorkDates = allDates.filter((d) => !hiromuRestSet.has(d));
+  const hiromuClosedDates = hiromuRestDates.filter((d) => !seiyaSet.has(d));
+  const hiromuSoloDates = hiromuWorkDates.filter((d) => !seiyaSet.has(d));
 
-  let seiyaTotal = 0;
+  let seiyaBaseline = 0;
   for (const d of seiyaDates) {
-    seiyaTotal += countSlots(buildSeiyaDayRowsForPlan(d, seiyaHiromuDualDays));
+    seiyaBaseline += countSlots(buildSeiyaDayRows(d));
   }
-  const needHiromu = Math.max(0, targetSlots - seiyaTotal);
+  const needHiromu = Math.max(0, targetSlots - seiyaBaseline);
 
-  const hiromuPatternByDate = assignHiromuPatternsWithRules(hiromuDates, needHiromu);
+  const hiromuPatternByDate = assignHiromuPatternsWithRules(hiromuWorkDates, needHiromu);
 
   const rows = [];
-  for (const d of seiyaDates) rows.push(...buildSeiyaDayRowsForPlan(d, seiyaHiromuDualDays));
-  for (const d of hiromuDates) rows.push(...buildHiromuDayRows(d, hiromuPatternByDate.get(d)));
+  for (const d of seiyaDates) {
+    rows.push(...buildSeiyaDayRowsForPlan(d, !hiromuRestSet.has(d), hiromuPatternByDate));
+  }
+  for (const d of hiromuSoloDates) {
+    rows.push(...buildHiromuDayRows(d, hiromuPatternByDate.get(d)));
+  }
 
   /** 固定ルール後に枠超過する場合、split 日を末尾から late に落とす（日曜・10/29は維持） */
   let slotsNow = countSlots(rows);
-  const splitDemoteOrder = hiromuDates
+  const splitDemoteOrder = hiromuWorkDates
     .filter((d) => hiromuPatternByDate.get(d)?.kind === "split")
-    .sort((a, b) => b.localeCompare(a));
+    .sort((a, b) => {
+      const aCombo = seiyaSet.has(a) ? 0 : 1;
+      const bCombo = seiyaSet.has(b) ? 0 : 1;
+      if (aCombo !== bCombo) return aCombo - bCombo;
+      return b.localeCompare(a);
+    });
   for (const d of splitDemoteOrder) {
     if (slotsNow <= targetSlots) break;
     hiromuPatternByDate.set(d, HIROMU_LATE);
     rows.length = 0;
-    for (const sd of seiyaDates) rows.push(...buildSeiyaDayRowsForPlan(sd, seiyaHiromuDualDays));
-    for (const hd of hiromuDates) rows.push(...buildHiromuDayRows(hd, hiromuPatternByDate.get(hd)));
+    for (const sd of seiyaDates) {
+      rows.push(...buildSeiyaDayRowsForPlan(sd, !hiromuRestSet.has(sd), hiromuPatternByDate));
+    }
+    for (const hd of hiromuSoloDates) {
+      rows.push(...buildHiromuDayRows(hd, hiromuPatternByDate.get(hd)));
+    }
     slotsNow = countSlots(rows);
   }
 
@@ -464,17 +498,18 @@ function buildRows(targetSlots) {
     rows,
     slots,
     seiyaDates,
-    hiromuDates,
+    hiromuDates: hiromuSoloDates,
+    hiromuRestDates,
+    hiromuWorkDates,
     hiromuClosedDates,
     targetSlots,
-    seiyaSlotTotal: seiyaTotal,
+    seiyaSlotTotal: seiyaBaseline,
     hiromuEarlyDays,
     hiromuSplitDays,
     hiromuSundayDays,
     hiromuLateDays,
     hiromuPmByDate,
     hiromuPatternByDate,
-    seiyaHiromuDualDays,
   };
 }
 
