@@ -6,6 +6,7 @@ import {
   UENO_STORE_NAME,
 } from "./sync-ueno-shifts-2026-10.mjs";
 import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.mjs";
+import { openCandidateDates as ebisuOpenCandidateDates, pickYutoEbisuWorkDays } from "./sync-ebisu-shifts-2026-10.mjs";
 
 /**
  * 2026-10 新宿店（ひろむ・りょう・ゆうと）
@@ -32,8 +33,9 @@ const SHIFT_STATUS = "confirmed";
 const HIROMU_SHINJUKU_DAY_COUNT = 2;
 const HIROMU_OFF_PER_WEEK = 2;
 /** 10月新宿の開放目標 */
-const DEFAULT_TARGET_SLOTS = 380;
-const TARGET_SLOTS_CEILING = 388;
+const DEFAULT_TARGET_SLOTS = 390;
+const TARGET_SLOTS_CEILING = 398;
+const MAX_STORE_CLOSED_STREAK = 2;
 /** 予約枠なしの店休日数（枠超過時のみ追加） */
 const STORE_CLOSED_DAY_COUNT = 0;
 /** 旧: 時間目標で日数制限。現在は eligible 全日を long で配置 */
@@ -320,21 +322,52 @@ function trailingClosedStreakAfterDrop(allDates, closedSet, dropDate) {
   return streak;
 }
 
-/** 枠削減でゆうと勤務日を1日外す（月末連続店休を最小化） */
-function pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, allDates) {
-  if (!yutoWorkDays.length) return null;
-  let best = yutoWorkDays[0];
-  let bestScore = Infinity;
-  for (const d of yutoWorkDays) {
-    const streak = trailingClosedStreakAfterDrop(allDates, storeClosedDates, d);
-    const n = dayNum(d);
-    const score = streak * 100 - n;
-    if (score < bestScore) {
-      bestScore = score;
-      best = d;
+function maxStoreClosedStreak(allDates, closedSet) {
+  let max = 0;
+  let cur = 0;
+  for (const d of allDates) {
+    if (closedSet.has(d)) {
+      cur++;
+      max = Math.max(max, cur);
+    } else {
+      cur = 0;
     }
   }
-  return best;
+  return max;
+}
+
+function yutoDualPmDaysForShinjuku(yutoWorkDays) {
+  const { yutoDualPmDays } = pickYutoEbisuWorkDays(ebisuOpenCandidateDates(), [], yutoWorkDays);
+  return yutoDualPmDays;
+}
+
+/** 390枠向け: 恵比寿午後あり日を優先削除、店休3連続は避ける */
+function pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, allDates, yutoDualPmDays) {
+  if (!yutoWorkDays.length) return null;
+  const closedSet = new Set(storeClosedDates);
+  const dualSet = yutoDualPmDays instanceof Set ? yutoDualPmDays : new Set(yutoDualPmDays);
+
+  function pick(allowLongStreak) {
+    let best = null;
+    let bestScore = Infinity;
+    for (const d of yutoWorkDays) {
+      const nextClosed = new Set(closedSet);
+      nextClosed.add(d);
+      const streak = maxStoreClosedStreak(allDates, nextClosed);
+      if (!allowLongStreak && streak > MAX_STORE_CLOSED_STREAK) continue;
+      let score = streak * 200;
+      if (!dualSet.has(d)) score += 500;
+      const dow = parseLocalDate(d).getDay();
+      score -= (dow === 6 ? 12 : 8) * 0.1;
+      if (score < bestScore) {
+        bestScore = score;
+        best = d;
+      }
+    }
+    return best;
+  }
+
+  return pick(false) ?? pick(true);
 }
 
 function isRyoShinjukuEligible(date, sakuraRyoDates) {
@@ -561,23 +594,23 @@ function buildRows(targetSlots, crossStore) {
   let ryoRows = ryoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_RYO, template));
   let ryoSlots = countSlots(ryoRows);
 
-  let yutoNeed = Math.max(0, targetSlots - hiromuSlots - ryoSlots);
-  let yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeed, {
-    slotCeilingExtra: 8,
-    maxTemplateKey: "am",
-  });
+  let yutoPlan = yutoPlanAmOnly();
   let yutoRows = yutoPlan.flatMap(({ date, template }) =>
     rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
   );
   let yutoSlots = countSlots(yutoRows);
   let rows;
 
-  function rebuildYuto() {
-    yutoNeed = Math.max(0, targetSlots - hiromuSlots - ryoSlots);
-    yutoPlan = pickTemplatesForDays(yutoWorkDays, YUTO_TEMPLATES, yutoNeed, {
-      slotCeilingExtra: 4,
-      maxTemplateKey: "am",
+  function yutoPlanAmOnly() {
+    return yutoWorkDays.map((date) => {
+      const sat = parseLocalDate(date).getDay() === 6;
+      const template = sat ? YUTO_SATURDAY_TEMPLATE : YUTO_WEEKDAY_TEMPLATE;
+      return { date, template, key: template.key };
     });
+  }
+
+  function rebuildYuto() {
+    yutoPlan = yutoPlanAmOnly();
     yutoRows = yutoPlan.flatMap(({ date, template }) =>
       rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
     );
@@ -590,7 +623,8 @@ function buildRows(targetSlots, crossStore) {
   let slots = rebuildYuto();
 
   function trimOneYutoDay() {
-    const drop = pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, dates);
+    const dualPm = yutoDualPmDaysForShinjuku(yutoWorkDays);
+    const drop = pickYutoDayToDropForTrim(yutoWorkDays, storeClosedDates, dates, dualPm);
     if (!drop) return false;
     yutoWorkDays = yutoWorkDays.filter((d) => d !== drop);
     storeClosedDates.push(drop);
@@ -600,7 +634,11 @@ function buildRows(targetSlots, crossStore) {
     return true;
   }
 
-  /** りょう最大化後は枠削減トリムしない（開放枠増が目的） */
+  let guardTrim = 0;
+  /** 8コマ刻みのため 390±2 コマ（392まで）で打ち止め */
+  while (slots > targetSlots + 2 && yutoWorkDays.length > 0 && guardTrim++ < 40) {
+    if (!trimOneYutoDay()) break;
+  }
 
   const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
   const yutoOffDays = yutoDates.filter((d) => !yutoWorkDays.includes(d));
