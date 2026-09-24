@@ -8,6 +8,8 @@ import { UENO_MAX_BOOTHS, UENO_STORE_NAME } from "./sync-ueno-shifts-2026-10.mjs
  * - 目標枠: アクティブ会員×12
  * - 同時1ブース
  * - たけはる 171h / 月、週2休（連勤抑制）、残り日・枠はりょう
+ * - りょう: 土日 10:00–19:00（10/10 のみ 10–16）、10/19 は休み
+ * - たけはる土日（10/10除く）: 10:00–19:00（13–14 休憩1h）
  *
  * node --env-file=.env.local scripts/sync-sakuragicho-shifts-2026-10.mjs --dry-run
  */
@@ -46,21 +48,50 @@ const TAKE_TEMPLATE = {
   breakMinutes: 0,
 };
 
-/** 10:00–16:00（10/10 および土日りょう） */
+/** 10/10 りょうのみ 10:00–16:00 */
 const RYO_DAY10_TEMPLATE = {
   key: "day10",
   segments: [["10:00", "16:00"]],
   breakMinutes: 0,
 };
 
+/** 土日（10/10除く）10:00–19:00（13–14 休憩1h） */
+const RYO_WEEKEND_1019_TEMPLATE = {
+  key: "weekend1019",
+  segments: [
+    ["10:00", "13:00"],
+    ["14:00", "19:00"],
+  ],
+  breakMinutes: 60,
+};
+
+/** たけはる土日（10/10除く） */
+const TAKE_WEEKEND_1019_TEMPLATE = {
+  segments: [
+    ["10:00", "13:00"],
+    ["14:00", "19:00"],
+  ],
+  breakMinutes: 60,
+};
+
+const RYO_DAY10_NUM = 10;
+
 function isWeekendDate(date) {
   const dow = parseLocalDate(date).getDay();
   return dow === 0 || dow === 6;
 }
 
-/** 土日は 16–21 ではなく 10–16 固定 */
-function ryoWeekendAmFixedDate(date) {
-  return isWeekendDate(date);
+function isWeekendExceptDay10(date) {
+  return isWeekendDate(date) && dayNum(date) !== RYO_DAY10_NUM;
+}
+
+/** 10/10 りょう 10–16 固定 */
+function ryoWeekendDay10FixedDate(date) {
+  return dayNum(date) === RYO_DAY10_NUM;
+}
+
+function takeWeekend1019Date(date) {
+  return isWeekendExceptDay10(date);
 }
 
 const RYO_TEMPLATES = [
@@ -187,6 +218,16 @@ function takeHoursForPmEnd(pmEnd) {
     ["15:00", "16:00"],
     ["16:00", pmEnd],
   ]);
+}
+
+function takeHoursForDate(date, pmEnd) {
+  if (takeWeekend1019Date(date)) {
+    return (
+      workHoursForSegments(TAKE_WEEKEND_1019_TEMPLATE.segments) -
+      (TAKE_WEEKEND_1019_TEMPLATE.breakMinutes ?? 0) / 60
+    );
+  }
+  return takeHoursForPmEnd(pmEnd);
 }
 
 function parseLocalDate(dateStr) {
@@ -338,6 +379,9 @@ function assignTrainerDays(dates) {
 }
 
 function buildTakeRows(date, pmEnd = TAKE_PM_BASE) {
+  if (takeWeekend1019Date(date)) {
+    return rowsForTemplate(date, TRAINER_TAKE, TAKE_WEEKEND_1019_TEMPLATE);
+  }
   const segments = [
     ["10:00", "13:00"],
     ["15:00", "16:00"],
@@ -350,7 +394,7 @@ function tuneTakeHours(takeDays) {
   if (!takeDays.length) return { rows: [], totalTakeHours: 0, scheduledTakeDays: 0 };
 
   const pmEnds = takeDays.map(() => TAKE_PM_BASE);
-  let totalH = pmEnds.reduce((s, pm) => s + takeHoursForPmEnd(pm), 0);
+  let totalH = takeDays.reduce((s, d, i) => s + takeHoursForDate(d, pmEnds[i]), 0);
 
   let guard = 0;
   while (totalH < TAKE_TARGET_WORK_HOURS - 0.01 && guard++ < 500) {
@@ -358,7 +402,7 @@ function tuneTakeHours(takeDays) {
     for (let i = 0; i < pmEnds.length; i++) {
       if (toMinutes(pmEnds[i]) >= toMinutes(TAKE_PM_MAX)) continue;
       const nextPm = TAKE_PM_MAX;
-      const delta = takeHoursForPmEnd(nextPm) - takeHoursForPmEnd(pmEnds[i]);
+      const delta = takeHoursForDate(takeDays[i], nextPm) - takeHoursForDate(takeDays[i], pmEnds[i]);
       if (totalH + delta > TAKE_TARGET_WORK_HOURS + 0.01) continue;
       pmEnds[i] = nextPm;
       totalH += delta;
@@ -374,7 +418,7 @@ function tuneTakeHours(takeDays) {
     for (let i = pmEnds.length - 1; i >= 0; i--) {
       if (toMinutes(pmEnds[i]) <= toMinutes(TAKE_PM_BASE)) continue;
       const prevPm = TAKE_PM_BASE;
-      const delta = takeHoursForPmEnd(pmEnds[i]) - takeHoursForPmEnd(prevPm);
+      const delta = takeHoursForDate(takeDays[i], pmEnds[i]) - takeHoursForDate(takeDays[i], prevPm);
       pmEnds[i] = prevPm;
       totalH -= delta;
       trimmed = true;
@@ -410,14 +454,16 @@ function planRyoWorkHours(plan) {
 
 function minRyoTemplateKeyForDate(date) {
   const day = dayNum(date);
-  if (ryoWeekendAmFixedDate(date)) return "day10";
+  if (ryoWeekendDay10FixedDate(date)) return "day10";
+  if (isWeekendExceptDay10(date)) return "weekend1019";
   if (day === 6) return "short";
   return "mini";
 }
 
 function maxRyoTemplateKeyForDate(date) {
   const day = dayNum(date);
-  if (ryoWeekendAmFixedDate(date)) return "day10";
+  if (ryoWeekendDay10FixedDate(date)) return "day10";
+  if (isWeekendExceptDay10(date)) return "weekend1019";
   if (RYO_COVER_FULL_DAYS.has(day)) return "full";
   if (RYO_TAKE_OFF_COVER_DAYS.has(day)) return "miniLong";
   if (day >= 21) return "short";
@@ -425,7 +471,7 @@ function maxRyoTemplateKeyForDate(date) {
 }
 
 function templateRank(key) {
-  const order = ["day10", "mini", "miniLong", "miniLong2", "short", "pm", "med", "full"];
+  const order = ["day10", "weekend1019", "mini", "miniLong", "miniLong2", "short", "pm", "med", "full"];
   const i = order.indexOf(key);
   return i >= 0 ? i : order.length;
 }
@@ -450,11 +496,20 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
   const shortOpt = opts.find((o) => o.template.key === "short") ?? opts[Math.min(2, opts.length - 1)];
 
   const day10Slots = slotsForTemplate(RYO_DAY10_TEMPLATE);
+  const weekend1019Slots = slotsForTemplate(RYO_WEEKEND_1019_TEMPLATE);
 
   const plan = ryoDays.map((date) => {
     const day = dayNum(date);
-    if (ryoWeekendAmFixedDate(date)) {
+    if (ryoWeekendDay10FixedDate(date)) {
       return { date, template: RYO_DAY10_TEMPLATE, slots: day10Slots, key: "day10" };
+    }
+    if (isWeekendExceptDay10(date)) {
+      return {
+        date,
+        template: RYO_WEEKEND_1019_TEMPLATE,
+        slots: weekend1019Slots,
+        key: "weekend1019",
+      };
     }
     if (RYO_COVER_FULL_DAYS.has(day)) {
       return { date, template: fullOpt.template, slots: fullOpt.slots, key: fullOpt.template.key };
@@ -476,7 +531,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
   while (sum < slotsNeeded && guard++ < 500) {
     let upgraded = false;
     for (let i = 0; i < plan.length; i++) {
-      if (ryoWeekendAmFixedDate(plan[i].date)) continue;
+      if (ryoWeekendDay10FixedDate(plan[i].date) || isWeekendExceptDay10(plan[i].date)) continue;
       if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
       for (const opt of opts) {
         if (opt.slots <= plan[i].slots) continue;
@@ -498,7 +553,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
     let downgraded = false;
     for (let i = 0; i < plan.length; i++) {
       const day = dayNum(plan[i].date);
-      if (ryoWeekendAmFixedDate(plan[i].date)) continue;
+      if (ryoWeekendDay10FixedDate(plan[i].date) || isWeekendExceptDay10(plan[i].date)) continue;
       if (RYO_COVER_FULL_DAYS.has(day)) continue;
       const minKey = minRyoTemplateKeyForDate(plan[i].date);
       for (const opt of opts) {
@@ -528,7 +583,7 @@ function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
 
     let upgraded = false;
     for (const i of order) {
-      if (ryoWeekendAmFixedDate(plan[i].date)) continue;
+      if (ryoWeekendDay10FixedDate(plan[i].date) || isWeekendExceptDay10(plan[i].date)) continue;
       if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
       const day = dayNum(plan[i].date);
       const maxKey = maxRyoTemplateKeyForDate(plan[i].date);
