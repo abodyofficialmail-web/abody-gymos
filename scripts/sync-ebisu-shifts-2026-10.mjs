@@ -15,6 +15,7 @@ import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-sh
  * - 平日: 16:00–22:00
  * - 日曜: 10:00–16:00
  * - ひろむ: 月4日（上野・新宿と同日不可）
+ * - 上野ひろむと同日の恵比寿は、ゆうとが週2休を維持できる場合はゆうとに変更
  * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可（ひろむ恵比寿日は除外）
  *
  * node scripts/sync-ebisu-shifts-2026-10.mjs --dry-run
@@ -182,13 +183,14 @@ function trainerDatesElsewhere(rows, trainer, excludeStore) {
 function loadCrossStoreBusy(uenoActive, sakuraActive) {
   const cross = loadCrossStoreContext(uenoActive, sakuraActive);
   const ueno = buildUenoPlan(uenoActive * 12);
-  const shinjuku = buildShinjukuPlan(350, cross);
+  const shinjuku = buildShinjukuPlan(390, cross);
+  const hiromuUenoDates = trainerDatesElsewhere(ueno.rows, TRAINER_HIROMU, STORE_NAME);
   const hiromuBusy = new Set([
-    ...trainerDatesElsewhere(ueno.rows, TRAINER_HIROMU, STORE_NAME),
+    ...hiromuUenoDates,
     ...trainerDatesElsewhere(shinjuku.rows, TRAINER_HIROMU, STORE_NAME),
   ]);
   const yutoShinjukuDates = [...trainerDatesElsewhere(shinjuku.rows, TRAINER_YUTO, STORE_NAME)].sort();
-  return { hiromuBusy, yutoShinjukuDates, cross };
+  return { hiromuBusy, hiromuUenoDates, yutoShinjukuDates, cross };
 }
 
 function hiromuEbisuPickScore(date) {
@@ -226,6 +228,114 @@ function pickHiromuEbisuDays(candidates, hiromuBusy, count = HIROMU_EBISU_DAY_CO
     throw new Error(`ひろむ恵比寿 ${count} 日を確保できません（${picked.length} 日のみ）`);
   }
   return picked.sort();
+}
+
+function fillHiromuEbisuDays(hiromuDays, candidates, hiromuBusy, count = HIROMU_EBISU_DAY_COUNT) {
+  const picked = [...hiromuDays];
+  const pickedSet = new Set(picked);
+  for (const d of candidates) {
+    if (picked.length >= count) break;
+    if (hiromuBusy.has(d) || pickedSet.has(d)) continue;
+    picked.push(d);
+    pickedSet.add(d);
+  }
+  if (picked.length < count) {
+    throw new Error(`ひろむ恵比寿 ${count} 日を確保できません（${picked.length} 日のみ）`);
+  }
+  return picked.sort();
+}
+
+function weekPoolForDate(date, candidates) {
+  for (const weekDates of groupDatesByMondayWeek(candidates)) {
+    if (weekDates.includes(date)) return weekDates;
+  }
+  return [];
+}
+
+/**
+ * 上野ひろむ日に恵比寿を開けるため、公休を別日にずらしてゆうと勤務に変更
+ */
+function trySwapYutoRestToEbisuWork(date, candidates, hiromuSet, yutoWork, yutoRest, shinjukuSet, yutoDualPmDays) {
+  if (hiromuSet.has(date)) return false;
+  if (yutoWork.has(date)) return true;
+
+  const pool = weekPoolForDate(date, candidates);
+  if (!pool.length) return false;
+
+  const trialWork = new Set(yutoWork);
+  const trialRest = new Set(yutoRest);
+  trialWork.add(date);
+  trialRest.delete(date);
+
+  const offRequired = weekOffRequired(pool, hiromuSet);
+  const countOff = () => pool.filter((d) => !hiromuSet.has(d) && !trialWork.has(d)).length;
+
+  while (countOff() < offRequired) {
+    const options = pool
+      .filter((d) => !hiromuSet.has(d) && !trialWork.has(d) && !trialRest.has(d))
+      .sort((a, b) => yutoRestPickScore(b, shinjukuSet) - yutoRestPickScore(a, shinjukuSet));
+    if (!options.length) return false;
+    trialRest.add(options[0]);
+  }
+
+  for (const d of pool) {
+    if (hiromuSet.has(d)) continue;
+    if (trialWork.has(d)) {
+      yutoWork.add(d);
+      yutoRest.delete(d);
+    } else {
+      yutoWork.delete(d);
+      yutoRest.add(d);
+    }
+  }
+
+  if (isYutoShinjukuWeekday(date, shinjukuSet, hiromuSet)) yutoDualPmDays.add(date);
+  return true;
+}
+
+/** ひろむ恵比寿×上野ひろむの同日を解消（恵比寿はゆうとへ、週2休を維持できる場合のみ） */
+function resolveHiromuUenoEbisuWithYuto(
+  candidates,
+  crossBusy,
+  hiromuDays,
+  yutoWorkDays,
+  yutoRestDays,
+  yutoDualPmDays,
+  yutoShinjukuDates,
+) {
+  const hiromuUenoDates = crossBusy.hiromuUenoDates ?? new Set();
+  const hiromuBusy = crossBusy.hiromuBusy ?? new Set();
+
+  let hiromu = hiromuDays.filter((d) => !hiromuUenoDates.has(d));
+  if (hiromu.length !== hiromuDays.length) {
+    hiromu = fillHiromuEbisuDays(hiromu, candidates, hiromuBusy, HIROMU_EBISU_DAY_COUNT);
+  }
+
+  const yutoWork = new Set(yutoWorkDays);
+  const yutoRest = new Set(yutoRestDays);
+  const shinjukuSet = new Set(yutoShinjukuDates);
+  const yutoOnHiromuUenoDays = [];
+
+  for (const d of candidates) {
+    if (!hiromuUenoDates.has(d)) continue;
+    const hiromuSet = new Set(hiromu);
+    if (hiromuSet.has(d)) continue;
+    if (yutoWork.has(d)) {
+      yutoOnHiromuUenoDays.push(d);
+      continue;
+    }
+    if (!trySwapYutoRestToEbisuWork(d, candidates, hiromuSet, yutoWork, yutoRest, shinjukuSet, yutoDualPmDays)) {
+      continue;
+    }
+    yutoOnHiromuUenoDays.push(d);
+  }
+
+  return {
+    hiromuDays: hiromu,
+    yutoWorkDays: [...yutoWork].sort(),
+    yutoRestDays: [...yutoRest].sort(),
+    yutoOnHiromuUenoDays: yutoOnHiromuUenoDays.sort(),
+  };
 }
 
 function yutoRestPickScore(date, shinjukuSet) {
@@ -321,12 +431,26 @@ function validateYutoWeeklyRest(candidates, hiromuDays, yutoWorkDays) {
 
 function buildRows(targetSlots, crossBusy) {
   const candidates = openCandidateDates();
-  const hiromuDays = pickHiromuEbisuDays(candidates, crossBusy.hiromuBusy, HIROMU_EBISU_DAY_COUNT);
+  let hiromuDays = pickHiromuEbisuDays(candidates, crossBusy.hiromuBusy, HIROMU_EBISU_DAY_COUNT);
   let { yutoWorkDays, yutoRestDays, yutoDualPmDays } = pickYutoEbisuWorkDays(
     candidates,
     hiromuDays,
     crossBusy.yutoShinjukuDates,
   );
+  const resolved = resolveHiromuUenoEbisuWithYuto(
+    candidates,
+    crossBusy,
+    hiromuDays,
+    yutoWorkDays,
+    yutoRestDays,
+    yutoDualPmDays,
+    crossBusy.yutoShinjukuDates,
+  );
+  hiromuDays = resolved.hiromuDays;
+  yutoWorkDays = resolved.yutoWorkDays;
+  yutoRestDays = resolved.yutoRestDays;
+  const yutoOnHiromuUenoDays = resolved.yutoOnHiromuUenoDays;
+
   const trim = trimYutoDaysToTarget(yutoWorkDays, hiromuDays, targetSlots, yutoDualPmDays);
   for (const d of trim.storeClosedExtra) {
     yutoDualPmDays.delete(d);
@@ -361,6 +485,7 @@ function buildRows(targetSlots, crossBusy) {
     yutoWorkDays,
     yutoRestDays,
     yutoDualPmDays: [...yutoDualPmDays].sort(),
+    yutoOnHiromuUenoDays,
     storeClosedDates,
     storeClosedExtra,
     owners,
@@ -510,6 +635,7 @@ async function main() {
       yutoEbisuDays: plan.yutoWorkDays.map((d) => dayNum(d)),
       yutoEbisuDualPmDays: plan.yutoDualPmDays.map((d) => dayNum(d)),
       yutoRestDays: plan.yutoRestDays.map((d) => dayNum(d)),
+      yutoEbisuOnHiromuUenoDays: plan.yutoOnHiromuUenoDays.map((d) => dayNum(d)),
       storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
       trimmedForSlots: plan.storeClosedExtra.map((d) => dayNum(d)),
     },
