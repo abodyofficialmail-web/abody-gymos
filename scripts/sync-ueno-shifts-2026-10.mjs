@@ -614,7 +614,11 @@ async function main() {
     const open = dayRows.length > 0;
     const trainers = [...new Set(dayRows.map((r) => r.trainer_name))];
     const breakMin = dayRows.reduce((s, r) => s + (r.break_minutes ?? 0), 0);
-    const dual = plan.seiyaHiromuDualDays.includes(date);
+    const dual =
+      plan.seiyaDates.includes(date) &&
+      plan.hiromuWorkDates.includes(date) &&
+      trainers.includes("せいや") &&
+      trainers.includes("ひろむ");
     return {
       date,
       trainers: open ? trainers : null,
@@ -634,7 +638,9 @@ async function main() {
     ...summary,
     plan: {
       seiyaDays: plan.seiyaDates.length,
-      hiromuDays: plan.hiromuDates.length,
+      hiromuWorkDays: plan.hiromuWorkDates.length,
+      hiromuRestDays: plan.hiromuRestDates.map((d) => Number(d.slice(-2))),
+      hiromuSoloDays: plan.hiromuDates.length,
       hiromuEarlyDays: plan.hiromuEarlyDays,
       hiromuSplitDays: plan.hiromuSplitDays,
       hiromuSundayDays: plan.hiromuSundayDays,
@@ -642,7 +648,9 @@ async function main() {
       hiromuPmByDate: plan.hiromuPmByDate,
       hiromuClosedDates: plan.hiromuClosedDates,
       hiromuBreakMinutesPerDay: HIROMU_BREAK_MINUTES,
-      seiyaHiromuDualDays: plan.seiyaHiromuDualDays.map((d) => Number(d.slice(-2))),
+      seiyaHiromuDualDays: plan.seiyaDates
+        .filter((d) => plan.hiromuWorkDates.includes(d))
+        .map((d) => Number(d.slice(-2))),
     },
     calendar,
     rowCount: rows.length,
