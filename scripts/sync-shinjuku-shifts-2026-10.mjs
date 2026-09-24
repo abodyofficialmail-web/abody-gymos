@@ -6,7 +6,11 @@ import {
   UENO_STORE_NAME,
 } from "./sync-ueno-shifts-2026-10.mjs";
 import { buildRows as buildSakuraPlan } from "./sync-sakuragicho-shifts-2026-10.mjs";
-import { openCandidateDates as ebisuOpenCandidateDates, pickYutoEbisuWorkDays } from "./sync-ebisu-shifts-2026-10.mjs";
+import {
+  buildRows as buildEbisuPlan,
+  openCandidateDates as ebisuOpenCandidateDates,
+  pickYutoEbisuWorkDays,
+} from "./sync-ebisu-shifts-2026-10.mjs";
 
 /**
  * 2026-10 新宿店（ひろむ・りょう・ゆうと）
@@ -78,10 +82,15 @@ const RYO_SHINJUKU_TEMPLATES = [
   { key: "mini", segments: [["16:00", "19:00"]], breakMinutes: 0 },
 ];
 
-/** ゆうと: 平日 9–13 / 土曜 9–15（午後は恵比寿16–22と同日可） */
+/** ゆうと: 恵比寿あり平日 9–13 / 恵比寿なし平日 16–22 / 土曜 9–15 */
 const YUTO_WEEKDAY_TEMPLATE = {
   key: "am",
   segments: [["09:00", "13:00"]],
+  breakMinutes: 0,
+};
+const YUTO_WEEKDAY_PM_TEMPLATE = {
+  key: "pm",
+  segments: [["16:00", "22:00"]],
   breakMinutes: 0,
 };
 const YUTO_SATURDAY_TEMPLATE = {
@@ -89,9 +98,10 @@ const YUTO_SATURDAY_TEMPLATE = {
   segments: [["09:00", "15:00"]],
   breakMinutes: 0,
 };
-const YUTO_TEMPLATES = [YUTO_WEEKDAY_TEMPLATE, YUTO_SATURDAY_TEMPLATE];
+const YUTO_TEMPLATES = [YUTO_WEEKDAY_TEMPLATE, YUTO_WEEKDAY_PM_TEMPLATE, YUTO_SATURDAY_TEMPLATE];
 
 function yutoTemplateForDate(date, plannedTemplate) {
+  if (plannedTemplate) return plannedTemplate;
   if (parseLocalDate(date).getDay() === 6) return YUTO_SATURDAY_TEMPLATE;
   return YUTO_WEEKDAY_TEMPLATE;
 }
@@ -339,6 +349,19 @@ function maxStoreClosedStreak(allDates, closedSet) {
 function yutoDualPmDaysForShinjuku(yutoWorkDays) {
   const { yutoDualPmDays } = pickYutoEbisuWorkDays(ebisuOpenCandidateDates(), [], yutoWorkDays);
   return yutoDualPmDays;
+}
+
+/** 現在の新宿ゆうと日を前提にした恵比寿ゆうと勤務日 */
+function yutoEbisuWorkDateSet(yutoShinjukuWorkDays, crossStore) {
+  const crossBusy = {
+    hiromuBusy: new Set(),
+    yutoShinjukuDates: yutoShinjukuWorkDays,
+    cross: crossStore,
+  };
+  const ebisu = buildEbisuPlan(190, crossBusy);
+  return new Set(
+    ebisu.rows.filter((r) => r.trainer_name === TRAINER_YUTO).map((r) => r.shift_date),
+  );
 }
 
 /** 390枠向け: 恵比寿午後あり日を優先削除、店休3連続は避ける */
@@ -609,8 +632,17 @@ function buildRows(targetSlots, crossStore) {
     });
   }
 
-  function rebuildYuto() {
-    yutoPlan = yutoPlanAmOnly();
+  /** 390枠調整後: 恵比寿なし平日は新宿16–22、恵比寿ありは9–13 */
+  function yutoPlanAfterEbisuSplit() {
+    const ebisuSet = yutoEbisuWorkDateSet(yutoWorkDays, crossStore);
+    return yutoWorkDays.map((date) => {
+      if (ebisuSet.has(date)) return { date, template: YUTO_WEEKDAY_TEMPLATE, key: "am" };
+      return { date, template: YUTO_WEEKDAY_PM_TEMPLATE, key: "pm" };
+    });
+  }
+
+  function rebuildYuto(useEbisuSplit = false) {
+    yutoPlan = useEbisuSplit ? yutoPlanAfterEbisuSplit() : yutoPlanAmOnly();
     yutoRows = yutoPlan.flatMap(({ date, template }) =>
       rowsForTemplate(date, TRAINER_YUTO, yutoTemplateForDate(date, template)),
     );
@@ -620,7 +652,7 @@ function buildRows(targetSlots, crossStore) {
     return countSlots(rows);
   }
 
-  let slots = rebuildYuto();
+  let slots = rebuildYuto(false);
 
   function trimOneYutoDay() {
     const dualPm = yutoDualPmDaysForShinjuku(yutoWorkDays);
@@ -630,7 +662,7 @@ function buildRows(targetSlots, crossStore) {
     storeClosedDates.push(drop);
     storeClosedDates.sort();
     owners = assignDayOwners(dates, hiromuShinjukuDays, ryoDates, storeClosedDates);
-    slots = rebuildYuto();
+    slots = rebuildYuto(false);
     return true;
   }
 
@@ -639,6 +671,8 @@ function buildRows(targetSlots, crossStore) {
   while (slots > targetSlots + 2 && yutoWorkDays.length > 0 && guardTrim++ < 40) {
     if (!trimOneYutoDay()) break;
   }
+
+  slots = rebuildYuto(true);
 
   const yutoDates = dates.filter((d) => owners.get(d) === TRAINER_YUTO);
   const yutoOffDays = yutoDates.filter((d) => !yutoWorkDays.includes(d));
