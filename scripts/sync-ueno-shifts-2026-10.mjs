@@ -12,7 +12,7 @@ import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
  * - ひろむ 9–18 日の半分は中抜け 9–14 / 17–22
  * - ひろむ 10/29: 10–22（14–17 中抜け）
  * - その他単独日: 9–18 または 14–21（従来・休憩1h）
- * - 10月はひろむ単独日を2日省略
+ * - ひろむ: 週2休（上野単独日）。休み日は店休扱いで、上野の連休にならないよう配置
  *
  * node --env-file=.env.local scripts/sync-ueno-shifts-2026-10.mjs --dry-run
  */
@@ -29,8 +29,8 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 
 const SEIYA_DAY_NUMBERS = new Set([5, 6, 10, 12, 13, 17, 19, 20, 24, 26, 27, 31]);
 
-/** 上野・ひろむ稼働なし（予約枠なし）の日数 */
-const HIROMU_STORE_CLOSED_COUNT = 2;
+/** ひろむ: 月〜日の週あたり休み（上野・ひろむ単独日） */
+const HIROMU_OFF_PER_WEEK = 2;
 
 /** 9:00〜18:00（13–14 休憩1h）→ 予約16コマ */
 const HIROMU_EARLY = {
@@ -309,36 +309,83 @@ function hiromuDayNum(date) {
   return Number(date.slice(-2));
 }
 
-function datesAreConsecutive(a, b) {
-  return Math.abs(hiromuDayNum(a) - hiromuDayNum(b)) === 1;
+function adjacentOctoberDate(dateStr, deltaDays) {
+  const d = parseLocalDate(dateStr);
+  d.setDate(d.getDate() + deltaDays);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  if (yy !== 2026 || mm !== "10") return null;
+  return `${yy}-${mm}-${dd}`;
 }
 
-/** 省略2日: 月末寄りを優先しつつ、カレンダー上連日にしない */
-function pickHiromuClosedDates(hiromuCandidates) {
-  if (HIROMU_STORE_CLOSED_COUNT <= 0) return [];
-  const need = HIROMU_STORE_CLOSED_COUNT;
-  if (hiromuCandidates.length <= need) {
-    throw new Error("ひろむ候補日が休み日数より少ないです");
-  }
-
-  const picked = [];
-  for (const d of [...hiromuCandidates].reverse()) {
-    if (picked.length >= need) break;
-    if (picked.some((p) => datesAreConsecutive(p, d))) continue;
-    picked.push(d);
-  }
-  if (picked.length < need) {
-    for (const d of hiromuCandidates) {
-      if (picked.includes(d)) continue;
-      if (picked.some((p) => datesAreConsecutive(p, d))) continue;
-      picked.push(d);
-      if (picked.length >= need) break;
+/** せいや不在かつひろむ休み → 上野店休 */
+function maxUenoHiromuOnlyClosedStreak(seiyaDates, hiromuClosedSet) {
+  const seiyaSet = new Set(seiyaDates);
+  let max = 0;
+  let cur = 0;
+  for (const d of allOctoberDates()) {
+    if (seiyaSet.has(d)) {
+      cur = 0;
+      continue;
+    }
+    if (hiromuClosedSet.has(d)) {
+      cur += 1;
+      max = Math.max(max, cur);
+    } else {
+      cur = 0;
     }
   }
-  if (picked.length < need) {
-    throw new Error("非連続の休み日を確保できませんでした");
+  return max;
+}
+
+function hiromuRestPickScore(date, seiyaSet, closedSet) {
+  let s = 0;
+  const prev = adjacentOctoberDate(date, -1);
+  const next = adjacentOctoberDate(date, 1);
+  if (prev && seiyaSet.has(prev)) s += 40;
+  if (next && seiyaSet.has(next)) s += 40;
+  if (prev && closedSet.has(prev)) s -= 80;
+  if (next && closedSet.has(next)) s -= 80;
+  const dow = parseLocalDate(date).getDay();
+  if (dow === 5) s += 6;
+  if (dow === 1) s += 4;
+  s += hiromuDayNum(date) / 100;
+  return s;
+}
+
+/** 週2休。上野が連休（ひろむ単独日が連続店休）にならない日を優先 */
+function pickHiromuWeeklyRestDates(hiromuCandidates, seiyaDates) {
+  const seiyaSet = new Set(seiyaDates);
+  const closed = new Set();
+
+  for (const weekDates of groupDatesByMondayWeek(hiromuCandidates)) {
+    const pool = weekDates.filter((d) => hiromuCandidates.includes(d)).sort();
+    const offRequired = Math.min(HIROMU_OFF_PER_WEEK, Math.max(0, pool.length - 1));
+
+    for (let i = 0; i < offRequired; i++) {
+      const options = pool
+        .filter((d) => !closed.has(d))
+        .sort((a, b) => hiromuRestPickScore(b, seiyaSet, closed) - hiromuRestPickScore(a, seiyaSet, closed));
+
+      let picked = null;
+      for (const d of options) {
+        const trial = new Set(closed);
+        trial.add(d);
+        if (maxUenoHiromuOnlyClosedStreak(seiyaDates, trial) <= 1) {
+          picked = d;
+          break;
+        }
+      }
+      if (!picked && options.length) picked = options[0];
+      if (picked) closed.add(picked);
+    }
   }
-  return picked.sort();
+
+  if (maxUenoHiromuOnlyClosedStreak(seiyaDates, closed) > 1) {
+    throw new Error("上野連休を避けたひろむ週2休を確保できません");
+  }
+  return [...closed].sort();
 }
 
 /** 交互に early/late を割当し、目標コマ数に合わせて early 日数を調整 */
@@ -370,7 +417,7 @@ function buildRows(targetSlots) {
   const seiyaDates = [...SEIYA_DAY_NUMBERS].sort((a, b) => a - b).map(octDate);
   const seiyaHiromuDualDays = pickSeiyaHiromuDualDays(seiyaDates);
   const hiromuCandidates = allOctoberDates().filter((d) => !seiyaDates.includes(d)).sort();
-  const hiromuClosedDates = pickHiromuClosedDates(hiromuCandidates);
+  const hiromuClosedDates = pickHiromuWeeklyRestDates(hiromuCandidates, seiyaDates);
   const hiromuDates = hiromuCandidates.filter((d) => !hiromuClosedDates.includes(d));
 
   let seiyaTotal = 0;

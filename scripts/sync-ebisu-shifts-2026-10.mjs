@@ -8,15 +8,14 @@ import {
 import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-shinjuku-shifts-2026-10.mjs";
 
 /**
- * 2026-10 恵比寿店シフト（ひろむ4日・残りゆうと・週2休）
+ * 2026-10 恵比寿店シフト（ゆうとのみ・週2休）
  *
  * - 目標枠: 約190（--slots= で上書き可）
  * - 土曜: 店舗休み
  * - 平日: 16:00–22:00
  * - 日曜: 10:00–16:00
- * - ひろむ: 月4日（上野・新宿と同日不可）
- * - 上野ひろむと同日の恵比寿は、ゆうとが週2休を維持できる場合はゆうとに変更
- * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可（ひろむ恵比寿日は除外）
+ * - ひろむ: 恵比寿勤務なし（上野ひろむ日も含めゆうと）
+ * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可
  *
  * node scripts/sync-ebisu-shifts-2026-10.mjs --dry-run
  */
@@ -29,7 +28,7 @@ const TRAINER_NAMES = [TRAINER_HIROMU, TRAINER_YUTO];
 const SHIFT_STATUS = "confirmed";
 
 const DEFAULT_TARGET_SLOTS = 190;
-const HIROMU_EBISU_DAY_COUNT = 4;
+const HIROMU_EBISU_DAY_COUNT = 0;
 const YUTO_OFF_PER_WEEK = 2;
 const SLOTS_PER_OPEN_DAY = 12;
 
@@ -204,6 +203,7 @@ function hiromuEbisuPickScore(date) {
 
 /** 週ごとに1日ずつ優先し、上野/新宿と被らない日から最大4日 */
 function pickHiromuEbisuDays(candidates, hiromuBusy, count = HIROMU_EBISU_DAY_COUNT) {
+  if (count <= 0) return [];
   const picked = [];
   const pickedSet = new Set();
   for (const weekDates of groupDatesByMondayWeek(candidates)) {
@@ -231,6 +231,7 @@ function pickHiromuEbisuDays(candidates, hiromuBusy, count = HIROMU_EBISU_DAY_CO
 }
 
 function fillHiromuEbisuDays(hiromuDays, candidates, hiromuBusy, count = HIROMU_EBISU_DAY_COUNT) {
+  if (count <= 0) return [];
   const picked = [...hiromuDays];
   const pickedSet = new Set(picked);
   for (const d of candidates) {
@@ -307,7 +308,7 @@ function resolveHiromuUenoEbisuWithYuto(
   const hiromuBusy = crossBusy.hiromuBusy ?? new Set();
 
   let hiromu = hiromuDays.filter((d) => !hiromuUenoDates.has(d));
-  if (hiromu.length !== hiromuDays.length) {
+  if (HIROMU_EBISU_DAY_COUNT > 0 && hiromu.length !== hiromuDays.length) {
     hiromu = fillHiromuEbisuDays(hiromu, candidates, hiromuBusy, HIROMU_EBISU_DAY_COUNT);
   }
 
@@ -431,7 +432,10 @@ function validateYutoWeeklyRest(candidates, hiromuDays, yutoWorkDays) {
 
 function buildRows(targetSlots, crossBusy) {
   const candidates = openCandidateDates();
-  let hiromuDays = pickHiromuEbisuDays(candidates, crossBusy.hiromuBusy, HIROMU_EBISU_DAY_COUNT);
+  let hiromuDays =
+    HIROMU_EBISU_DAY_COUNT > 0
+      ? pickHiromuEbisuDays(candidates, crossBusy.hiromuBusy, HIROMU_EBISU_DAY_COUNT)
+      : [];
   let { yutoWorkDays, yutoRestDays, yutoDualPmDays } = pickYutoEbisuWorkDays(
     candidates,
     hiromuDays,
