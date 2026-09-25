@@ -8,6 +8,15 @@ import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
 import { isBookingClosedDate } from "@/lib/bookingClosedDates";
 import { fetchTrainerVisibilityPassForEmail, isTrainerVisibilityTestAccount } from "@/lib/trainerVisibilityPass";
 import { dropInviteOnlyShifts } from "@/lib/inviteShiftBooking";
+import {
+  isDateUnavailableForMember,
+} from "@/lib/booking/memberBookingRules";
+import { loadMemberBookingRuleContextByEmail } from "@/lib/booking/memberBookingRulesDb";
+import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
+import {
+  OCTOBER_EARLY_ACCESS_MONTH,
+  memberHasOctoberEarlyAccess,
+} from "@/lib/booking/octoberEarlyAccess";
 export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
@@ -162,6 +171,43 @@ export async function GET(request: Request) {
       }
     }
     shifts = await dropInviteOnlyShifts(supabase, shifts);
+    if (month === OCTOBER_EARLY_ACCESS_MONTH) {
+      const earlyMemberId = (() => {
+        try {
+          return getMemberIdFromCookie();
+        } catch {
+          return null;
+        }
+      })();
+      if (await memberHasOctoberEarlyAccess(supabase, earlyMemberId)) {
+        let draftQuery = supabase
+          .from("trainer_shifts")
+          .select("id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break")
+          .eq("store_id", store_id)
+          .gte("shift_date", startDate)
+          .lte("shift_date", endDate)
+          .eq("status", "draft");
+        if (trainer_id) draftQuery = draftQuery.eq("trainer_id", trainer_id);
+        const { data: draftRows, error: draftErr } = await draftQuery;
+        if (draftErr) {
+          return jsonResponse({ error: "シフトの取得に失敗しました", detail: draftErr.message }, 500);
+        }
+        const drafts = ((draftRows ?? []) as any[])
+          .filter((s) => s.is_break !== true)
+          .map((s) => ({
+            id: String(s.id),
+            trainer_id: String(s.trainer_id),
+            store_id: String(s.store_id),
+            shift_date: String(s.shift_date).slice(0, 10),
+            start_local: String(s.start_local),
+            end_local: String(s.end_local),
+            status: String(s.status ?? "draft"),
+            is_break: s.is_break ?? null,
+          })) as ShiftRow[];
+        const seen = new Set(shifts.map((s) => s.id));
+        shifts = shifts.concat(drafts.filter((s) => !seen.has(s.id)));
+      }
+    }
     const monthStartUtc = monthStartLocal.startOf("day").toUTC();
     const nextMonthStartUtc = monthStartLocal.plus({ months: 1 }).startOf("month").toUTC();
     async function fetchReservationsForMonth(selectCols: string) {
@@ -414,6 +460,46 @@ export async function GET(request: Request) {
           .filter((t) => t.display_name)
           .sort((a, b) => a.display_name.localeCompare(b.display_name, "ja"));
         if (trainers.length > 0) d.trainers = trainers;
+      }
+    }
+
+    const cookieMemberId = (() => {
+      try {
+        return getMemberIdFromCookie();
+      } catch {
+        return null;
+      }
+    })();
+    if (cookieMemberId || email) {
+      try {
+        const nowIso = now.toUTC().toISO()!;
+        const ctx = await loadMemberBookingRuleContextByEmail(supabase, {
+          memberId: cookieMemberId,
+          email: cookieMemberId ? undefined : email,
+          storeId: store_id,
+          nowIso,
+        });
+        if (ctx) {
+          for (const d of dates2) {
+            if (d.count <= 0) continue;
+            if (
+              isDateUnavailableForMember({
+                plan: ctx.plan,
+                ticketKoma: ctx.ticketKoma,
+                reservations: ctx.reservations,
+                blockedDates: ctx.blockedDates,
+                ymd: d.date,
+                storeId: store_id,
+                nowIso,
+                zone,
+              })
+            ) {
+              d.count = 0;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("member booking rules date filter failed", e);
       }
     }
 

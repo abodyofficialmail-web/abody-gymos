@@ -12,6 +12,12 @@ import { isBookingClosedDate } from "@/lib/bookingClosedDates";
 import { trainerIdsOnShiftForSlot } from "@/lib/onShiftTrainers";
 import { fetchTrainerVisibilityPassForEmail, isTrainerVisibilityTestAccount } from "@/lib/trainerVisibilityPass";
 import { dropInviteOnlyShifts } from "@/lib/inviteShiftBooking";
+import { loadMemberBookingRuleContextByEmail } from "@/lib/booking/memberBookingRulesDb";
+import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
+import {
+  isOctoberEarlyAccessDate,
+  memberHasOctoberEarlyAccess,
+} from "@/lib/booking/octoberEarlyAccess";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 export async function OPTIONS() {
@@ -244,6 +250,42 @@ export async function GET(request: Request) {
       }
     }
     shifts = await dropInviteOnlyShifts(supabase, shifts);
+    if (isOctoberEarlyAccessDate(date)) {
+      const earlyMemberId = (() => {
+        try {
+          return getMemberIdFromCookie();
+        } catch {
+          return null;
+        }
+      })();
+      if (await memberHasOctoberEarlyAccess(supabase, earlyMemberId)) {
+        let draftQuery = supabase
+          .from("trainer_shifts")
+          .select("id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break")
+          .eq("store_id", store_id)
+          .eq("shift_date", date)
+          .eq("status", "draft");
+        if (filterTrainerId) draftQuery = draftQuery.eq("trainer_id", filterTrainerId);
+        const { data: draftRows, error: draftErr } = await draftQuery;
+        if (draftErr) {
+          return jsonResponse({ error: "シフトの取得に失敗しました", detail: draftErr.message }, 500);
+        }
+        const drafts = ((draftRows ?? []) as any[])
+          .filter((s) => s.is_break !== true)
+          .map((s) => ({
+            id: String(s.id),
+            trainer_id: String(s.trainer_id),
+            store_id: String(s.store_id),
+            shift_date: String(s.shift_date),
+            start_local: String(s.start_local),
+            end_local: String(s.end_local),
+            status: String(s.status ?? "draft"),
+            is_break: s.is_break ?? null,
+          })) as ShiftRow[];
+        const seen = new Set(shifts.map((s) => s.id));
+        shifts = shifts.concat(drafts.filter((s) => !seen.has(s.id)));
+      }
+    }
     console.log("shifts found", shifts);
     if (shifts.length === 0) {
       return jsonResponse([] satisfies AvailableSlotDto[], 200);
@@ -427,6 +469,30 @@ export async function GET(request: Request) {
     }
 
     results.sort((a, b) => a.start_at.localeCompare(b.start_at));
+
+    const cookieMemberId = (() => {
+      try {
+        return getMemberIdFromCookie();
+      } catch {
+        return null;
+      }
+    })();
+    if ((cookieMemberId || email) && results.length > 0) {
+      try {
+        const nowIso = DateTime.now().setZone(zone).toUTC().toISO()!;
+        const ctx = await loadMemberBookingRuleContextByEmail(supabase, {
+          memberId: cookieMemberId,
+          email: cookieMemberId ? undefined : email,
+          storeId: store_id,
+          nowIso,
+        });
+        if (ctx?.blockedDates.includes(date)) {
+          results.length = 0;
+        }
+      } catch (e) {
+        console.error("member booking rules slot filter failed", e);
+      }
+    }
 
     if (revealTrainers && results.length > 0) {
       const idsByKey = new Map<string, string[]>();

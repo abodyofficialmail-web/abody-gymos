@@ -7,10 +7,21 @@ import { z } from "zod";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jsonResponse } from "../_cors";
+import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import { isBookingClosedDate } from "@/lib/bookingClosedDates";
 import { sendBookingConfirmation } from "@/lib/email";
 import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
-import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import { canBookOrLogin, pickBookableMember } from "@/lib/memberMembershipStatus";
+import { isMissingBookingVisibilityColumn } from "@/lib/inviteShiftBooking";
+import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
+import { MEMBER_BOOKING_BLOCKED_MESSAGE, evaluateMemberBooking } from "@/lib/booking/memberBookingRules";
+import {
+  applyTicketDelta,
+  evaluateLoadedMemberBooking,
+  loadMemberBookingRuleContext,
+} from "@/lib/booking/memberBookingRulesDb";
+import { isOctoberEarlyAccessCode, isOctoberEarlyAccessDate } from "@/lib/booking/octoberEarlyAccess";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -112,22 +123,34 @@ async function fetchShiftsForCapacityCheck(params: {
   supabase: SupabaseClient<Database>;
   store_id: string;
   dateYmd: string;
+  /** 10月先行会員だけ、下書きシフトも容量に含める */
+  includeOctoberDraft?: boolean;
 }): Promise<
   Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>
 > {
-  const { supabase, store_id, dateYmd } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft } = params;
   // shift_date が date 型 or timestamp 系どちらでも動くように
   // まず date 文字列で一致（date型に強い）→ 0件なら timestamp 範囲（timestamp型に強い）へフォールバック
   const dayStartTs = `${dateYmd}T00:00:00`;
   const dayEndTs = `${dateYmd}T23:59:59`;
 
   // schema A: shift_date / start_local / end_local
-  const qAeq = await (supabase as any)
+  const selectA = "trainer_id, start_local, end_local, is_break, status, booking_visibility";
+  const selectANoVis = "trainer_id, start_local, end_local, is_break, status";
+  let qAeq = await (supabase as any)
     .from("trainer_shifts")
-    .select("trainer_id, start_local, end_local, is_break, status")
+    .select(selectA)
     .eq("store_id", store_id)
     .eq("shift_date", dateYmd)
     .neq("status", "draft");
+  if (qAeq?.error && isMissingBookingVisibilityColumn(qAeq.error)) {
+    qAeq = await (supabase as any)
+      .from("trainer_shifts")
+      .select(selectANoVis)
+      .eq("store_id", store_id)
+      .eq("shift_date", dateYmd)
+      .neq("status", "draft");
+  }
 
   let rows: any[] = [];
   let useSchemaB = false;
@@ -142,7 +165,7 @@ async function fetchShiftsForCapacityCheck(params: {
       // timestamp型の可能性があるので範囲検索も試す
       const qArange = await (supabase as any)
         .from("trainer_shifts")
-        .select("trainer_id, start_local, end_local, is_break, status")
+        .select("trainer_id, start_local, end_local, is_break, status, booking_visibility")
         .eq("store_id", store_id)
         .gte("shift_date", dayStartTs)
         .lt("shift_date", dayEndTs)
@@ -182,7 +205,20 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
+  if (includeOctoberDraft) {
+    const draftQ = await (supabase as any)
+      .from("trainer_shifts")
+      .select("trainer_id, start_local, end_local, is_break, status, booking_visibility")
+      .eq("store_id", store_id)
+      .eq("shift_date", dateYmd)
+      .eq("status", "draft");
+    if (!draftQ?.error) {
+      rows = rows.concat(draftQ.data ?? []);
+    }
+  }
+
   return (rows ?? [])
+    .filter((r) => String((r as any).booking_visibility ?? "public") !== "invite")
     .map((r) => {
       const startRaw = r.start_local ?? r.start_time ?? "";
       const endRaw = r.end_local ?? r.end_time ?? "";
@@ -204,6 +240,8 @@ const bodySchema = z.object({
   start_at: z.string().min(1, "start_at は必須です"),
   end_at: z.string().min(1, "end_at は必須です"),
   session_type: z.enum(["store", "online"]).optional().default("store"),
+  convert_to_plan: z.enum(["monthly_10", "monthly_20"]).optional(),
+  convert_to_monthly_10: z.boolean().optional(),
 });
 
 const getQuerySchema = z.object({
@@ -288,10 +326,6 @@ async function enrichReservationRowsFromScalars(
   });
 }
 
-function isApril2026Closed(ymd: string) {
-  // 要望: 2026年4月の予約を一旦閉じる
-  return String(ymd).startsWith("2026-04-");
-}
 function createServiceSupabase(): SupabaseClient<Database> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -438,7 +472,9 @@ export async function POST(request: Request) {
         400
       );
     }
-    const { store_id, trainer_id: trainerIdInput, email, start_at, end_at, session_type } = parsed.data;
+    const { store_id, trainer_id: trainerIdInput, email, start_at, end_at, session_type, convert_to_plan, convert_to_monthly_10 } =
+      parsed.data;
+    const requestedConvertPlan = convert_to_plan ?? (convert_to_monthly_10 ? "monthly_10" : undefined);
     const normalizedEmail = email.trim();
     console.log({ store_id, new_start_at: start_at, new_end_at: end_at });
     let supabase: SupabaseClient<Database>;
@@ -450,11 +486,33 @@ export async function POST(request: Request) {
     }
     let member: Record<string, unknown> | null = null;
     let memberErr: { message: string } | null = null;
-    // メールアドレスは店舗を跨いで重複し得るため、まずは store_id で絞って照会する
-    // maybeSingle は複数ヒット時にエラーになるため、常に複数取得→こちらで選別する
     const memberSelectFull =
+      "id, member_code, name, email, store_id, is_active, membership_status, line_user_id, line_channel_key";
+    const memberSelectNoStatus =
       "id, member_code, name, email, store_id, is_active, line_user_id, line_channel_key";
     const memberSelectSlim = "id, member_code, name, email, store_id, is_active, line_user_id";
+
+    async function fetchMemberById(selectStr: string, memberId: string) {
+      return (await (supabase as any).from("members").select(selectStr).eq("id", memberId).maybeSingle()) as {
+        data: any | null;
+        error: any | null;
+      };
+    }
+
+    const cookieMemberId = getMemberIdFromCookie();
+    if (cookieMemberId) {
+      let byId = await fetchMemberById(memberSelectFull, cookieMemberId);
+      if (byId.error && /membership_status/i.test(byId.error.message ?? "")) {
+        byId = await fetchMemberById(memberSelectNoStatus, cookieMemberId);
+      }
+      if (byId.error && /line_channel_key/i.test(byId.error.message ?? "")) {
+        byId = await fetchMemberById(memberSelectSlim, cookieMemberId);
+      }
+      if (!byId.error) {
+        member = (byId.data ?? null) as Record<string, unknown> | null;
+      }
+    }
+
     async function fetchMembersByEmail(selectStr: string) {
       const r = await (supabase as any)
         .from("members")
@@ -463,24 +521,20 @@ export async function POST(request: Request) {
         .limit(10);
       return r as { data: any[] | null; error: any | null };
     }
-    const memberFullList = await fetchMembersByEmail(memberSelectFull);
-    if (memberFullList.error && /line_channel_key/i.test(memberFullList.error.message ?? "")) {
-      const memberSlimList = await fetchMembersByEmail(memberSelectSlim);
-      memberErr = memberSlimList.error;
-      const rows = memberSlimList.data ?? [];
-      member =
-        (rows.find((m) => m?.is_active && String(m?.store_id ?? "") === store_id) ??
-          rows.find((m) => m?.is_active) ??
-          rows[0] ??
-          null) as Record<string, unknown> | null;
-    } else {
-      memberErr = memberFullList.error;
-      const rows = memberFullList.data ?? [];
-      member =
-        (rows.find((m) => m?.is_active && String(m?.store_id ?? "") === store_id) ??
-          rows.find((m) => m?.is_active) ??
-          rows[0] ??
-          null) as Record<string, unknown> | null;
+    if (!member) {
+      const memberFullList = await fetchMembersByEmail(memberSelectFull);
+      if (memberFullList.error && /membership_status/i.test(memberFullList.error.message ?? "")) {
+        const retry = await fetchMembersByEmail(memberSelectNoStatus);
+        memberErr = retry.error;
+        member = pickBookableMember(retry.data ?? [], store_id) as Record<string, unknown> | null;
+      } else if (memberFullList.error && /line_channel_key/i.test(memberFullList.error.message ?? "")) {
+        const memberSlimList = await fetchMembersByEmail(memberSelectSlim);
+        memberErr = memberSlimList.error;
+        member = pickBookableMember(memberSlimList.data ?? [], store_id) as Record<string, unknown> | null;
+      } else {
+        memberErr = memberFullList.error;
+        member = pickBookableMember(memberFullList.data ?? [], store_id) as Record<string, unknown> | null;
+      }
     }
     if (memberErr) {
       return jsonResponse(
@@ -488,8 +542,8 @@ export async function POST(request: Request) {
         500
       );
     }
-    // 他店舗利用を許可（所属店舗と予約店舗は一致しなくてよい）。有効会員であることのみ必須。
-    if (!member || !member.is_active) {
+    // 他店舗利用を許可（所属店舗と予約店舗は一致しなくてよい）。入会中・休会・退会いずれも予約可。
+    if (!member || !canBookOrLogin({ membershipStatus: member.membership_status as string | null, isActive: member.is_active as boolean })) {
       return jsonResponse({ error: "会員が見つかりません", detail: { email: normalizedEmail } }, 404);
     }
     const memberId = String(member.id);
@@ -499,7 +553,7 @@ export async function POST(request: Request) {
     {
       const bookingYmd = dayjs(start_at).tz("Asia/Tokyo").format("YYYY-MM-DD");
       if (!bookingYmd) return jsonResponse({ error: "start_at の日付解釈に失敗しました" }, 400);
-      if (isApril2026Closed(bookingYmd)) {
+      if (isBookingClosedDate(bookingYmd)) {
         return jsonResponse({ error: "この日付の予約は現在受け付けていません" }, 400);
       }
     }
@@ -578,7 +632,14 @@ export async function POST(request: Request) {
       let shifts: Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }> = [];
       try {
         // trainers は参照せず、store_id + 日付 のシフトのみで容量を判定する
-        shifts = await fetchShiftsForCapacityCheck({ supabase, store_id, dateYmd: targetDate });
+        shifts = await fetchShiftsForCapacityCheck({
+          supabase,
+          store_id,
+          dateYmd: targetDate,
+          includeOctoberDraft:
+            isOctoberEarlyAccessDate(targetDate) &&
+            isOctoberEarlyAccessCode(String((member as { member_code?: string } | null)?.member_code ?? "")),
+        });
       } catch (e: any) {
         return jsonResponse(
           { error: "シフトの取得に失敗しました", detail: String(e?.message ?? e) },
@@ -678,6 +739,48 @@ export async function POST(request: Request) {
         return jsonResponse({ error: "この時間は既に予約されています" }, 409);
       }
     }
+
+    let ticketsToConsume = 0;
+    {
+      const ctx = await loadMemberBookingRuleContext(supabase, { memberId });
+      let verdict = await evaluateLoadedMemberBooking(ctx, { start_at, end_at, store_id, session_type });
+      if (!verdict.ok) {
+        const loggedInSelf = Boolean(cookieMemberId) && cookieMemberId === memberId;
+        const offeredPlan = verdict.offerPlanConversion;
+        const canConvert = loggedInSelf && Boolean(offeredPlan);
+        if (requestedConvertPlan && canConvert && requestedConvertPlan === offeredPlan) {
+          const preview = evaluateMemberBooking({
+            plan: offeredPlan,
+            ticketKoma: ctx.ticketKoma,
+            reservations: ctx.reservations,
+            blockedDates: ctx.blockedDates,
+            candidate: { start_at, end_at, store_id, session_type },
+            nowIso: new Date().toISOString(),
+          });
+          if (!preview.ok) {
+            return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+          }
+          const upd = await (supabase as any)
+            .from("members")
+            .update({ membership_plan: offeredPlan, updated_at: new Date().toISOString() })
+            .eq("id", memberId);
+          if (upd.error) {
+            const msg = String(upd.error.message ?? "");
+            if (/membership_plan|does not exist|schema cache|check constraint/i.test(msg)) {
+              return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+            }
+            return jsonResponse({ error: "プラン変更に失敗しました", detail: upd.error.message }, 500);
+          }
+          verdict = preview;
+        } else if (canConvert && !requestedConvertPlan) {
+          return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE, offer_plan: offeredPlan }, 409);
+        } else {
+          return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+        }
+      }
+      ticketsToConsume = verdict.ticketsToConsume;
+    }
+
     console.log("③ DB前（reservations insert）");
     const insertRow: Database["public"]["Tables"]["reservations"]["Insert"] = {
       store_id,
@@ -688,6 +791,7 @@ export async function POST(request: Request) {
       status: "confirmed",
       notes: "created_from=member_booking_site",
       blocks_capacity: true,
+      tickets_consumed: ticketsToConsume,
     };
     if (trainer_id) {
       (insertRow as any).trainer_id = trainer_id;
@@ -707,12 +811,13 @@ export async function POST(request: Request) {
       if (insErr) {
         const msg = String(insErr.message ?? "");
         const retryCols =
-          /guest_name|blocks_capacity|does not exist|column/i.test(msg) ||
+          /guest_name|blocks_capacity|tickets_consumed|quota_consumed|does not exist|column/i.test(msg) ||
           (/PGRST/i.test(msg) && /column/i.test(msg));
         if (retryCols) {
           const rowMinimal = { ...insertRow } as Record<string, unknown>;
           delete rowMinimal.blocks_capacity;
           delete rowMinimal.guest_name;
+          delete rowMinimal.tickets_consumed;
           const second = await supabase.from("reservations").insert(rowMinimal as any).select(selectLegacy).single();
           inserted = second.data;
           insErr = second.error;
@@ -728,6 +833,19 @@ export async function POST(request: Request) {
         { error: "予約の保存に失敗しました", detail: insErr.message },
         500
       );
+    }
+
+    if (ticketsToConsume > 0 && inserted?.id) {
+      const ticketRes = await applyTicketDelta(supabase, {
+        memberId,
+        delta: -ticketsToConsume,
+        reason: "booking",
+        note: "予約消化",
+        reservationId: String(inserted.id),
+      });
+      if (!ticketRes.ok) {
+        console.error("ticket consume after booking failed", ticketRes.error);
+      }
     }
 
     // 予約確定後にLINEへ自動送信（line_user_id がある場合のみ）

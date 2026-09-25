@@ -16,6 +16,10 @@ import { fetchMemberForLine } from "@/lib/fetchMemberForLine";
 import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import { pushLineTextAsChunks } from "@/lib/lineMessagingPush";
 import { lineMessageForReschedule } from "@/lib/lineReservationMessage";
+import { insertReservationChangeLog, requestUserAgent } from "@/lib/reservationChangeLog";
+import { MEMBER_BOOKING_BLOCKED_MESSAGE } from "@/lib/booking/memberBookingRules";
+import { evaluateLoadedMemberBooking, loadMemberBookingRuleContext } from "@/lib/booking/memberBookingRulesDb";
+import { isOctoberEarlyAccessDate, memberHasOctoberEarlyAccess } from "@/lib/booking/octoberEarlyAccess";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -70,8 +74,9 @@ async function fetchShiftsForCapacityCheck(params: {
   supabase: SupabaseClient<Database>;
   store_id: string;
   dateYmd: string;
+  includeOctoberDraft?: boolean;
 }): Promise<Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>> {
-  const { supabase, store_id, dateYmd } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft } = params;
   const dayStartTs = `${dateYmd}T00:00:00`;
   const dayEndTs = `${dateYmd}T23:59:59`;
 
@@ -128,7 +133,18 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
+  if (includeOctoberDraft) {
+    const draftQ = await (supabase as any)
+      .from("trainer_shifts")
+      .select("trainer_id, start_local, end_local, is_break, status")
+      .eq("store_id", store_id)
+      .eq("shift_date", dateYmd)
+      .eq("status", "draft");
+    if (!draftQ?.error) rows = rows.concat(draftQ.data ?? []);
+  }
+
   return (rows ?? [])
+    .filter((r) => String((r as any).booking_visibility ?? "public") !== "invite")
     .map((r) => {
       const startRaw = r.start_local ?? r.start_time ?? "";
       const endRaw = r.end_local ?? r.end_time ?? "";
@@ -221,7 +237,13 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         .maybeSingle();
       if (storeErr) return json({ error: "店舗の取得に失敗しました", detail: storeErr.message }, 500);
 
-      const shifts = await fetchShiftsForCapacityCheck({ supabase, store_id: cur.store_id, dateYmd });
+      const shifts = await fetchShiftsForCapacityCheck({
+        supabase,
+        store_id: cur.store_id,
+        dateYmd,
+        includeOctoberDraft:
+          isOctoberEarlyAccessDate(dateYmd) && (await memberHasOctoberEarlyAccess(supabase, cur.member_id)),
+      });
       const availableTrainerSet = new Set<string>();
       for (const s of shifts) {
         if (s.is_break) continue;
@@ -257,6 +279,21 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
       if (error) return json({ error: "予約の重複確認に失敗しました", detail: error.message }, 500);
       const dup = (memberOverlaps ?? []).some((r: any) => String(r.id) !== String(cur.id));
       if (dup) return json({ error: "この時間は既に予約されています" }, 409);
+    }
+
+    {
+      const ctx = await loadMemberBookingRuleContext(supabase, { memberId });
+      const verdict = await evaluateLoadedMemberBooking(
+        ctx,
+        {
+          start_at,
+          end_at,
+          store_id: cur.store_id,
+          session_type: cur.session_type ?? "store",
+        },
+        { excludeReservationId: cur.id }
+      );
+      if (!verdict.ok) return json({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
     }
 
     const nextCount = Number.isFinite(count) ? count + 1 : 1;
@@ -300,6 +337,25 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     if (upErr) return json({ error: "予約変更に失敗しました", detail: upErr.message }, 500);
     if (!updated) return json({ error: "予約が見つかりません" }, 404);
 
+    await insertReservationChangeLog(supabase, {
+      reservation_id: String(updated.id),
+      member_id: memberId,
+      action: "reschedule",
+      source: "member_page",
+      actor_type: "member",
+      actor_id: memberId,
+      actor_label: "マイページ",
+      before_status: cur.status,
+      after_status: cur.status,
+      before_start_at: cur.start_at,
+      before_end_at: cur.end_at,
+      before_store_id: cur.store_id,
+      after_start_at: String(updated.start_at),
+      after_end_at: String(updated.end_at),
+      after_store_id: cur.store_id,
+      user_agent: requestUserAgent(request),
+    });
+
     let lineNotified = false;
     try {
       const { member, error: memberErr } = await fetchMemberForLine(supabase, memberId);
@@ -318,6 +374,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           startAtUtcIso: String(updated.start_at),
           endAtUtcIso: String(updated.end_at),
           sessionType,
+          via: "member_page",
         });
         lineNotified = (await pushLineTextAsChunks(line.token, member.line_user_id, text)).ok;
         if (!lineNotified) {
