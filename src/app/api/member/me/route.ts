@@ -11,12 +11,21 @@ import {
 import { fetchTrainerVisibilityPassForMemberId, trainerVisibilityPassPriceLabel } from "@/lib/trainerVisibilityPass";
 import { fetchOnShiftTrainerNamesBySlots } from "@/lib/onShiftTrainers";
 import { canBookOrLogin } from "@/lib/memberMembershipStatus";
+import { remainingBookableKoma } from "@/lib/booking/memberBookingRules";
+import { loadMemberBookingRuleContext, snapshotFromContext } from "@/lib/booking/memberBookingRulesDb";
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 const TZ = "Asia/Tokyo";
+
+/** 「2枚は2026-09-30まで、2枚は2026-10-07まで」を画面用に短くする。 */
+function formatTicketExpiryNote(note: string): string | null {
+  const parts = [...note.matchAll(/(\d+)枚は(\d{4})-(\d{2})-(\d{2})まで/g)];
+  if (parts.length === 0) return null;
+  return parts.map((p) => `${p[1]}枚は${Number(p[3])}/${Number(p[4])}まで`).join("、");
+}
 
 function isMissingDbColumn(err: { message?: string } | null | undefined, column: string): boolean {
   const msg = String(err?.message ?? "");
@@ -82,6 +91,39 @@ export async function GET() {
     if (mErr) return json({ error: "会員の取得に失敗しました", detail: mErr.message }, 500);
     if (!member || !canBookOrLogin({ membershipStatus: member.membership_status, isActive: member.is_active })) {
       return json({ error: "未ログイン" }, 401);
+    }
+
+    let ticketKoma = 0;
+    let remainingBookable: number | null = null;
+    try {
+      const nowIso = new Date().toISOString();
+      const ctx = await loadMemberBookingRuleContext(supabase, { memberId, nowIso });
+      const snap = snapshotFromContext(ctx, nowIso);
+      ticketKoma = snap.ticketKoma;
+      remainingBookable = remainingBookableKoma(snap);
+    } catch (e) {
+      console.error("member remaining bookable failed", e);
+    }
+    const ticketRow = await (supabase as any)
+      .from("members")
+      .select("bonus_ticket_koma")
+      .eq("id", memberId)
+      .maybeSingle();
+    if (!ticketRow.error) {
+      ticketKoma = Math.max(0, Number(ticketRow.data?.bonus_ticket_koma ?? 0) || 0);
+    }
+    let ticketExpiryText: string | null = null;
+    const ledger = await (supabase as any)
+      .from("member_ticket_ledger")
+      .select("note, created_at")
+      .eq("member_id", memberId)
+      .order("created_at", { ascending: false })
+      .limit(8);
+    if (!ledger.error) {
+      const note = ((ledger.data ?? []) as { note?: string | null }[])
+        .map((row) => String(row.note ?? ""))
+        .find((text) => text.includes("まで"));
+      ticketExpiryText = formatTicketExpiryNote(note ?? "");
     }
 
     // マイページは「当月」だけだと月末に翌月予約が見えないため、今月〜翌月の2ヶ月分を返す
@@ -223,6 +265,9 @@ export async function GET() {
           weight_reminder_line_enabled: weightReminderEnabled,
           weight_log_enabled: isMemberWeightLogEnabled(member.member_code),
           meal_personal_enabled: mealPersonalEnabled,
+          ticket_koma: ticketKoma,
+          ticket_expiry_text: ticketExpiryText,
+          remaining_bookable_koma: remainingBookable,
         },
         meal_personal_pass: {
           ...mealPersonalPass,

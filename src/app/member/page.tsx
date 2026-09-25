@@ -36,6 +36,9 @@ type MeResponse = {
     weight_reminder_line_enabled?: boolean;
     weight_log_enabled?: boolean;
     meal_personal_enabled?: boolean;
+    ticket_koma?: number;
+    ticket_expiry_text?: string | null;
+    remaining_bookable_koma?: number | null;
   };
   meal_personal_pass?: {
     active: boolean;
@@ -456,6 +459,32 @@ export default function MemberPage() {
               </div>
               <div className="text-xs text-slate-500 break-all">Email: {data.member.email ?? "未登録"}</div>
               <div className="text-xs text-slate-500">{data.member.line_user_id ? "LINE連携済み" : "LINE未連携"}</div>
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  {data.member.remaining_bookable_koma != null ? (
+                    <>
+                      <div className="text-[11px] text-slate-500">残り予約可能数</div>
+                      <div className="text-sm font-semibold text-slate-900">
+                        あと{data.member.remaining_bookable_koma}コマ予約できます
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-sm font-semibold text-slate-900">予約できます</div>
+                  )}
+                  {(data.member.ticket_koma ?? 0) > 0 ? (
+                    <div className="pt-0.5 text-[11px] text-slate-500">
+                      チケット {data.member.ticket_koma}コマ
+                      {data.member.ticket_expiry_text ? `（${data.member.ticket_expiry_text}）` : ""}
+                    </div>
+                  ) : null}
+                </div>
+                <a
+                  href="/api/member/tickets/checkout?koma=1"
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                >
+                  チケットを購入
+                </a>
+              </div>
             </section>
 
             <div className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-100 p-1">

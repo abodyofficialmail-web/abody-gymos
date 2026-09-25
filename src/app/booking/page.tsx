@@ -257,6 +257,7 @@ export default function BookingPage() {
   const [memberName, setMemberName] = useState<string>("");
   const [memberCode, setMemberCode] = useState("");
   const [ticketKoma, setTicketKoma] = useState(0);
+  const [ticketExpiryText, setTicketExpiryText] = useState("");
   const [remainingBookableKoma, setRemainingBookableKoma] = useState<number | null>(null);
   const [ticketBusy, setTicketBusy] = useState(false);
   const [ticketMsg, setTicketMsg] = useState<string | null>(null);
@@ -325,6 +326,7 @@ export default function BookingPage() {
           name?: string;
           member_code?: string;
           ticket_koma?: number;
+          ticket_expiry_text?: string | null;
           remaining_bookable_koma?: number | null;
         };
         const email = String(member?.email ?? "").trim();
@@ -338,6 +340,7 @@ export default function BookingPage() {
         setMemberName(String(member?.name ?? ""));
         setMemberCode(code);
         setTicketKoma(Math.max(0, Number(member?.ticket_koma ?? 0) || 0));
+        setTicketExpiryText(String(member?.ticket_expiry_text ?? "").trim());
         setRemainingBookableKoma(
           member?.remaining_bookable_koma == null ? null : Math.max(0, Number(member.remaining_bookable_koma) || 0)
         );
@@ -885,7 +888,10 @@ export default function BookingPage() {
             <div className="text-sm font-semibold text-ink-900">予約できます</div>
           )}
           {ticketKoma > 0 ? (
-            <div className="pt-0.5 text-[11px] text-ink-500">チケット {ticketKoma}コマ</div>
+            <div className="pt-0.5 text-[11px] text-ink-500">
+              チケット {ticketKoma}コマ
+              {ticketExpiryText ? `（${ticketExpiryText}）` : ""}
+            </div>
           ) : null}
         </div>
         <button
