@@ -374,7 +374,6 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           startAtUtcIso: String(updated.start_at),
           endAtUtcIso: String(updated.end_at),
           sessionType,
-          via: "member_page",
         });
         lineNotified = (await pushLineTextAsChunks(line.token, member.line_user_id, text)).ok;
         if (!lineNotified) {
