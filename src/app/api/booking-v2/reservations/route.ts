@@ -791,8 +791,8 @@ export async function POST(request: Request) {
       status: "confirmed",
       notes: "created_from=member_booking_site",
       blocks_capacity: true,
-      tickets_consumed: ticketsToConsume,
     };
+    (insertRow as any).tickets_consumed = ticketsToConsume;
     if (trainer_id) {
       (insertRow as any).trainer_id = trainer_id;
     } else {
