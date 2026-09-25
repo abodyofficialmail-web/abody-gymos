@@ -154,9 +154,11 @@ async function fetchShiftsForCapacityCheck(params: {
 
   let rows: any[] = [];
   let useSchemaB = false;
+  let schemaAFailed = false;
   if (qAeq?.error) {
     // カラムがない/型が違う等
     useSchemaB = true;
+    schemaAFailed = true;
   } else {
     rows = qAeq.data ?? [];
     // A が空（または時刻が全部取れない）場合は B も試す
@@ -189,19 +191,21 @@ async function fetchShiftsForCapacityCheck(params: {
       .eq("date", dateYmd)
       .neq("status", "draft");
     if (qBeq?.error) {
-      throw qBeq.error;
-    }
-    rows = qBeq.data ?? [];
-    const hasAnyTimeB = rows.some((r) => (r as any)?.start_time && (r as any)?.end_time);
-    if (!hasAnyTimeB) {
-      const qBrange = await (supabase as any)
-        .from("trainer_shifts")
-        .select("trainer_id, start_time, end_time, is_break, status")
-        .eq("store_id", store_id)
-        .gte("date", dayStartTs)
-        .lt("date", dayEndTs)
-        .neq("status", "draft");
-      if (!qBrange?.error) rows = qBrange.data ?? [];
+      // 10月先行は公開シフトが0件。schema A は成功しているので、無い列のエラーでは落とさない
+      if (schemaAFailed) throw qBeq.error;
+    } else {
+      rows = qBeq.data ?? [];
+      const hasAnyTimeB = rows.some((r) => (r as any)?.start_time && (r as any)?.end_time);
+      if (!hasAnyTimeB) {
+        const qBrange = await (supabase as any)
+          .from("trainer_shifts")
+          .select("trainer_id, start_time, end_time, is_break, status")
+          .eq("store_id", store_id)
+          .gte("date", dayStartTs)
+          .lt("date", dayEndTs)
+          .neq("status", "draft");
+        if (!qBrange?.error) rows = qBrange.data ?? [];
+      }
     }
   }
 

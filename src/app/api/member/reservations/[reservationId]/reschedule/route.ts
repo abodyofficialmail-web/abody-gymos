@@ -89,8 +89,10 @@ async function fetchShiftsForCapacityCheck(params: {
 
   let rows: any[] = [];
   let useSchemaB = false;
+  let schemaAFailed = false;
   if (qAeq?.error) {
     useSchemaB = true;
+    schemaAFailed = true;
   } else {
     rows = qAeq.data ?? [];
     const hasAnyTimeA = rows.some((r) => (r as any)?.start_local && (r as any)?.end_local);
@@ -118,18 +120,21 @@ async function fetchShiftsForCapacityCheck(params: {
       .eq("store_id", store_id)
       .eq("date", dateYmd)
       .neq("status", "draft");
-    if (qBeq?.error) throw qBeq.error;
-    rows = qBeq.data ?? [];
-    const hasAnyTimeB = rows.some((r) => (r as any)?.start_time && (r as any)?.end_time);
-    if (!hasAnyTimeB) {
-      const qBrange = await (supabase as any)
-        .from("trainer_shifts")
-        .select("trainer_id, start_time, end_time, is_break, status")
-        .eq("store_id", store_id)
-        .gte("date", dayStartTs)
-        .lt("date", dayEndTs)
-        .neq("status", "draft");
-      if (!qBrange?.error) rows = qBrange.data ?? [];
+    if (qBeq?.error) {
+      if (schemaAFailed) throw qBeq.error;
+    } else {
+      rows = qBeq.data ?? [];
+      const hasAnyTimeB = rows.some((r) => (r as any)?.start_time && (r as any)?.end_time);
+      if (!hasAnyTimeB) {
+        const qBrange = await (supabase as any)
+          .from("trainer_shifts")
+          .select("trainer_id, start_time, end_time, is_break, status")
+          .eq("store_id", store_id)
+          .gte("date", dayStartTs)
+          .lt("date", dayEndTs)
+          .neq("status", "draft");
+        if (!qBrange?.error) rows = qBrange.data ?? [];
+      }
     }
   }
 
