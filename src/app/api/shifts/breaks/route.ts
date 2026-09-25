@@ -35,7 +35,7 @@ export async function GET(req: Request) {
       .eq("trainer_id", trainer_id)
       .gte("shift_date", start)
       .lte("shift_date", endYmd)
-      .neq("status", "draft");
+      ;
     if (shiftsErr) return json({ error: shiftsErr.message }, 500);
     const ids = (shifts ?? []).map((s: any) => s.id as string).filter(Boolean);
     if (ids.length === 0) return json({ breaks: [] }, 200);

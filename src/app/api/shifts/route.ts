@@ -121,7 +121,7 @@ export async function GET(req: Request) {
         .from("trainer_shifts")
         .select(SHIFT_SELECT_WITH_BREAKS)
         .eq("shift_date", date)
-        .neq("status", "draft");
+;
       if (store_id) q = q.eq("store_id", store_id);
       if (trainer_id) q = q.eq("trainer_id", trainer_id);
       const { data, error } = await q.order("start_local", { ascending: true });
@@ -131,7 +131,7 @@ export async function GET(req: Request) {
             .from("trainer_shifts")
             .select(SHIFT_SELECT_NO_BREAKS)
             .eq("shift_date", date)
-            .neq("status", "draft");
+;
           if (store_id) q0 = q0.eq("store_id", store_id);
           if (trainer_id) q0 = q0.eq("trainer_id", trainer_id);
           const { data: data0, error: error0 } = await q0.order("start_local", { ascending: true });
@@ -144,7 +144,7 @@ export async function GET(req: Request) {
             .from("trainer_shifts")
             .select(SHIFT_SELECT_NO_BREAK)
             .eq("shift_date", date)
-            .neq("status", "draft");
+;
           if (store_id) q2 = q2.eq("store_id", store_id);
           if (trainer_id) q2 = q2.eq("trainer_id", trainer_id);
           const { data: data2, error: error2 } = await q2.order("start_local", { ascending: true });
@@ -178,7 +178,6 @@ export async function GET(req: Request) {
         .eq("trainer_id", trainer_id)
         .gte("shift_date", start)
         .lte("shift_date", endYmd)
-        .neq("status", "draft")
         .order("shift_date", { ascending: true })
         .order("start_local", { ascending: true });
       if (error) {
@@ -189,7 +188,6 @@ export async function GET(req: Request) {
             .eq("trainer_id", trainer_id)
             .gte("shift_date", start)
             .lte("shift_date", endYmd)
-            .neq("status", "draft")
             .order("shift_date", { ascending: true })
             .order("start_local", { ascending: true });
           if (error0) return json({ error: error0.message }, 500);
@@ -203,7 +201,6 @@ export async function GET(req: Request) {
             .eq("trainer_id", trainer_id)
             .gte("shift_date", start)
             .lte("shift_date", endYmd)
-            .neq("status", "draft")
             .order("shift_date", { ascending: true })
             .order("start_local", { ascending: true });
           if (error2) return json({ error: error2.message }, 500);
@@ -236,7 +233,7 @@ export async function GET(req: Request) {
         .select(SHIFT_SELECT_WITH_BREAKS)
         .gte("shift_date", start)
         .lte("shift_date", endYmd)
-        .neq("status", "draft");
+;
       if (store_id) q = q.eq("store_id", store_id);
       if (trainer_id) q = q.eq("trainer_id", trainer_id);
       const { data, error } = await q.order("shift_date", { ascending: true }).order("start_local", { ascending: true });
@@ -247,7 +244,7 @@ export async function GET(req: Request) {
             .select(SHIFT_SELECT_NO_BREAKS)
             .gte("shift_date", start)
             .lte("shift_date", endYmd)
-            .neq("status", "draft");
+;
           if (store_id) q0 = q0.eq("store_id", store_id);
           if (trainer_id) q0 = q0.eq("trainer_id", trainer_id);
           const { data: data0, error: error0 } = await q0
@@ -263,7 +260,7 @@ export async function GET(req: Request) {
             .select(SHIFT_SELECT_NO_BREAK)
             .gte("shift_date", start)
             .lte("shift_date", endYmd)
-            .neq("status", "draft");
+;
           if (store_id) q2 = q2.eq("store_id", store_id);
           if (trainer_id) q2 = q2.eq("trainer_id", trainer_id);
           const { data: data2, error: error2 } = await q2.order("shift_date", { ascending: true }).order("start_local", { ascending: true });
@@ -300,7 +297,7 @@ export async function GET(req: Request) {
       .eq("store_id", store_id)
       .gte("shift_date", start)
       .lte("shift_date", endYmd)
-      .neq("status", "draft");
+;
     if (trainer_id) q = q.eq("trainer_id", trainer_id);
     const { data, error } = await q.order("shift_date", { ascending: true }).order("start_local", { ascending: true });
     if (error) {
@@ -311,7 +308,7 @@ export async function GET(req: Request) {
           .eq("store_id", store_id)
           .gte("shift_date", start)
           .lte("shift_date", endYmd)
-          .neq("status", "draft");
+;
         if (trainer_id) q0 = q0.eq("trainer_id", trainer_id);
         const { data: data0, error: error0 } = await q0
           .order("shift_date", { ascending: true })
@@ -327,7 +324,7 @@ export async function GET(req: Request) {
           .eq("store_id", store_id)
           .gte("shift_date", start)
           .lte("shift_date", endYmd)
-          .neq("status", "draft");
+;
         if (trainer_id) q2 = q2.eq("trainer_id", trainer_id);
         const { data: data2, error: error2 } = await q2
           .order("shift_date", { ascending: true })

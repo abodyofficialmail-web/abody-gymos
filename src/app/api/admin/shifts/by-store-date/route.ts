@@ -55,7 +55,7 @@ export async function GET(request: Request) {
       .select("id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break")
       .eq("store_id", store_id)
       .eq("shift_date", date)
-      .neq("status", "draft");
+;
     if (qA?.error) {
       useSchemaB = true;
     } else {
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
         .select("id, trainer_id, store_id, date, start_time, end_time, status, is_break")
         .eq("store_id", store_id)
         .eq("date", date)
-        .neq("status", "draft");
+;
       if (qB?.error) return jsonResponse({ error: "シフトの取得に失敗しました", detail: qB.error.message }, 500);
       shifts = qB.data ?? [];
     }
