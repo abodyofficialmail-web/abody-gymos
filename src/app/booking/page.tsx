@@ -1,11 +1,12 @@
 "use client";
 
 import { DateTime } from "luxon";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import { resolveTrainerVisibilityPassActive } from "@/lib/trainerVisibilityPass";
+import { safeMemberNextPath } from "@/lib/memberNextPath";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -221,7 +222,10 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
               }
             })();
     const full = detailStr ? `${msg}（${detailStr}）` : msg;
-    throw new Error(`${res.status}|${full}`);
+    const err = new Error(`${res.status}|${full}`) as Error & { status?: number; payload?: unknown };
+    err.status = res.status;
+    err.payload = json;
+    throw err;
   }
   return json as T;
 }
@@ -231,6 +235,7 @@ export default function BookingPage() {
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
 
   const [month, setMonth] = useState(() => DateTime.now().setZone(TZ).startOf("month"));
+  const openedOctoberRef = useRef(false);
   const [dateView, setDateView] = useState<DateView>("calendar");
   const [days, setDays] = useState<AvailableDay[] | null>(null);
   const [monthSlots, setMonthSlots] = useState<Record<string, Slot[]> | null>(null);
@@ -250,6 +255,14 @@ export default function BookingPage() {
 
   const [memberEmailInput, setMemberEmailInput] = useState("");
   const [memberName, setMemberName] = useState<string>("");
+  const [memberCode, setMemberCode] = useState("");
+  const [ticketKoma, setTicketKoma] = useState(0);
+  const [remainingBookableKoma, setRemainingBookableKoma] = useState<number | null>(null);
+  const [ticketBusy, setTicketBusy] = useState(false);
+  const [ticketMsg, setTicketMsg] = useState<string | null>(null);
+  const [ticketCheckoutSessionId, setTicketCheckoutSessionId] = useState("");
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
 
   const [passEmail, setPassEmail] = useState("");
   const [passEmailInput, setPassEmailInput] = useState("");
@@ -264,6 +277,7 @@ export default function BookingPage() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [planConvertOffer, setPlanConvertOffer] = useState<"monthly_10" | "monthly_20" | null>(null);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
   const listDays = useMemo(
@@ -281,29 +295,71 @@ export default function BookingPage() {
 
   useEffect(() => {
     setDateView(readDateView());
-    try {
-      const q = new URLSearchParams(window.location.search);
-      const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
-      const savedStore = storageGet(PASS_STORE_KEY);
-      if (savedStore) setSelectedStoreId(savedStore);
-      if (q.get("trainer_pass") === "success" || sessionId) {
-        setPassJustPaid(true);
-        if (savedStore) setStep(2);
-      }
+    let cancelled = false;
+    const q = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+    const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
+    const ticketPurchase = q.get("ticket_purchase") === "success";
+    const savedStore = storageGet(PASS_STORE_KEY);
+    if (savedStore) setSelectedStoreId(savedStore);
+    if (ticketPurchase && sessionId) {
+      setTicketCheckoutSessionId(sessionId);
+    } else if (q.get("trainer_pass") === "success" || sessionId) {
+      setPassJustPaid(true);
+      if (savedStore) setStep(2);
       if (sessionId) setPassCheckoutSessionId(sessionId);
-      const saved = storageGet(PASS_EMAIL_KEY);
-      const savedCode = storageGet(PASS_CODE_KEY);
-      if (saved) {
-        setMemberEmailInput((prev) => prev || saved);
-        setPassEmailInput(saved);
-        setPassEmail(saved);
-        setPassRestoreEmail(saved);
-      }
-      if (savedCode) setPassMemberCodeInput(savedCode);
-      if (storageGet(PASS_ACTIVE_KEY) === "1") setPassActive(true);
-    } catch {
-      // ignore
     }
+
+    (async () => {
+      try {
+        const res = await fetch("/api/member/me", { cache: "no-store" });
+        if (cancelled) return;
+        if (res.status === 401) {
+          const next = safeMemberNextPath(`${window.location.pathname}${window.location.search}`, "/booking");
+          window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+          return;
+        }
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((json as { error?: string }).error ?? "会員情報の取得に失敗しました");
+        const member = json.member as {
+          email?: string | null;
+          name?: string;
+          member_code?: string;
+          ticket_koma?: number;
+          remaining_bookable_koma?: number | null;
+        };
+        const email = String(member?.email ?? "").trim();
+        const code = String(member?.member_code ?? "").trim();
+        if (!email) {
+          setError("会員メールが未登録です。店舗までご連絡ください。");
+          setAuthReady(true);
+          return;
+        }
+        setMemberEmailInput(email);
+        setMemberName(String(member?.name ?? ""));
+        setMemberCode(code);
+        setTicketKoma(Math.max(0, Number(member?.ticket_koma ?? 0) || 0));
+        setRemainingBookableKoma(
+          member?.remaining_bookable_koma == null ? null : Math.max(0, Number(member.remaining_bookable_koma) || 0)
+        );
+        setPassEmail(email);
+        setPassEmailInput(email);
+        setPassMemberCodeInput(code);
+        const pass = json.trainer_visibility_pass as { active?: boolean } | undefined;
+        const active = resolveTrainerVisibilityPassActive(pass?.active, email, code);
+        setPassActive(active);
+        persistTrainerPass(email, code, active);
+        setAuthReady(true);
+      } catch (e: any) {
+        if (!cancelled) {
+          const next = safeMemberNextPath(`${window.location.pathname}${window.location.search}`, "/booking");
+          window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -332,7 +388,29 @@ export default function BookingPage() {
   }, [selectedStoreId, month]);
 
   useEffect(() => {
-    if (!selectedStoreId) return;
+    if (!authReady || !passEmail || !selectedStoreId || openedOctoberRef.current) return;
+    const today = DateTime.now().setZone(TZ).toISODate()!;
+    if (today >= "2026-10-01") return;
+    let cancelled = false;
+    apiGet<{ dates: { date: string; count: number }[] }>(
+      availableDatesPath(selectedStoreId, "2026-10", passEmail)
+    )
+      .then((d) => {
+        if (cancelled) return;
+        const open = (d.dates ?? []).some((x) => x.date >= today && x.count > 0);
+        openedOctoberRef.current = true;
+        if (open) setMonth(DateTime.fromISO("2026-10-01", { zone: TZ }).startOf("month"));
+      })
+      .catch(() => {
+        openedOctoberRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, passEmail, selectedStoreId]);
+
+  useEffect(() => {
+    if (!authReady || !passEmail || !selectedStoreId) return;
     const monthParam = month.toFormat("yyyy-MM");
     apiGet<{ dates: { date: string; count: number; trainers?: SlotTrainer[] }[] }>(
       availableDatesPath(selectedStoreId, monthParam, passEmail)
@@ -347,12 +425,11 @@ export default function BookingPage() {
         )
       )
       .catch((e: any) => setError(e?.message ?? "カレンダーの取得に失敗しました"));
-  }, [selectedStoreId, month, passEmail]);
+  }, [authReady, selectedStoreId, month, passEmail]);
 
   useEffect(() => {
-    if (!selectedStoreId || !selectedDate) return;
+    if (!authReady || !passEmail || !selectedStoreId || !selectedDate) return;
     let cancelled = false;
-    setMemberName("");
     setError(null);
     apiGet<BookingV2Slot[]>(availableSlotsPath(selectedStoreId, selectedDate, passEmail))
       .then((rows) => {
@@ -370,11 +447,11 @@ export default function BookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedStoreId, selectedDate, passEmail]);
+  }, [authReady, selectedStoreId, selectedDate, passEmail]);
 
   useEffect(() => {
     if (dateView !== "list") return;
-    if (!selectedStoreId || !days) return;
+    if (!authReady || !passEmail || !selectedStoreId || !days) return;
     const dates = days.filter((d) => d.date >= todayYmd && d.slotCount > 0).map((d) => d.date);
     let cancelled = false;
     setMonthSlotsLoading(true);
@@ -400,7 +477,7 @@ export default function BookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [dateView, selectedStoreId, days, todayYmd, passEmail]);
+  }, [authReady, dateView, selectedStoreId, days, todayYmd, passEmail]);
 
   const selectedStoreName = useMemo(
     () => (stores ?? []).find((s) => s.id === selectedStoreId)?.name ?? "",
@@ -480,7 +557,10 @@ export default function BookingPage() {
       setPassEmailInput(email);
       setMemberEmailInput(email);
       setMemberName(info.member?.name ?? "");
-      if (info.member?.member_code) setPassMemberCodeInput(info.member.member_code);
+      if (info.member?.member_code) {
+        setPassMemberCodeInput(info.member.member_code);
+        setMemberCode(info.member.member_code);
+      }
       setPassActive(true);
       setPassJustPaid(false);
       setPassMsg(null);
@@ -495,6 +575,83 @@ export default function BookingPage() {
     } finally {
       setPassBusy(false);
     }
+  }
+
+  async function completeTicketFromCheckout(sessionId: string) {
+    setTicketBusy(true);
+    setTicketMsg(null);
+    try {
+      const info = await apiGet<{ ticket_koma?: number; granted?: number; already?: boolean }>(
+        `/api/member/tickets/from-checkout?session_id=${encodeURIComponent(sessionId)}`
+      );
+      setTicketKoma(Math.max(0, Number(info.ticket_koma ?? 0) || 0));
+      try {
+        const me = await apiGet<{
+          member?: { remaining_bookable_koma?: number | null; ticket_koma?: number };
+        }>("/api/member/me");
+        setTicketKoma(Math.max(0, Number(me.member?.ticket_koma ?? info.ticket_koma ?? 0) || 0));
+        setRemainingBookableKoma(
+          me.member?.remaining_bookable_koma == null
+            ? null
+            : Math.max(0, Number(me.member.remaining_bookable_koma) || 0)
+        );
+      } catch {
+        // 残数の再取得に失敗しても購入反映は成功として扱う
+      }
+      setTicketMsg(
+        info.already
+          ? "チケットはすでに反映済みです。"
+          : info.granted
+            ? `チケットを${info.granted}コマ追加しました。`
+            : "チケットを反映しました。"
+      );
+      try {
+        window.history.replaceState({}, "", "/booking");
+      } catch {
+        // ignore
+      }
+    } catch (e: any) {
+      setTicketMsg(e?.message ?? "チケットの反映に失敗しました。");
+    } finally {
+      setTicketBusy(false);
+    }
+  }
+
+  async function goToTicketCheckout() {
+    setTicketBusy(true);
+    setTicketMsg(null);
+    try {
+      const d = await apiPost<{ url?: string }>("/api/member/tickets/checkout", { koma: 1 });
+      if (!d.url) throw new Error("決済画面を開けませんでした");
+      window.location.href = d.url;
+    } catch (e: any) {
+      const msg = String(e?.message ?? "");
+      setTicketMsg(msg.includes("|") ? msg.split("|").slice(1).join("|") : msg || "決済画面を開けませんでした");
+      setTicketBusy(false);
+    }
+  }
+
+  async function logout() {
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    try {
+      await fetch("/api/member/logout", { method: "POST" });
+    } catch {
+      // クッキーが残っていてもログイン画面へ戻す
+    }
+    try {
+      sessionStorage.removeItem(PASS_EMAIL_KEY);
+      sessionStorage.removeItem(PASS_CODE_KEY);
+      sessionStorage.removeItem(PASS_ACTIVE_KEY);
+      sessionStorage.removeItem(PASS_STORE_KEY);
+      localStorage.removeItem(PASS_EMAIL_KEY);
+      localStorage.removeItem(PASS_CODE_KEY);
+      localStorage.removeItem(PASS_ACTIVE_KEY);
+      localStorage.removeItem(PASS_STORE_KEY);
+    } catch {
+      // ignore
+    }
+    window.location.replace("/login?next=/booking");
   }
 
   async function goToTrainerPassCheckout() {
@@ -529,6 +686,12 @@ export default function BookingPage() {
     void completeFromCheckout(passCheckoutSessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passCheckoutSessionId]);
+
+  useEffect(() => {
+    if (!ticketCheckoutSessionId) return;
+    void completeTicketFromCheckout(ticketCheckoutSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketCheckoutSessionId]);
 
   useEffect(() => {
     if (!passRestoreEmail) return;
@@ -588,10 +751,11 @@ export default function BookingPage() {
     }
   }
 
-  async function handleCreateReservation() {
+  async function handleCreateReservation(convertToOfferedPlan = false) {
     if (!selectedSlot || !selectedDate) return;
     setBusy(true);
     setError(null);
+    if (!convertToOfferedPlan) setPlanConvertOffer(null);
     try {
       const v = validateMemberEmail(memberEmailInput);
       if (!v.ok) {
@@ -614,6 +778,7 @@ export default function BookingPage() {
         // UTC(Z)ではなくJST(+09:00)で送る（サーバー側のシフト判定と揃える）
         start_at: dayjs(selectedSlot.startAt).tz(TZ).format(),
         end_at: dayjs(selectedSlot.endAt).tz(TZ).format(),
+        convert_to_plan: convertToOfferedPlan ? planConvertOffer ?? undefined : undefined,
       });
       const qs = new URLSearchParams({
         storeName: selectedStoreName,
@@ -627,6 +792,12 @@ export default function BookingPage() {
       });
       window.location.href = "/booking/complete?" + qs.toString();
     } catch (e: any) {
+      const payload = e?.payload as { offer_plan?: "monthly_10" | "monthly_20" } | undefined;
+      if (payload?.offer_plan && !convertToOfferedPlan) {
+        setPlanConvertOffer(payload.offer_plan);
+        return;
+      }
+      if (convertToOfferedPlan) setPlanConvertOffer(null);
       const msg = String(e?.message ?? "");
       const m = msg.includes("|") ? msg.split("|").slice(1).join("|") : msg;
       const statusStr = msg.includes("|") ? msg.split("|")[0] : "";
@@ -642,15 +813,18 @@ export default function BookingPage() {
   }
 
   const progressPct = useMemo(() => {
-    const steps = 6;
-    return Math.round(((step - 1) / (steps - 1)) * 100);
+    const current = step >= 6 ? 5 : step === 5 ? 5 : step;
+    return Math.round(((current - 1) / 4) * 100);
   }, [step]);
+
+  const stepLabel = step >= 5 ? 5 : step;
 
   const sessionTypeLabel = useMemo(() => (sessionType === "online" ? "オンライン" : "店舗"), [sessionType]);
 
   function resetToStart() {
     setError(null);
     setBusy(false);
+    setPlanConvertOffer(null);
     setStep(1);
     setMonth(DateTime.now().setZone(TZ).startOf("month"));
     setDays(null);
@@ -659,8 +833,6 @@ export default function BookingPage() {
     setSessionType("store");
     setSlots(null);
     setSelectedSlotKey("");
-    setMemberEmailInput("");
-    setMemberName("");
   }
 
   function changeDateView(next: DateView) {
@@ -674,7 +846,6 @@ export default function BookingPage() {
 
   function goToDate(ymd: string, slot?: Slot | null) {
     setSelectedDate(ymd);
-    if (!passEmail) setMemberEmailInput("");
     setSessionType("store");
     if (slot) {
       const daySlots = monthSlots?.[ymd];
@@ -688,7 +859,7 @@ export default function BookingPage() {
   }
 
   function goToTimeOrMember() {
-    setStep(selectedSlotKey ? 5 : 4);
+    setStep(selectedSlotKey ? 6 : 4);
   }
 
   function dayStatusMeta(status: AvailableDay["status"]) {
@@ -700,6 +871,34 @@ export default function BookingPage() {
 
   const trainerPassBanner = (
     <div className="rounded-xl border border-line bg-white px-4 py-3 space-y-2">
+      <div className="text-xs text-ink-500">
+        {memberName || memberCode ? `${memberName || "会員"}（${memberCode || memberEmailInput}）` : "ログイン中"}
+      </div>
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-[#F9FAFB] px-3 py-2">
+        <div>
+          {remainingBookableKoma != null ? (
+            <>
+              <div className="text-[11px] text-ink-500">残り予約可能数</div>
+              <div className="text-sm font-semibold text-ink-900">あと{remainingBookableKoma}コマ予約できます</div>
+            </>
+          ) : (
+            <div className="text-sm font-semibold text-ink-900">予約できます</div>
+          )}
+          {ticketKoma > 0 ? (
+            <div className="pt-0.5 text-[11px] text-ink-500">チケット {ticketKoma}コマ</div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          disabled={ticketBusy}
+          onClick={() => void goToTicketCheckout()}
+          className="rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+          style={{ background: "var(--accent)" }}
+        >
+          {ticketBusy ? "処理中…" : "チケットを購入"}
+        </button>
+      </div>
+      {ticketMsg ? <div className="text-xs text-ink-500">{ticketMsg}</div> : null}
       {passActive ? (
         <>
           <div className="text-sm font-semibold">担当トレーナー表示中</div>
@@ -716,58 +915,18 @@ export default function BookingPage() {
         </button>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs font-semibold text-ink-700">会員登録のメールアドレス</div>
-            <button
-              type="button"
-              onClick={() => setPassMenuOpen(false)}
-              className="text-xs text-ink-500 underline-offset-2 hover:underline"
-            >
-              閉じる
-            </button>
+          <div className="text-sm font-semibold">担当トレーナー表示</div>
+          <div className="text-xs text-ink-500 leading-relaxed">
+            ログイン中の会員（{memberCode || memberEmailInput}）に紐づけて表示します。別のメールを入れ直す必要はありません。
           </div>
-          <input
-            value={passEmailInput}
-            onChange={(e) => setPassEmailInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                void lookupTrainerPass(passEmailInput);
-              }
-            }}
-            placeholder="example@email.com"
-            inputMode="email"
-            autoCapitalize="none"
-            className="w-full rounded-xl border border-line px-3 py-2 text-sm outline-none"
-          />
-          <div className="text-xs font-semibold text-ink-700">会員番号</div>
-          <input
-            value={passMemberCodeInput}
-            onChange={(e) => setPassMemberCodeInput(e.target.value)}
-            placeholder="例: EBI020"
-            autoCapitalize="characters"
-            className="w-full rounded-xl border border-line px-3 py-2 text-sm outline-none"
-          />
           <button
             type="button"
-            disabled={passBusy}
+            disabled={passBusy || !memberEmailInput || !passMemberCodeInput}
             onClick={() => void goToTrainerPassCheckout()}
             className="w-full rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
             style={{ background: "var(--accent)" }}
           >
             {passBusy ? "確認中…" : "オプション追加してトレーナーを表示する"}
-          </button>
-          <div className="pt-1 text-xs text-ink-500 leading-relaxed">
-            すでに登録済みの方は、同じアドレスで下のボタンを押してください。課金した人は、このメールで会員と紐づきます。
-          </div>
-          <button
-            type="button"
-            disabled={passBusy}
-            onClick={() => void lookupTrainerPass(passEmailInput)}
-            className="w-full rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-60"
-            style={{ borderColor: "var(--accentBorder)", color: "var(--accent)" }}
-          >
-            {passBusy ? "確認中…" : "メールで表示する"}
           </button>
         </>
       )}
@@ -794,7 +953,13 @@ export default function BookingPage() {
         } as React.CSSProperties
       }
     >
-      <div className="flex items-center justify-between">
+      {!authReady ? (
+        <div className="rounded-2xl border border-line bg-white px-4 py-8 text-center text-sm text-ink-500">
+          ログインを確認しています…
+        </div>
+      ) : (
+        <>
+      <div className="flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={resetToStart}
@@ -803,12 +968,19 @@ export default function BookingPage() {
           ↺ 最初から予約する
         </button>
         <div className="text-sm font-medium">予約</div>
-        <div className="w-10" />
+        <button
+          type="button"
+          disabled={logoutBusy}
+          onClick={() => void logout()}
+          className="text-sm text-ink-500 hover:text-ink-900 disabled:opacity-60"
+        >
+          {logoutBusy ? "ログアウト中…" : "ログアウト"}
+        </button>
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-ink-500">
-          <div>Step {step} / 6</div>
+          <div>Step {stepLabel} / 5</div>
           <div>{progressPct}%</div>
         </div>
         <div className="h-2 rounded-full bg-[#F3F4F6] overflow-hidden">
@@ -1147,7 +1319,7 @@ export default function BookingPage() {
                   type="button"
                   onClick={() => {
                     setSelectedSlotKey(k);
-                    setStep(5);
+                    setStep(6);
                   }}
                   className="rounded-xl border px-3 py-3 text-left transition-colors"
                   style={
@@ -1166,42 +1338,6 @@ export default function BookingPage() {
           {slots && slots.length === 0 ? (
             <div className="text-sm text-ink-700">この日は空き枠がありません。</div>
           ) : null}
-        </section>
-      ) : null}
-
-      {/* Step 5: member */}
-      {step === 5 ? (
-        <section className="rounded-2xl border border-line shadow-card p-5 space-y-4">
-          <div className="space-y-1">
-            <div className="text-base font-semibold">会員情報</div>
-            <div className="text-sm text-ink-500">
-              {selectedStoreName} / {formatJstDateLabel(selectedDate)} /{" "}
-              {selectedSlot ? formatJstTimeRange(selectedSlot.startAt, selectedSlot.endAt) : "-"}
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="text-base font-semibold">メールアドレス</div>
-            <div className="text-sm text-ink-500">会員登録時のメールアドレスを入力してください</div>
-            <input
-              value={memberEmailInput}
-              onChange={(e) => setMemberEmailInput(e.target.value)}
-              placeholder="example@example.com"
-              inputMode="email"
-              autoCapitalize="none"
-              className="w-full rounded-xl border border-line px-4 py-3 text-base outline-none"
-              style={{ borderColor: "var(--accentBorder)" }}
-            />
-            <button
-              type="button"
-              onClick={() => void lookupMemberAndGoToConfirm()}
-              disabled={busy}
-              className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-white font-semibold disabled:opacity-60"
-              style={{ background: "var(--accent)" }}
-            >
-              次へ
-            </button>
-          </div>
         </section>
       ) : null}
 
@@ -1238,15 +1374,18 @@ export default function BookingPage() {
             <div className="space-y-1">
               <div className="text-xs text-ink-500">会員</div>
               <div className="text-base font-medium">
-                <div>-（{memberEmailInput.trim() || "-"}）</div>
-                {memberName ? <div className="pt-1">{memberName}</div> : null}
+                <div>
+                  {memberName || "-"}
+                  {memberCode ? `（${memberCode}）` : ""}
+                </div>
+                {memberEmailInput ? <div className="pt-1 text-sm text-ink-500">{memberEmailInput}</div> : null}
               </div>
             </div>
           </div>
 
           <button
             type="button"
-            onClick={handleCreateReservation}
+            onClick={() => void handleCreateReservation(false)}
             disabled={busy}
             className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-white font-semibold disabled:opacity-60"
             style={{ background: "var(--accent)" }}
@@ -1254,6 +1393,47 @@ export default function BookingPage() {
             {busy ? "確定中…" : "予約を確定する"}
           </button>
         </section>
+      ) : null}
+
+      {planConvertOffer ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-[440px] rounded-2xl border border-line bg-white p-5 shadow-card space-y-4">
+            <div className="text-base font-semibold">
+              {planConvertOffer === "monthly_20" ? "月20コマプランへの変更" : "月10コマプランへの変更"}
+            </div>
+            <div className="text-sm text-ink-700 leading-relaxed space-y-2">
+              <p>
+                この予約をとるには、
+                {planConvertOffer === "monthly_20" ? "月20コマプラン" : "月10コマプラン"}
+                への変更が必要です。
+              </p>
+              <p>
+                変更すると今回の予約は取れます。ただし、月に
+                {planConvertOffer === "monthly_20" ? "20" : "10"}
+                コマを超える予約はできなくなります。
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setPlanConvertOffer(null)}
+                className="flex-1 rounded-xl border border-line px-4 py-3 text-sm font-medium disabled:opacity-60"
+              >
+                戻る
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleCreateReservation(true)}
+                className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                style={{ background: "var(--accent)" }}
+              >
+                {busy ? "予約中…" : "変更して予約する"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <div className="flex gap-3">
@@ -1266,7 +1446,7 @@ export default function BookingPage() {
             if (step === 3) return setStep(2);
             if (step === 4) return setStep(3);
             if (step === 5) return setStep(4);
-            if (step === 6) return setStep(5);
+            if (step === 6) return setStep(4);
           }}
           disabled={busy || step === 1}
           className="flex-1 rounded-xl border border-line px-4 py-3 text-sm font-medium disabled:opacity-60"
@@ -1281,11 +1461,8 @@ export default function BookingPage() {
             if (step === 1 && selectedStoreId) return setStep(2);
             if (step === 2) return;
             if (step === 3) return;
-            if (step === 4 && selectedSlot) return setStep(5);
-            if (step === 5) {
-              void lookupMemberAndGoToConfirm();
-              return;
-            }
+            if (step === 4 && selectedSlot) return setStep(6);
+            if (step === 5) return setStep(6);
           }}
           disabled={
             busy ||
@@ -1293,7 +1470,6 @@ export default function BookingPage() {
             step === 2 ||
             step === 3 ||
             (step === 4 && !selectedSlot) ||
-            (step === 5 && memberEmailInput.trim().length === 0) ||
             step === 6
           }
           className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
@@ -1302,6 +1478,8 @@ export default function BookingPage() {
           次へ
         </button>
       </div>
+        </>
+      )}
     </main>
   );
 }
