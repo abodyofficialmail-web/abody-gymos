@@ -43,6 +43,10 @@
     {
       "path": "/api/cron/meal-personal-reminder-line",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/october-booking-release",
+      "schedule": "0 9 26 9 *"
     }
   ]
 }
