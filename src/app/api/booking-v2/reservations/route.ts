@@ -210,12 +210,20 @@ async function fetchShiftsForCapacityCheck(params: {
   }
 
   if (includeOctoberDraft) {
-    const draftQ = await (supabase as any)
+    let draftQ = await (supabase as any)
       .from("trainer_shifts")
       .select("trainer_id, start_local, end_local, is_break, status, booking_visibility")
       .eq("store_id", store_id)
       .eq("shift_date", dateYmd)
       .eq("status", "draft");
+    if (draftQ?.error && isMissingBookingVisibilityColumn(draftQ.error)) {
+      draftQ = await (supabase as any)
+        .from("trainer_shifts")
+        .select("trainer_id, start_local, end_local, is_break, status")
+        .eq("store_id", store_id)
+        .eq("shift_date", dateYmd)
+        .eq("status", "draft");
+    }
     if (!draftQ?.error) {
       rows = rows.concat(draftQ.data ?? []);
     }
