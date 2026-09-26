@@ -451,7 +451,11 @@ async function main() {
 
 export { buildRows, countSlots, SEIYA_DAY_NUMBERS, HIROMU_EARLY, HIROMU_LATE };
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+import { pathToFileURL } from "url";
+const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCli) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
