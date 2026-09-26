@@ -11,6 +11,7 @@ export const OCTOBER_EARLY_ACCESS_CODES = [
   "EBI009",
   "SHI001",
   "SHI003",
+  "SHI033",
   "SHI019",
   "SHI024",
   "SHI028",

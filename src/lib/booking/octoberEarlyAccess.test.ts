@@ -15,7 +15,8 @@ describe("october early access", () => {
   });
 
   it("includes the granted members and nobody else", () => {
-    assert.equal(OCTOBER_EARLY_ACCESS_CODES.length, 36);
+    assert.equal(OCTOBER_EARLY_ACCESS_CODES.length, 37);
+    assert.equal(isOctoberEarlyAccessCode("SHI033"), true);
     assert.equal(isOctoberEarlyAccessCode("EBI034"), true);
     assert.equal(isOctoberEarlyAccessCode("SAK002"), true);
     assert.equal(isOctoberEarlyAccessCode("UEN027"), false);
