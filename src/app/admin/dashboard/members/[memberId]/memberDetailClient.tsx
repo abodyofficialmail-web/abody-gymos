@@ -12,6 +12,8 @@ import {
   WeightProgressPanel,
   type WeightProgressPanelData,
 } from "@/components/weight-progress/WeightProgressPanel";
+import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
+import type { MembershipPlan } from "@/lib/memberPlans";
 import {
   formatPreSessionSurveyDetailLines,
   formatPreSessionSurveySummary,
@@ -56,7 +58,7 @@ import {
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Children, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   isLowBookingMotivationNeed,
   lowBookingMotivationBannerText,
@@ -69,6 +71,86 @@ function surveyRateBadgeClass(rate: number | null): string {
   if (rate != null && rate >= 70) return `${base} border-emerald-200 bg-emerald-50 text-emerald-800`;
   if (rate != null && rate >= 40) return `${base} border-amber-200 bg-amber-50 text-amber-800`;
   return `${base} border-red-200 bg-red-50 text-red-800`;
+}
+
+function KarteSwipePager({
+  labels,
+  children,
+}: {
+  labels: string[];
+  children: ReactNode;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const slideRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [index, setIndex] = useState(0);
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  const slides = Children.toArray(children);
+
+  const measure = useCallback((i: number) => {
+    const el = slideRefs.current[i];
+    if (el) setHeight(el.scrollHeight);
+  }, []);
+
+  useEffect(() => {
+    measure(index);
+    const el = slideRefs.current[index];
+    if (!el) return;
+    const ro = new ResizeObserver(() => measure(index));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [index, measure, slides]);
+
+  function syncIndex() {
+    const el = scrollerRef.current;
+    if (!el || el.clientWidth <= 0) return;
+    const next = Math.max(0, Math.min(slides.length - 1, Math.round(el.scrollLeft / el.clientWidth)));
+    setIndex(next);
+  }
+
+  function goTo(i: number) {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    setIndex(i);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+        {labels.map((label, i) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => goTo(i)}
+            className={[
+              "flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors",
+              i === index ? "bg-white text-slate-900 shadow-sm" : "text-slate-600",
+            ].join(" ")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div
+        ref={scrollerRef}
+        onScroll={syncIndex}
+        className="flex items-start snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        style={{ height, transition: "height 180ms ease" }}
+      >
+        {slides.map((slide, i) => (
+          <div
+            key={labels[i] ?? i}
+            ref={(node) => {
+              slideRefs.current[i] = node;
+            }}
+            className="min-w-0 flex-[0_0_100%] snap-start self-start"
+          >
+            {slide}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 type ReservationRow = {
@@ -157,6 +239,8 @@ export function MemberDetailClient({
     min_commitment_months?: number | null;
     has_enrollment_fee?: boolean | null;
     enrollment_campaign?: string | null;
+    membership_plan?: MembershipPlan | null;
+    bonus_ticket_koma?: number;
     line_user_id: string | null;
     line_channel_key?: string | null;
     line_channel_label?: string | null;
@@ -166,6 +250,11 @@ export function MemberDetailClient({
     trainer_visibility_pass_period_end?: string | null;
     trainer_visibility_stripe_customer_id?: string | null;
     trainer_visibility_stripe_subscription_id?: string | null;
+    meal_personal_full_enabled?: boolean;
+    meal_personal_pass_status?: string;
+    meal_personal_pass_period_end?: string | null;
+    meal_personal_stripe_customer_id?: string | null;
+    meal_personal_stripe_subscription_id?: string | null;
   };
 }) {
   const router = useRouter();
@@ -980,80 +1069,145 @@ export function MemberDetailClient({
 
       {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div> : null}
 
-      {/* 会員基本情報 */}
+      {/* 会員基本情報 / プラン・予約制限 */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <KarteSwipePager labels={["会員情報", "プラン・予約制限"]}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-base font-bold text-slate-900">{member.member_code || member.id}</div>
+              <div className="pt-1 text-sm text-slate-700">{member.name || ""}</div>
+              <div className="pt-2">
+                <span className={membershipStatusBadgeClass(membershipStatus)}>
+                  {membershipStatusLabel(membershipStatus)}
+                </span>
+              </div>
+              {membershipStatus === "active" && rows !== null && isLowBookingMotivationNeed(monthSessionCount) ? (
+                <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">
+                  {lowBookingMotivationBannerText(monthSessionCount, monthLabel)}
+                </div>
+              ) : null}
+              {membershipStatus === "withdrawn" && !withdrawFormOpen ? (
+                <div className="pt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
+                  <div>退会日: {formatWithdrawnAt(withdrawnAt)}</div>
+                  <div>退会時担当: {withdrawnTrainerName || "—"}</div>
+                </div>
+              ) : null}
+              {membershipStatus === "hiatus" && !hiatusFormOpen ? (
+                <div className="pt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                  休会期間: {formatHiatusPeriod(hiatusStartAt, hiatusEndAt)}
+                </div>
+              ) : null}
+              <div className="pt-1 text-[11px] text-slate-400 break-all">ID: {member.id}</div>
+            </div>
+            <div className="text-right space-y-1">
+              <div
+                className={[
+                  "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
+                  member.line_user_id ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600",
+                ].join(" ")}
+              >
+                {member.line_user_id ? "LINE連携済み" : "LINE未連携"}
+              </div>
+              {member.line_user_id && member.line_channel_label ? (
+                <div className="text-[11px] text-slate-500">送信先: {member.line_channel_label}</div>
+              ) : null}
+              <div
+                title={member.trainer_visibility_pass_status || "inactive"}
+                className={[
+                  "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
+                  member.trainer_visibility_pass_active
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-slate-200 bg-slate-50 text-slate-600",
+                ].join(" ")}
+              >
+                {member.trainer_visibility_pass_active ? "出勤表示パス" : "出勤表示なし"}
+              </div>
+              {member.trainer_visibility_pass_active ? (
+                <div className="text-[11px] text-slate-500 space-y-0.5">
+                  {member.trainer_visibility_pass_email ? (
+                    <div>決済メール: {member.trainer_visibility_pass_email}</div>
+                  ) : null}
+                  {member.trainer_visibility_pass_period_end ? (
+                    <div>
+                      期限:{" "}
+                      {DateTime.fromISO(member.trainer_visibility_pass_period_end).setZone("Asia/Tokyo").toFormat("yyyy/MM/dd")}
+                    </div>
+                  ) : null}
+                  {member.trainer_visibility_stripe_customer_id ? (
+                    <div className="break-all">Stripe: {member.trainer_visibility_stripe_customer_id}</div>
+                  ) : null}
+                </div>
+              ) : null}
+              <div
+                title={member.meal_personal_pass_status || "inactive"}
+                className={[
+                  "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
+                  member.meal_personal_full_enabled
+                    ? "border-teal-200 bg-teal-50 text-teal-800"
+                    : "border-slate-200 bg-slate-50 text-slate-600",
+                ].join(" ")}
+              >
+                {member.meal_personal_full_enabled ? "食事パーソナル" : "食事パーソナルなし"}
+              </div>
+              {member.meal_personal_full_enabled ? (
+                <div className="text-[11px] text-slate-500 space-y-0.5">
+                  {member.meal_personal_pass_period_end ? (
+                    <div>
+                      期限:{" "}
+                      {DateTime.fromISO(member.meal_personal_pass_period_end).setZone("Asia/Tokyo").toFormat("yyyy/MM/dd")}
+                    </div>
+                  ) : null}
+                  {member.meal_personal_stripe_customer_id ? (
+                    <div className="break-all">Stripe: {member.meal_personal_stripe_customer_id}</div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <MemberBookingPlanSection
+            memberId={memberId}
+            initialPlan={member.membership_plan ?? null}
+            initialTickets={member.bonus_ticket_koma ?? 0}
+            embedded
+          />
+        </KarteSwipePager>
+      </section>
+
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-base font-bold text-slate-900">{member.member_code || member.id}</div>
-            <div className="pt-1 text-sm text-slate-700">{member.name || ""}</div>
-            <div className="pt-2">
-              <span className={membershipStatusBadgeClass(membershipStatus)}>
-                {membershipStatusLabel(membershipStatus)}
-              </span>
-            </div>
-            {membershipStatus === "active" && rows !== null && isLowBookingMotivationNeed(monthSessionCount) ? (
-              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">
-                {lowBookingMotivationBannerText(monthSessionCount, monthLabel)}
-              </div>
-            ) : null}
-            {membershipStatus === "withdrawn" && !withdrawFormOpen ? (
-              <div className="pt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
-                <div>退会日: {formatWithdrawnAt(withdrawnAt)}</div>
-                <div>退会時担当: {withdrawnTrainerName || "—"}</div>
-              </div>
-            ) : null}
-            {membershipStatus === "hiatus" && !hiatusFormOpen ? (
-              <div className="pt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-                休会期間: {formatHiatusPeriod(hiatusStartAt, hiatusEndAt)}
-              </div>
-            ) : null}
-            <div className="pt-1 text-[11px] text-slate-400 break-all">ID: {member.id}</div>
-            {email.trim() ? (
-              <div className="pt-1 text-[11px] text-slate-500 break-all">Email: {email.trim()}</div>
-            ) : (
-              <div className="pt-1 text-[11px] text-slate-400">Email: 未登録</div>
-            )}
-          </div>
-          <div className="text-right space-y-1">
-            <div
-              className={[
-                "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
-                member.line_user_id ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600",
-              ].join(" ")}
+        <div className="space-y-1">
+          <div className="text-xs font-semibold text-slate-700">メールアドレス</div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setEmailMsg(null);
+              }}
+              inputMode="email"
+              placeholder="未登録（入力して保存）"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              disabled={emailSaving}
+              onClick={async () => {
+                setEmailSaving(true);
+                setEmailMsg(null);
+                try {
+                  await apiPatch(`/api/admin/members/${encodeURIComponent(memberId)}`, { email });
+                  setEmailMsg("保存しました");
+                } catch (e: any) {
+                  setEmailMsg(String(e?.message ?? "保存に失敗しました"));
+                } finally {
+                  setEmailSaving(false);
+                }
+              }}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {member.line_user_id ? "LINE連携済み" : "LINE未連携"}
-            </div>
-            {member.line_user_id && member.line_channel_label ? (
-              <div className="text-[11px] text-slate-500">送信先: {member.line_channel_label}</div>
-            ) : null}
-            <div
-              title={member.trainer_visibility_pass_status || "inactive"}
-              className={[
-                "inline-flex rounded-full px-3 py-1 text-xs font-semibold border",
-                member.trainer_visibility_pass_active
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                  : "border-slate-200 bg-slate-50 text-slate-600",
-              ].join(" ")}
-            >
-              {member.trainer_visibility_pass_active ? "出勤表示パス" : "出勤表示なし"}
-            </div>
-            {member.trainer_visibility_pass_active ? (
-              <div className="text-[11px] text-slate-500 space-y-0.5">
-                {member.trainer_visibility_pass_email ? (
-                  <div>決済メール: {member.trainer_visibility_pass_email}</div>
-                ) : null}
-                {member.trainer_visibility_pass_period_end ? (
-                  <div>
-                    期限:{" "}
-                    {DateTime.fromISO(member.trainer_visibility_pass_period_end).setZone("Asia/Tokyo").toFormat("yyyy/MM/dd")}
-                  </div>
-                ) : null}
-                {member.trainer_visibility_stripe_customer_id ? (
-                  <div className="break-all">Stripe: {member.trainer_visibility_stripe_customer_id}</div>
-                ) : null}
-              </div>
-            ) : null}
+              {emailSaving ? "保存中…" : "保存"}
+            </button>
           </div>
+          {emailMsg ? <div className="text-xs text-slate-600">{emailMsg}</div> : null}
         </div>
 
         <div className="pt-2 space-y-2 border-t border-slate-100">
@@ -1354,44 +1508,10 @@ export function MemberDetailClient({
           </button>
           {enrollmentMsg ? <div className="text-xs text-slate-600">{enrollmentMsg}</div> : null}
         </div>
+      </section>
 
-        <div className="pt-2 space-y-1">
-          <div className="text-xs font-semibold text-slate-700">メールアドレス</div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <input
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                setEmailMsg(null);
-              }}
-              inputMode="email"
-              placeholder="未登録（入力して保存）"
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-            />
-            <button
-              type="button"
-              disabled={emailSaving}
-              onClick={async () => {
-                setEmailSaving(true);
-                setEmailMsg(null);
-                try {
-                  await apiPatch(`/api/admin/members/${encodeURIComponent(memberId)}`, { email });
-                  setEmailMsg("保存しました");
-                } catch (e: any) {
-                  setEmailMsg(String(e?.message ?? "保存に失敗しました"));
-                } finally {
-                  setEmailSaving(false);
-                }
-              }}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {emailSaving ? "保存中…" : "保存"}
-            </button>
-          </div>
-          {emailMsg ? <div className="text-xs text-slate-600">{emailMsg}</div> : null}
-        </div>
-
-        <div className="pt-3 space-y-1 border-t border-slate-100">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+        <div className="space-y-1">
           <div className="text-xs font-semibold text-slate-700">予約のキャンセル・時間変更履歴</div>
           <div className="space-y-1">
             {changeLogs.length > 0 ? (
@@ -1906,7 +2026,7 @@ export function MemberDetailClient({
           />
         ) : null}
 
-        {isMemberMealPersonalEnabled(member.member_code) ? (
+        {member.meal_personal_full_enabled || isMemberMealPersonalEnabled(member.member_code) ? (
           <MealPersonalPanel
             compact
             readOnly
