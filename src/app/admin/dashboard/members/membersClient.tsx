@@ -7,6 +7,7 @@ import {
   resolveMembershipStatus,
   type MembershipStatus,
 } from "@/lib/memberMembershipStatus";
+import { membershipPlanShortLabel, parseMembershipPlan } from "@/lib/memberPlans";
 import {
   formatSurveyRateShort,
   surveyRateBadgeClass,
@@ -29,11 +30,14 @@ type MemberRow = {
   line_user_id: string | null;
   is_active: boolean;
   membership_status?: MembershipStatus | null;
+  membership_plan?: string | null;
   store_id?: string | null;
   store_name?: string | null;
+  trainer_visibility_pass_active?: boolean;
+  trainer_visibility_pass_email?: string | null;
 };
 
-type BookingFilter = "all" | "low" | "zero";
+type BookingFilter = "all" | "low" | "zero" | "trainer_pass";
 type SortMode = "default" | "response_rate" | "booking_count";
 
 type MemberSurveyStats = {
@@ -153,6 +157,11 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
     return { low, zero };
   }, [activeMembers, bookingCounts, selectedStoreId]);
 
+  const trainerPassCount = useMemo(
+    () => (members ?? []).filter((m) => Boolean(m.trainer_visibility_pass_active)).length,
+    [members]
+  );
+
   const filtered = useMemo(() => {
     const keyword = q.trim().toLowerCase();
     let list = members ?? [];
@@ -179,6 +188,8 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
           resolveMembershipStatus(m.membership_status, m.is_active) === "active" &&
           (bookingCounts[m.id] ?? 0) === 0
       );
+    } else if (bookingFilter === "trainer_pass") {
+      list = list.filter((m) => Boolean(m.trainer_visibility_pass_active));
     }
 
     const nameByStoreId = new Map((stores ?? []).map((s) => [s.id, s.name]));
@@ -233,6 +244,9 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
             <span>
               0件: <span className="font-semibold text-red-700">{lowBookingSummary.zero}人</span>
             </span>
+            <span>
+              出勤表示パス: <span className="font-semibold text-emerald-800">{trainerPassCount}人</span>
+            </span>
           </div>
         )}
       </div>
@@ -286,6 +300,7 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
               ["all", "すべて"],
               ["low", `${monthLabel} ${LOW_BOOKING_MAX}件以下`],
               ["zero", `${monthLabel} 0件`],
+              ["trainer_pass", "出勤表示パス"],
             ] as const
           ).map(([id, label]) => {
             const active = bookingFilter === id;
@@ -383,8 +398,25 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
 
               <div className="pt-1 flex flex-wrap items-center gap-2 text-xs">
                 <span className={membershipStatusBadgeClass(status)}>{membershipStatusLabel(status)}</span>
+                {parseMembershipPlan(m.membership_plan) ? (
+                  <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-indigo-800">
+                    {membershipPlanShortLabel(parseMembershipPlan(m.membership_plan))}
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-500">
+                    プラン未設定
+                  </span>
+                )}
                 {m.store_name ? (
                   <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-700">{m.store_name}</span>
+                ) : null}
+                {m.trainer_visibility_pass_active ? (
+                  <span
+                    title={m.trainer_visibility_pass_email || m.email || ""}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-800"
+                  >
+                    出勤表示パス
+                  </span>
                 ) : null}
               </div>
 
