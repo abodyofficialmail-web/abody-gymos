@@ -11,6 +11,7 @@ export const MEAL_PERSONAL_PILOT_CODES = new Set([
   "UEN054",
   "SHI031",
   "YUT001", // トレーナーゆうと（佐々木優斗）本人
+  "ZAI001",
 ]);
 
 function normalizeMemberCode(memberCode: string | null | undefined): string {
