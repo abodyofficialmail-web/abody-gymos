@@ -7,7 +7,8 @@ import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
-const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
+const UENO_MAX_BOOTHS = 2;
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 const TARGET = { 恵比寿: 276, 上野: 504, 新宿: 300, 桜木町: 384 };
 const STORES = ["恵比寿", "上野", "新宿", "桜木町"];
 
@@ -34,7 +35,8 @@ function effectiveStoreSlots(rows) {
         const e = toMinutes(r.end_local);
         if (s <= t && t + 30 <= e) cap++;
       }
-      if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      if (store === "上野") cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       daySlots += cap;
     }
     byStore.set(store, (byStore.get(store) ?? 0) + daySlots);
