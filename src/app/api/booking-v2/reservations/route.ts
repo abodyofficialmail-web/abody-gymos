@@ -15,7 +15,10 @@ import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage"
 import { canBookOrLogin, pickBookableMember } from "@/lib/memberMembershipStatus";
 import { isMissingBookingVisibilityColumn } from "@/lib/inviteShiftBooking";
 import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
-import { MEMBER_BOOKING_BLOCKED_MESSAGE, evaluateMemberBooking } from "@/lib/booking/memberBookingRules";
+import {
+  evaluateMemberBooking,
+  memberBookingBlockedMessage,
+} from "@/lib/booking/memberBookingRules";
 import {
   applyTicketDelta,
   evaluateLoadedMemberBooking,
@@ -254,6 +257,7 @@ const bodySchema = z.object({
   session_type: z.enum(["store", "online"]).optional().default("store"),
   convert_to_plan: z.enum(["monthly_10", "monthly_20"]).optional(),
   convert_to_monthly_10: z.boolean().optional(),
+  use_ticket: z.boolean().optional(),
 });
 
 const getQuerySchema = z.object({
@@ -484,7 +488,7 @@ export async function POST(request: Request) {
         400
       );
     }
-    const { store_id, trainer_id: trainerIdInput, email, start_at, end_at, session_type, convert_to_plan, convert_to_monthly_10 } =
+    const { store_id, trainer_id: trainerIdInput, email, start_at, end_at, session_type, convert_to_plan, convert_to_monthly_10, use_ticket } =
       parsed.data;
     const requestedConvertPlan = convert_to_plan ?? (convert_to_monthly_10 ? "monthly_10" : undefined);
     const normalizedEmail = email.trim();
@@ -755,7 +759,21 @@ export async function POST(request: Request) {
     let ticketsToConsume = 0;
     {
       const ctx = await loadMemberBookingRuleContext(supabase, { memberId });
-      let verdict = await evaluateLoadedMemberBooking(ctx, { start_at, end_at, store_id, session_type });
+      let verdict = await evaluateLoadedMemberBooking(
+        ctx,
+        { start_at, end_at, store_id, session_type },
+        { confirmTicketUse: Boolean(use_ticket) }
+      );
+      if (!verdict.ok && verdict.reason === "confirm_ticket") {
+        return jsonResponse(
+          {
+            error: memberBookingBlockedMessage("confirm_ticket"),
+            confirm_ticket: true,
+            tickets_to_consume: verdict.ticketsToConsume,
+          },
+          409
+        );
+      }
       if (!verdict.ok) {
         const loggedInSelf = Boolean(cookieMemberId) && cookieMemberId === memberId;
         const offeredPlan = verdict.offerPlanConversion;
@@ -768,9 +786,10 @@ export async function POST(request: Request) {
             blockedDates: ctx.blockedDates,
             candidate: { start_at, end_at, store_id, session_type },
             nowIso: new Date().toISOString(),
+            confirmTicketUse: true,
           });
           if (!preview.ok) {
-            return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+            return jsonResponse({ error: memberBookingBlockedMessage(preview.reason, offeredPlan) }, 409);
           }
           const upd = await (supabase as any)
             .from("members")
@@ -779,15 +798,18 @@ export async function POST(request: Request) {
           if (upd.error) {
             const msg = String(upd.error.message ?? "");
             if (/membership_plan|does not exist|schema cache|check constraint/i.test(msg)) {
-              return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+              return jsonResponse({ error: memberBookingBlockedMessage(verdict.reason, ctx.plan) }, 409);
             }
             return jsonResponse({ error: "プラン変更に失敗しました", detail: upd.error.message }, 500);
           }
           verdict = preview;
         } else if (canConvert && !requestedConvertPlan) {
-          return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE, offer_plan: offeredPlan }, 409);
+          return jsonResponse(
+            { error: memberBookingBlockedMessage(verdict.reason, ctx.plan), offer_plan: offeredPlan },
+            409
+          );
         } else {
-          return jsonResponse({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+          return jsonResponse({ error: memberBookingBlockedMessage(verdict.reason, ctx.plan) }, 409);
         }
       }
       ticketsToConsume = verdict.ticketsToConsume;

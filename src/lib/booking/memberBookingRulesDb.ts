@@ -151,7 +151,7 @@ export async function loadMemberBookingRuleContext(
 export async function evaluateLoadedMemberBooking(
   ctx: MemberBookingRuleContext,
   candidate: BookingCandidate,
-  params?: { nowIso?: string; excludeReservationId?: string }
+  params?: { nowIso?: string; excludeReservationId?: string; confirmTicketUse?: boolean }
 ): Promise<BookingRuleResult> {
   if (!ctx.schemaReady) return { ok: true, ticketsToConsume: 0, reason: null, offerPlanConversion: null };
   return evaluateMemberBooking({
@@ -162,6 +162,7 @@ export async function evaluateLoadedMemberBooking(
     candidate,
     nowIso: params?.nowIso ?? new Date().toISOString(),
     excludeReservationId: params?.excludeReservationId,
+    confirmTicketUse: params?.confirmTicketUse,
   });
 }
 

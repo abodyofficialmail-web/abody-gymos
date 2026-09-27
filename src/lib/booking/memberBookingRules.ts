@@ -6,6 +6,24 @@ import {
 } from "@/lib/memberPlans";
 
 export const MEMBER_BOOKING_BLOCKED_MESSAGE = "この時間は予約できません";
+export const MEMBER_BOOKING_QUOTA_FULL_MESSAGE = "予約数がいっぱいです";
+export const MEMBER_BOOKING_WEEKLY_MIX_MESSAGE = "他店舗併用のため、今週は3コマまでです";
+export const MEMBER_BOOKING_TICKET_CONFIRM_MESSAGE = "チケットを利用しますか？";
+
+export function memberBookingBlockedMessage(
+  reason: string | null | undefined,
+  plan?: MembershipPlan | null
+): string {
+  if (reason === "weekly_mix") {
+    const cap = plan ? limitsForMembershipPlan(plan).weeklyMaxKoma : 3;
+    if (cap === 3) return MEMBER_BOOKING_WEEKLY_MIX_MESSAGE;
+    return `他店舗併用のため、今週は${cap}コマまでです`;
+  }
+  if (reason === "quota" || reason === "tickets") return MEMBER_BOOKING_QUOTA_FULL_MESSAGE;
+  if (reason === "confirm_ticket") return MEMBER_BOOKING_TICKET_CONFIRM_MESSAGE;
+  if (reason === "daily_limit") return "同じ日は2コマまでです";
+  return MEMBER_BOOKING_BLOCKED_MESSAGE;
+}
 export const BOOKING_RULES_ZONE = "Asia/Tokyo";
 
 export type RuleReservation = {
@@ -36,6 +54,8 @@ export type BookingRuleInput = {
   excludeReservationId?: string;
   /** 入会日 YYYY-MM-DD。未設定・不正は毎月1日始まり */
   joinedAtYmd?: string | null;
+  /** 会員が「チケットを使う」と答えたあとだけ消化する */
+  confirmTicketUse?: boolean;
 };
 
 export type PlanConversionOffer = "monthly_10" | "monthly_20";
@@ -315,11 +335,17 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
   const limits: MemberPlanLimits = limitsForMembershipPlan(plan);
   const newKoma = komaForRange(input.candidate.start_at, input.candidate.end_at, zone);
   const tickets = Math.max(0, Math.floor(input.ticketKoma));
+  let ticketsNeeded = 0;
 
   if (limits.maxDailyKoma != null && candidateYmd) {
     const daily = komaOnLocalDate(rows, candidateYmd, zone);
     if (daily + newKoma > limits.maxDailyKoma) {
-      return blocked("daily_limit", plan);
+      // 30分受け放題は、チケットで同じ日を60分（2コマ）まで伸ばせる
+      const dayCapWithTicket = plan === "unlimited_30" ? 2 : limits.maxDailyKoma;
+      if (daily + newKoma > dayCapWithTicket) {
+        return blocked("daily_limit", plan);
+      }
+      ticketsNeeded = Math.max(ticketsNeeded, daily + newKoma - limits.maxDailyKoma);
     }
   }
 
@@ -330,7 +356,6 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
   );
   const mix = usesCrossStoreOrOnline(weekRows);
 
-  let ticketsNeeded = 0;
   if (limits.requiresTickets) {
     ticketsNeeded = newKoma;
   }
@@ -364,12 +389,21 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
   if (mix) {
     const weekly = komaInWeek(rows, weekStart, zone);
     if (weekly + newKoma > limits.weeklyMaxKoma) {
-      ticketsNeeded = Math.max(ticketsNeeded, weekly + newKoma - limits.weeklyMaxKoma);
+      return blocked("weekly_mix", plan);
     }
   }
 
   if (ticketsNeeded > tickets) {
     return blocked(limits.requiresTickets ? "tickets" : "quota", plan);
+  }
+
+  if (ticketsNeeded > 0 && !limits.requiresTickets && !input.confirmTicketUse) {
+    return {
+      ok: false,
+      ticketsToConsume: ticketsNeeded,
+      reason: "confirm_ticket",
+      offerPlanConversion: null,
+    };
   }
 
   return allowed(ticketsNeeded);

@@ -17,7 +17,7 @@ import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChann
 import { pushLineTextAsChunks } from "@/lib/lineMessagingPush";
 import { lineMessageForReschedule } from "@/lib/lineReservationMessage";
 import { insertReservationChangeLog, requestUserAgent } from "@/lib/reservationChangeLog";
-import { MEMBER_BOOKING_BLOCKED_MESSAGE } from "@/lib/booking/memberBookingRules";
+import { memberBookingBlockedMessage } from "@/lib/booking/memberBookingRules";
 import { evaluateLoadedMemberBooking, loadMemberBookingRuleContext } from "@/lib/booking/memberBookingRulesDb";
 import { isOctoberEarlyAccessDate, memberHasOctoberEarlyAccess } from "@/lib/booking/octoberEarlyAccess";
 
@@ -296,9 +296,9 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
           store_id: cur.store_id,
           session_type: cur.session_type ?? "store",
         },
-        { excludeReservationId: cur.id }
+        { excludeReservationId: cur.id, confirmTicketUse: true }
       );
-      if (!verdict.ok) return json({ error: MEMBER_BOOKING_BLOCKED_MESSAGE }, 409);
+      if (!verdict.ok) return json({ error: memberBookingBlockedMessage(verdict.reason, ctx.plan) }, 409);
     }
 
     const nextCount = Number.isFinite(count) ? count + 1 : 1;

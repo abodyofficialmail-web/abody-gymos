@@ -91,21 +91,48 @@ describe("evaluateMemberBooking", () => {
     assert.equal(result.ok, true);
   });
 
-  it("blocks 2 koma on the same day for 30-min unlimited", () => {
+  it("asks to use a ticket for a second koma on the same day", () => {
     const result = evaluateMemberBooking({
       plan: "unlimited_30",
-      ticketKoma: 5,
+      ticketKoma: 1,
       reservations: [res({ start_at: iso("2026-09-22", "10:00"), end_at: iso("2026-09-22", "10:30") })],
       blockedDates: [],
       candidate: { start_at: iso("2026-09-22", "18:00"), end_at: iso("2026-09-22", "18:30"), store_id: STORE_A },
       nowIso,
     });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, "daily_limit");
-    assert.equal(result.offerPlanConversion, null);
+    assert.equal(result.reason, "confirm_ticket");
+    assert.equal(result.ticketsToConsume, 1);
+    const confirmed = evaluateMemberBooking({
+      plan: "unlimited_30",
+      ticketKoma: 1,
+      confirmTicketUse: true,
+      reservations: [res({ start_at: iso("2026-09-22", "10:00"), end_at: iso("2026-09-22", "10:30") })],
+      blockedDates: [],
+      candidate: { start_at: iso("2026-09-22", "18:00"), end_at: iso("2026-09-22", "18:30"), store_id: STORE_A },
+      nowIso,
+    });
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.ticketsToConsume, 1);
   });
 
-  it("lets tickets cover extra hold but not same-day 2 koma", () => {
+  it("still blocks a third koma on the same day even with tickets", () => {
+    const result = evaluateMemberBooking({
+      plan: "unlimited_30",
+      ticketKoma: 5,
+      reservations: [
+        res({ start_at: iso("2026-09-22", "10:00"), end_at: iso("2026-09-22", "10:30") }),
+        res({ start_at: iso("2026-09-22", "11:00"), end_at: iso("2026-09-22", "11:30") }),
+      ],
+      blockedDates: [],
+      candidate: { start_at: iso("2026-09-22", "18:00"), end_at: iso("2026-09-22", "18:30"), store_id: STORE_A },
+      nowIso,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "daily_limit");
+  });
+
+  it("asks before using a ticket for a 3rd hold", () => {
     const extraHold = evaluateMemberBooking({
       plan: "unlimited_30",
       ticketKoma: 1,
@@ -117,8 +144,23 @@ describe("evaluateMemberBooking", () => {
       candidate: { start_at: iso("2026-09-24", "10:00"), end_at: iso("2026-09-24", "10:30"), store_id: STORE_A },
       nowIso,
     });
-    assert.equal(extraHold.ok, true);
+    assert.equal(extraHold.ok, false);
+    assert.equal(extraHold.reason, "confirm_ticket");
     assert.equal(extraHold.ticketsToConsume, 1);
+    const confirmed = evaluateMemberBooking({
+      plan: "unlimited_30",
+      ticketKoma: 1,
+      confirmTicketUse: true,
+      reservations: [
+        res({ start_at: iso("2026-09-22", "10:00"), end_at: iso("2026-09-22", "10:30") }),
+        res({ start_at: iso("2026-09-23", "10:00"), end_at: iso("2026-09-23", "10:30") }),
+      ],
+      blockedDates: [],
+      candidate: { start_at: iso("2026-09-24", "10:00"), end_at: iso("2026-09-24", "10:30"), store_id: STORE_A },
+      nowIso,
+    });
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.ticketsToConsume, 1);
   });
 
   it("blocks more than 2 koma on the same day for 60-min plan", () => {
@@ -273,6 +315,7 @@ describe("evaluateMemberBooking", () => {
       nowIso: wedNow,
     });
     assert.equal(over.ok, false);
+    assert.equal(over.reason, "weekly_mix");
   });
 
   it("applies weekly max 6 for 60-min plan when mixing online", () => {

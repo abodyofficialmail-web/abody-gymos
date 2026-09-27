@@ -279,6 +279,7 @@ export default function BookingPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [planConvertOffer, setPlanConvertOffer] = useState<"monthly_10" | "monthly_20" | null>(null);
+  const [ticketConfirmKoma, setTicketConfirmKoma] = useState<number | null>(null);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
   const listDays = useMemo(
@@ -754,11 +755,14 @@ export default function BookingPage() {
     }
   }
 
-  async function handleCreateReservation(convertToOfferedPlan = false) {
+  async function handleCreateReservation(opts?: { convert?: boolean; useTicket?: boolean }) {
     if (!selectedSlot || !selectedDate) return;
+    const convertToOfferedPlan = Boolean(opts?.convert);
+    const useTicket = Boolean(opts?.useTicket);
     setBusy(true);
     setError(null);
     if (!convertToOfferedPlan) setPlanConvertOffer(null);
+    if (!useTicket) setTicketConfirmKoma(null);
     try {
       const v = validateMemberEmail(memberEmailInput);
       if (!v.ok) {
@@ -782,6 +786,7 @@ export default function BookingPage() {
         start_at: dayjs(selectedSlot.startAt).tz(TZ).format(),
         end_at: dayjs(selectedSlot.endAt).tz(TZ).format(),
         convert_to_plan: convertToOfferedPlan ? planConvertOffer ?? undefined : undefined,
+        use_ticket: useTicket || undefined,
       });
       const qs = new URLSearchParams({
         storeName: selectedStoreName,
@@ -795,7 +800,13 @@ export default function BookingPage() {
       });
       window.location.href = "/booking/complete?" + qs.toString();
     } catch (e: any) {
-      const payload = e?.payload as { offer_plan?: "monthly_10" | "monthly_20" } | undefined;
+      const payload = e?.payload as
+        | { offer_plan?: "monthly_10" | "monthly_20"; confirm_ticket?: boolean; tickets_to_consume?: number }
+        | undefined;
+      if (payload?.confirm_ticket && !useTicket) {
+        setTicketConfirmKoma(Math.max(1, Number(payload.tickets_to_consume) || 1));
+        return;
+      }
       if (payload?.offer_plan && !convertToOfferedPlan) {
         setPlanConvertOffer(payload.offer_plan);
         return;
@@ -1391,7 +1402,7 @@ export default function BookingPage() {
 
           <button
             type="button"
-            onClick={() => void handleCreateReservation(false)}
+            onClick={() => void handleCreateReservation()}
             disabled={busy}
             className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-white font-semibold disabled:opacity-60"
             style={{ background: "var(--accent)" }}
@@ -1401,22 +1412,51 @@ export default function BookingPage() {
         </section>
       ) : null}
 
+      {ticketConfirmKoma ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+          <div className="w-full max-w-[440px] rounded-2xl border border-line bg-white p-5 shadow-card space-y-4">
+            <div className="text-base font-semibold">チケットを利用しますか？</div>
+            <div className="text-sm text-ink-700 leading-relaxed">
+              この予約でチケットを{ticketConfirmKoma}枚使います。
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setTicketConfirmKoma(null)}
+                className="flex-1 rounded-xl border border-line px-4 py-3 text-sm font-medium disabled:opacity-60"
+              >
+                戻る
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleCreateReservation({ useTicket: true })}
+                className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                style={{ background: "var(--accent)" }}
+              >
+                {busy ? "予約中…" : "チケットを使って予約する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {planConvertOffer ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
           <div className="w-full max-w-[440px] rounded-2xl border border-line bg-white p-5 shadow-card space-y-4">
             <div className="text-base font-semibold">
-              {planConvertOffer === "monthly_20" ? "月20コマプランへの変更" : "月10コマプランへの変更"}
+              {planConvertOffer === "monthly_20" ? "月20コマプランに変更しますか？" : "10コマプランに変更しますか？"}
             </div>
             <div className="text-sm text-ink-700 leading-relaxed space-y-2">
               <p>
-                この予約をとるには、
-                {planConvertOffer === "monthly_20" ? "月20コマプラン" : "月10コマプラン"}
-                への変更が必要です。
+                {planConvertOffer === "monthly_20"
+                  ? "変更すると、今回の予約を含め月20コマまで予約できます。"
+                  : "変更すると、3コマ目・4コマ目も予約できます。"}
               </p>
               <p>
-                変更すると今回の予約は取れます。ただし、月に
-                {planConvertOffer === "monthly_20" ? "20" : "10"}
-                コマを超える予約はできなくなります。
+                月に{planConvertOffer === "monthly_20" ? "20" : "10"}
+                コマを超える予約はできません。
               </p>
             </div>
             <div className="flex gap-3">
@@ -1431,7 +1471,7 @@ export default function BookingPage() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void handleCreateReservation(true)}
+                onClick={() => void handleCreateReservation({ convert: true })}
                 className="flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
                 style={{ background: "var(--accent)" }}
               >
