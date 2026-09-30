@@ -35,9 +35,10 @@ type MemberRow = {
   store_name?: string | null;
   trainer_visibility_pass_active?: boolean;
   trainer_visibility_pass_email?: string | null;
+  meal_personal_active?: boolean;
 };
 
-type BookingFilter = "all" | "low" | "zero" | "trainer_pass";
+type BookingFilter = "all" | "low" | "zero" | "meal_personal" | "trainer_pass";
 type SortMode = "default" | "response_rate" | "booking_count";
 
 type MemberSurveyStats = {
@@ -188,6 +189,8 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
           resolveMembershipStatus(m.membership_status, m.is_active) === "active" &&
           (bookingCounts[m.id] ?? 0) === 0
       );
+    } else if (bookingFilter === "meal_personal") {
+      list = list.filter((m) => Boolean(m.meal_personal_active));
     } else if (bookingFilter === "trainer_pass") {
       list = list.filter((m) => Boolean(m.trainer_visibility_pass_active));
     }
@@ -300,6 +303,7 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
               ["all", "すべて"],
               ["low", `${monthLabel} ${LOW_BOOKING_MAX}件以下`],
               ["zero", `${monthLabel} 0件`],
+              ["meal_personal", "食事パーソナル"],
               ["trainer_pass", "出勤表示パス"],
             ] as const
           ).map(([id, label]) => {
@@ -409,6 +413,11 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
                 )}
                 {m.store_name ? (
                   <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-700">{m.store_name}</span>
+                ) : null}
+                {m.meal_personal_active ? (
+                  <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-orange-800">
+                    食事パーソナル
+                  </span>
                 ) : null}
                 {m.trainer_visibility_pass_active ? (
                   <span

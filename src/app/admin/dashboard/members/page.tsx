@@ -2,6 +2,7 @@ import { unstable_noStore as noStore } from "next/cache";
 import { DashboardShell } from "../_components/DashboardShell";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { MembersClient } from "./membersClient";
+import { isMemberMealPersonalFullEnabled } from "@/lib/memberMealPersonalPass";
 import { isTrainerVisibilityPassActive, isTrainerVisibilityTestAccount } from "@/lib/trainerVisibilityPass";
 
 export const dynamic = "force-dynamic";
@@ -124,6 +125,21 @@ export default async function AdminDashboardMembersPage() {
     }
   }
 
+  const mealPassById = new Map<
+    string,
+    { meal_personal_pass_status?: string | null; meal_personal_pass_current_period_end?: string | null }
+  >();
+  {
+    const passRes = await (supabase as any)
+      .from("members")
+      .select("id, meal_personal_pass_status, meal_personal_pass_current_period_end");
+    if (!passRes.error) {
+      for (const row of passRes.data ?? []) {
+        mealPassById.set(String(row.id), row);
+      }
+    }
+  }
+
   const normalizedMembers =
     (members ?? []).map((m: any) => {
       const passActive =
@@ -141,6 +157,10 @@ export default async function AdminDashboardMembersPage() {
         membership_plan: (m as any)?.membership_plan ?? null,
         trainer_visibility_pass_active: passActive,
         trainer_visibility_pass_email: (m as any)?.trainer_visibility_pass_email ?? null,
+        meal_personal_active: isMemberMealPersonalFullEnabled({
+          memberCode: m.member_code,
+          pass: mealPassById.get(String(m.id)) ?? null,
+        }),
       };
     }) ?? [];
 
