@@ -963,7 +963,7 @@ export function MealPersonalPanel({
   const feedbackEndpoint = apiPath.replace(/\/meal-logs\/?$/, "/meal-feedback");
 
   const homeBody = compact ? (
-    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="min-w-0 space-y-4 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-5">
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-semibold text-slate-500">
           {karteDates.length > 1 ? "左にスライドで過去の記録" : "今日の記録"}
@@ -995,14 +995,14 @@ export function MealPersonalPanel({
           if (!el || el.clientWidth <= 0) return;
           setKartePage(Math.round(el.scrollLeft / el.clientWidth));
         }}
-        className="flex snap-x snap-mandatory overflow-x-auto"
+        className="flex w-full min-w-0 snap-x snap-mandatory overflow-x-auto"
       >
         {karteDates.map((date) => {
           const dayMeals = date === data.today ? data.today_meals : data.meals.filter((m) => m.log_date === date);
           const dayTotals = date === data.today ? data.totals : sumMeals(dayMeals);
           const dayRemaining = date === data.today ? remaining : remainingFromTarget(data.nutrition ?? null, dayTotals);
           return (
-            <div key={date} className="min-w-full shrink-0 snap-start space-y-4">
+            <div key={date} className="min-w-0 shrink-0 snap-start space-y-4 overflow-hidden" style={{ flex: "0 0 100%" }}>
               <IntakeDashboard
                 today={date}
                 totals={dayTotals}
@@ -1015,6 +1015,7 @@ export function MealPersonalPanel({
                 intakeMode={intakeMode}
                 onIntakeMode={setIntakeMode}
                 showTitle={false}
+                fit
                 intakeLabel={date === data.today ? "今日の摂取量" : `${formatYmd(date)}の摂取量`}
               />
               <div className="space-y-2">
@@ -1647,7 +1648,7 @@ function MealLogCard({
     <div className="rounded-xl border border-slate-200 px-3 py-2 space-y-2">
       <div className="flex gap-3">
         {photos.length ? (
-          <div className="flex gap-1">
+          <div className="flex shrink-0 gap-1">
             {photos.slice(0, 2).map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img key={src} src={src} alt="" className="h-14 w-14 rounded-lg object-cover" />
@@ -1657,11 +1658,11 @@ function MealLogCard({
           <div className="h-14 w-14 rounded-lg bg-slate-100" />
         )}
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold leading-snug text-slate-900">
+          <div className="break-words text-sm font-semibold leading-snug text-slate-900">
             {showDate ? `${formatYmd(meal.log_date)} ` : ""}
             {meal.items.length ? meal.items.join("・") : MEAL_SLOT_LABELS[meal.meal_slot]}
           </div>
-          <div className="text-xs text-slate-500">
+          <div className="break-words text-xs text-slate-500">
             {MEAL_SLOT_LABELS[meal.meal_slot]} {meal.kcal}kcal　P{meal.protein_g} / F{meal.fat_g} / C{meal.carb_g}
           </div>
           {meal.note ? <div className="text-[11px] text-slate-500">{meal.note}</div> : null}
@@ -1753,6 +1754,7 @@ function IntakeDashboard({
   showTitle = true,
   weightHint = false,
   intakeLabel = "今日の摂取量",
+  fit = false,
 }: {
   today: string;
   totals: MealDayTotals;
@@ -1767,6 +1769,7 @@ function IntakeDashboard({
   showTitle?: boolean;
   weightHint?: boolean;
   intakeLabel?: string;
+  fit?: boolean;
 }) {
   const targetKcal = nutrition?.intake_kcal ?? 0;
   const remainingKcal = remaining?.kcal ?? Math.max(0, targetKcal - totals.kcal);
@@ -1784,7 +1787,7 @@ function IntakeDashboard({
       ) : (
         <div className="text-2xl font-bold tracking-tight text-slate-900">{formatHomeDate(today)}</div>
       )}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className={["rounded-2xl border border-slate-200 bg-white shadow-sm", fit ? "p-3" : "p-5"].join(" ")}>
         <div className="text-lg font-bold text-slate-900">{intakeLabel}</div>
         <CalorieRing
           consumed={totals.kcal}
@@ -1792,8 +1795,9 @@ function IntakeDashboard({
           remaining={remainingKcal}
           centerValue={centerValue}
           centerLabel={centerLabel}
+          fit={fit}
         />
-        <div className="mt-5 grid grid-cols-3 gap-3">
+        <div className={["mt-5 grid grid-cols-3", fit ? "gap-2" : "gap-3"].join(" ")}>
           <MacroBar label="たんぱく質" consumed={totals.protein_g} target={nutrition?.protein_g ?? 0} color="#f97316" />
           <MacroBar label="脂質" consumed={totals.fat_g} target={nutrition?.fat_g ?? 0} color="#eab308" />
           <MacroBar label="炭水化物" consumed={totals.carb_g} target={nutrition?.carb_g ?? 0} color="#22c55e" />
@@ -1869,14 +1873,16 @@ function CalorieRing({
   remaining,
   centerValue,
   centerLabel,
+  fit = false,
 }: {
   consumed: number;
   target: number;
   remaining: number;
   centerValue: number;
   centerLabel: string;
+  fit?: boolean;
 }) {
-  const size = 168;
+  const size = fit ? 124 : 168;
   const stroke = 10;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -1886,12 +1892,12 @@ function CalorieRing({
   const remainingShown = remaining >= 0 ? remaining : 0;
 
   return (
-    <div className="mt-4 flex items-center justify-between gap-2">
-      <div className="w-16 text-center">
-        <div className="text-2xl font-bold text-slate-900">{remainingShown}</div>
-        <div className="mt-0.5 text-[11px] leading-tight text-slate-500">残り摂取量</div>
+    <div className="mt-4 flex min-w-0 items-center justify-between gap-1">
+      <div className={fit ? "w-12 shrink-0 text-center" : "w-16 shrink-0 text-center"}>
+        <div className={fit ? "text-lg font-bold text-slate-900" : "text-2xl font-bold text-slate-900"}>{remainingShown}</div>
+        <div className="mt-0.5 text-[11px] leading-tight text-slate-500">{fit ? <>残り<br />摂取量</> : "残り摂取量"}</div>
       </div>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="h-auto max-w-[48%] shrink">
         <g transform={`rotate(140 ${size / 2} ${size / 2})`}>
           <circle
             cx={size / 2}
@@ -1914,15 +1920,15 @@ function CalorieRing({
             strokeDasharray={`${arc * ratio} ${c}`}
           />
         </g>
-        <text x="50%" y="46%" textAnchor="middle" className="fill-slate-900" fontSize="32" fontWeight="700">
+        <text x="50%" y="46%" textAnchor="middle" className="fill-slate-900" fontSize={fit ? "26" : "32"} fontWeight="700">
           {centerValue}
         </text>
         <text x="50%" y="60%" textAnchor="middle" className="fill-slate-500" fontSize="11">
           {centerLabel}
         </text>
       </svg>
-      <div className="w-16 text-center">
-        <div className="text-2xl font-bold text-slate-900">{target || "—"}</div>
+      <div className={fit ? "w-12 shrink-0 text-center" : "w-16 shrink-0 text-center"}>
+        <div className={fit ? "text-lg font-bold text-slate-900" : "text-2xl font-bold text-slate-900"}>{target || "—"}</div>
         <div className="mt-0.5 text-[11px] leading-tight text-slate-500">目標値</div>
       </div>
     </div>
@@ -1944,7 +1950,7 @@ function MacroBar({
   const over = target > 0 && consumed > target;
   return (
     <div>
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+      <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold text-slate-600">
         <span className="h-2 w-2 rounded-full" style={{ background: color }} />
         {label}
       </div>
