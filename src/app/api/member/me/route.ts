@@ -13,6 +13,12 @@ import { fetchOnShiftTrainerNamesBySlots } from "@/lib/onShiftTrainers";
 import { canBookOrLogin } from "@/lib/memberMembershipStatus";
 import { remainingBookableKoma } from "@/lib/booking/memberBookingRules";
 import { loadMemberBookingRuleContext, snapshotFromContext } from "@/lib/booking/memberBookingRulesDb";
+import {
+  isMissingWeightReminderColumn,
+  isWeightReminderEnabled,
+  isWeightReminderOptedOut,
+  saveWeightReminderEnabled,
+} from "@/lib/weightReminderPreference";
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -34,10 +40,6 @@ function isMissingDbColumn(err: { message?: string } | null | undefined, column:
 
 function isMissingReminderColumn(err: { message?: string } | null | undefined): boolean {
   return isMissingDbColumn(err, "reservation_reminder_line_enabled");
-}
-
-function isMissingWeightReminderColumn(err: { message?: string } | null | undefined): boolean {
-  return isMissingDbColumn(err, "weight_reminder_line_enabled");
 }
 
 const patchSchema = z
@@ -220,10 +222,11 @@ export async function GET() {
       typeof (member as any).reservation_reminder_line_enabled === "boolean"
         ? Boolean((member as any).reservation_reminder_line_enabled)
         : true;
-    const weightReminderEnabled =
-      typeof (member as any).weight_reminder_line_enabled === "boolean"
-        ? Boolean((member as any).weight_reminder_line_enabled)
-        : true;
+    const weightColumn = (member as { weight_reminder_line_enabled?: boolean | null }).weight_reminder_line_enabled;
+    const weightReminderEnabled = isWeightReminderEnabled(
+      typeof weightColumn === "boolean" ? weightColumn : undefined,
+      await isWeightReminderOptedOut(supabase, memberId)
+    );
 
     const trainerVisibilityPass = await fetchTrainerVisibilityPassForMemberId(
       supabase,
@@ -337,48 +340,48 @@ export async function PATCH(req: Request) {
       }
     }
 
-    const update: Record<string, boolean> = {};
+    let reservationReminderEnabled: boolean | undefined;
     if (parsed.data.reservation_reminder_line_enabled !== undefined) {
-      update.reservation_reminder_line_enabled = parsed.data.reservation_reminder_line_enabled;
-    }
-    if (parsed.data.weight_reminder_line_enabled !== undefined) {
-      update.weight_reminder_line_enabled = parsed.data.weight_reminder_line_enabled;
-    }
-
-    const selectCols = ["id", ...Object.keys(update)].join(", ");
-    const { data: updated, error: uErr } = await (supabase as any)
-      .from("members")
-      .update(update)
-      .eq("id", memberId)
-      .select(selectCols)
-      .maybeSingle();
-
-    if (uErr) {
-      if (isMissingReminderColumn(uErr) || isMissingWeightReminderColumn(uErr)) {
-        return json(
-          {
-            error: "設定の保存準備ができていません。しばらくしてからお試しください。",
-            detail: uErr.message,
-          },
-          503
-        );
+      const value = parsed.data.reservation_reminder_line_enabled;
+      const { data: updated, error: uErr } = await (supabase as any)
+        .from("members")
+        .update({ reservation_reminder_line_enabled: value })
+        .eq("id", memberId)
+        .select("id, reservation_reminder_line_enabled")
+        .maybeSingle();
+      if (uErr) {
+        if (isMissingReminderColumn(uErr)) {
+          return json(
+            {
+              error: "設定の保存準備ができていません。しばらくしてからお試しください。",
+              detail: uErr.message,
+            },
+            503
+          );
+        }
+        return json({ error: "設定の更新に失敗しました", detail: uErr.message }, 500);
       }
-      return json({ error: "設定の更新に失敗しました", detail: uErr.message }, 500);
+      reservationReminderEnabled = Boolean(updated?.reservation_reminder_line_enabled ?? value);
+    }
+
+    let weightReminderEnabled: boolean | undefined;
+    if (parsed.data.weight_reminder_line_enabled !== undefined) {
+      const saved = await saveWeightReminderEnabled(
+        supabase,
+        memberId,
+        parsed.data.weight_reminder_line_enabled
+      );
+      if (!saved.ok) return json({ error: "設定の更新に失敗しました", detail: saved.message }, 500);
+      weightReminderEnabled = saved.enabled;
     }
 
     return json(
       {
         ok: true,
         member: {
-          id: updated?.id ?? memberId,
-          reservation_reminder_line_enabled:
-            parsed.data.reservation_reminder_line_enabled !== undefined
-              ? Boolean(updated?.reservation_reminder_line_enabled ?? parsed.data.reservation_reminder_line_enabled)
-              : undefined,
-          weight_reminder_line_enabled:
-            parsed.data.weight_reminder_line_enabled !== undefined
-              ? Boolean(updated?.weight_reminder_line_enabled ?? parsed.data.weight_reminder_line_enabled)
-              : undefined,
+          id: memberId,
+          reservation_reminder_line_enabled: reservationReminderEnabled,
+          weight_reminder_line_enabled: weightReminderEnabled,
         },
       },
       200

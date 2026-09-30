@@ -5,6 +5,12 @@ import { lineMemberProfileReachable, linePushTokenForMemberRow } from "@/lib/lin
 import { isMemberWeightLogEnabled, WEIGHT_LOG_PILOT_CODES, WEIGHT_LOG_PILOT_ONLY } from "@/lib/memberWeightLogRollout";
 import { memberWeightLogPageUrl } from "@/lib/memberWeightLogSigned";
 import { isMissingWeightLogTable, tokyoTodayYmd, WEIGHT_LOG_TZ } from "@/lib/memberWeightLogs";
+import {
+  isMissingWeightReminderColumn,
+  isWeightReminderEnabled,
+  isWeightReminderOptedOut,
+  memberIdsWithWeightReminderOptOut,
+} from "@/lib/weightReminderPreference";
 
 export const MORNING_WEIGHT_REMINDER_HOUR_JST = 7;
 
@@ -80,11 +86,6 @@ function isActiveMember(m: { membership_status?: string | null; is_active?: bool
   return m.is_active === true;
 }
 
-function isMissingWeightReminderColumn(err: { message?: string } | null | undefined): boolean {
-  const msg = String(err?.message ?? "");
-  return /weight_reminder_line_enabled/i.test(msg) && (/does not exist|column/i.test(msg) || /PGRST/i.test(msg) || /Could not find/i.test(msg));
-}
-
 export type MorningWeightReminderTarget = {
   id: string;
   member_code: string;
@@ -146,12 +147,13 @@ export async function listMorningWeightReminderTargets(
     if (!isMissingWeightReminderColumn(e as { message?: string })) throw e;
     rows = await listMorningWeightReminderTargetsWithSelect(supabase, MEMBER_SELECT_BASE);
   }
+  const optOuts = await memberIdsWithWeightReminderOptOut(supabase);
   return rows.filter(
     (m) =>
       isMemberWeightLogEnabled(m.member_code) &&
       isActiveMember(m) &&
       Boolean(m.line_user_id) &&
-      m.weight_reminder_line_enabled !== false
+      isWeightReminderEnabled(m.weight_reminder_line_enabled, optOuts.has(m.id))
   );
 }
 
@@ -276,8 +278,18 @@ export async function sendMorningWeightReminderForCode(
   }
   if (error) return { member_code: memberCode, sent: false, error: "member_fetch_failed", detail: error.message };
   if (!data) return { member_code: memberCode, sent: false, error: "member_not_found" };
+  const member = data as unknown as MorningWeightReminderTarget;
+  if (
+    !opts.force &&
+    !(await isWeightReminderEnabled(
+      member.weight_reminder_line_enabled,
+      await isWeightReminderOptedOut(supabase, member.id)
+    ))
+  ) {
+    member.weight_reminder_line_enabled = false;
+  }
   return sendMorningWeightReminder(supabase, {
-    member: data as unknown as MorningWeightReminderTarget,
+    member,
     dryRun: opts.dryRun,
     force: opts.force,
     recordDispatch: opts.recordDispatch,
