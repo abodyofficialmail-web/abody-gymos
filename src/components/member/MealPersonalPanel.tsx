@@ -19,12 +19,15 @@ import {
   type MealFeedback,
   type MealRemaining,
   type MealServing,
+  remainingFromTarget,
+  sumMeals,
   type MealSlot,
   type MemberLifestyleLogView,
   type MemberMealLogView,
 } from "@/lib/memberMealLogs";
 import type { MealEstimate, MealEstimateItem } from "@/lib/memberMealEstimate";
 import { MEAL_CHAT_GREETING } from "@/lib/memberMealChat";
+import { MealKarteFeedback } from "@/components/member/MealKarteFeedback";
 import { MealPersonalChat } from "@/components/member/MealPersonalChat";
 import { MealBarcodeInput } from "@/components/member/MealBarcodeInput";
 import { NearbyMealSuggest } from "@/components/member/NearbyMealSuggest";
@@ -55,6 +58,7 @@ type MealDashboard = {
   analysis?: MealAnalysisHint;
   reminder_settings?: MealReminderSettings | null;
   store_name?: string | null;
+  meal_page_url?: string | null;
   estimate_note?: string;
   preview?: boolean;
   estimate?: MealEstimate;
@@ -109,6 +113,13 @@ function compressImage(file: File): Promise<Blob> {
 
 type MealPersonalTab = "home" | "diary" | "add" | "suggest" | "settings";
 type MealAddMode = "picker" | "chat" | "record" | "barcode";
+
+function karteHistoryDates(meals: MemberMealLogView[], today: string): string[] {
+  const past = Array.from(new Set(meals.map((m) => m.log_date).filter((d) => d && d < today))).sort((a, b) =>
+    b.localeCompare(a)
+  );
+  return [today, ...past.slice(0, 14)];
+}
 
 function formatYmd(ymd: string) {
   const dt = DateTime.fromISO(ymd, { zone: MEAL_LOG_TZ });
@@ -279,6 +290,8 @@ export function MealPersonalPanel({
   const [settingsPage, setSettingsPage] = useState<"menu" | "goal" | "reminders" | "lifestyle">("menu");
   const [addMode, setAddMode] = useState<MealAddMode>(initialSlot ? "record" : "picker");
   const [intakeMode, setIntakeMode] = useState<"intake" | "remaining">("intake");
+  const karteScrollRef = useRef<HTMLDivElement | null>(null);
+  const [kartePage, setKartePage] = useState(0);
   const [suggestView, setSuggestView] = useState<"menu" | "map">("menu");
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -946,26 +959,91 @@ export function MealPersonalPanel({
     </details>
   );
 
+  const karteDates = compact ? karteHistoryDates(data.meals, data.today) : [data.today];
+  const feedbackEndpoint = apiPath.replace(/\/meal-logs\/?$/, "/meal-feedback");
+
   const homeBody = compact ? (
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <IntakeDashboard
-        today={data.today}
-        totals={data.totals}
-        remaining={remaining}
-        nutrition={data.nutrition ?? null}
-        feedback={null}
-        analysis={undefined}
-        kcalSeries={last7DayValues(data.meals, data.today, "kcal")}
-        proteinSeries={last7DayValues(data.meals, data.today, "protein_g")}
-        intakeMode={intakeMode}
-        onIntakeMode={setIntakeMode}
-        showTitle={false}
-      />
-      <div className="space-y-2">
-        <div className="text-sm font-bold text-slate-900">{formatYmd(data.today)}の記録</div>
-        {data.today_meals.length === 0 ? <div className="text-sm text-slate-600">まだ食事がありません。</div> : null}
-        {renderMealCards(data.today_meals.slice(0, 4), false)}
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-semibold text-slate-500">
+          {karteDates.length > 1 ? "左にスライドで過去の記録" : "今日の記録"}
+        </div>
+        {data.meal_page_url ? (
+          <a
+            href={data.meal_page_url}
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800"
+          >
+            食事パーソナル
+          </a>
+        ) : (
+          <button
+            type="button"
+            disabled
+            title="この会員の食事画面を開けません"
+            className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-400"
+          >
+            食事パーソナル
+          </button>
+        )}
       </div>
+      <div
+        ref={karteScrollRef}
+        onScroll={() => {
+          const el = karteScrollRef.current;
+          if (!el || el.clientWidth <= 0) return;
+          setKartePage(Math.round(el.scrollLeft / el.clientWidth));
+        }}
+        className="flex snap-x snap-mandatory overflow-x-auto"
+      >
+        {karteDates.map((date) => {
+          const dayMeals = date === data.today ? data.today_meals : data.meals.filter((m) => m.log_date === date);
+          const dayTotals = date === data.today ? data.totals : sumMeals(dayMeals);
+          const dayRemaining = date === data.today ? remaining : remainingFromTarget(data.nutrition ?? null, dayTotals);
+          return (
+            <div key={date} className="min-w-full shrink-0 snap-start space-y-4">
+              <IntakeDashboard
+                today={date}
+                totals={dayTotals}
+                remaining={dayRemaining}
+                nutrition={data.nutrition ?? null}
+                feedback={null}
+                analysis={undefined}
+                kcalSeries={last7DayValues(data.meals, date, "kcal")}
+                proteinSeries={last7DayValues(data.meals, date, "protein_g")}
+                intakeMode={intakeMode}
+                onIntakeMode={setIntakeMode}
+                showTitle={false}
+                intakeLabel={date === data.today ? "今日の摂取量" : `${formatYmd(date)}の摂取量`}
+              />
+              <div className="space-y-2">
+                <div className="text-sm font-bold text-slate-900">{formatYmd(date)}の記録</div>
+                {dayMeals.length === 0 ? <div className="text-sm text-slate-600">まだ食事がありません。</div> : null}
+                {renderMealCards(dayMeals.slice(0, 20), false)}
+              </div>
+              {date === data.today && readOnly ? <MealKarteFeedback endpoint={feedbackEndpoint} /> : null}
+            </div>
+          );
+        })}
+      </div>
+      {karteDates.length > 1 ? (
+        <div className="flex justify-center gap-1.5">
+          {karteDates.map((date, i) => (
+            <button
+              key={date}
+              type="button"
+              aria-label={formatYmd(date)}
+              onClick={() => {
+                const el = karteScrollRef.current;
+                if (!el) return;
+                el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+              }}
+              className={i === kartePage ? "h-1.5 w-4 rounded-full bg-slate-900" : "h-1.5 w-1.5 rounded-full bg-slate-300"}
+            />
+          ))}
+        </div>
+      ) : null}
     </section>
   ) : (
     <HomeSwipePager labels={["ホーム", "体重"]}>
@@ -1674,6 +1752,7 @@ function IntakeDashboard({
   onIntakeMode,
   showTitle = true,
   weightHint = false,
+  intakeLabel = "今日の摂取量",
 }: {
   today: string;
   totals: MealDayTotals;
@@ -1687,6 +1766,7 @@ function IntakeDashboard({
   onIntakeMode: (mode: "intake" | "remaining") => void;
   showTitle?: boolean;
   weightHint?: boolean;
+  intakeLabel?: string;
 }) {
   const targetKcal = nutrition?.intake_kcal ?? 0;
   const remainingKcal = remaining?.kcal ?? Math.max(0, targetKcal - totals.kcal);
@@ -1705,7 +1785,7 @@ function IntakeDashboard({
         <div className="text-2xl font-bold tracking-tight text-slate-900">{formatHomeDate(today)}</div>
       )}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="text-lg font-bold text-slate-900">今日の摂取量</div>
+        <div className="text-lg font-bold text-slate-900">{intakeLabel}</div>
         <CalorieRing
           consumed={totals.kcal}
           target={targetKcal}

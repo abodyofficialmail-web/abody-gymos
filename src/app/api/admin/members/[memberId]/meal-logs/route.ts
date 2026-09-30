@@ -1,8 +1,15 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
+import { getAppUrl } from "@/lib/constants";
 import { loadMemberMealPersonalGate } from "@/lib/memberMealPersonalPass";
 import { loadMealPersonalDashboard } from "@/lib/memberMealDashboard";
+import { memberMealLogPageUrl } from "@/lib/memberMealLogSigned";
 import { deleteMemberMealLogsByIds, tokyoTodayYmd, updateMemberMealLog } from "@/lib/memberMealLogs";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
+
+function signedMealPageUrl(memberId: string): string | null {
+  const url = memberMealLogPageUrl(getAppUrl(), memberId);
+  return url.includes("?s=") ? url : null;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +37,7 @@ export async function GET(_request: Request, ctx: { params: { memberId: string }
     const data = await loadMealPersonalDashboard(supabase, member.id, today);
     return jsonResponse({
       enabled: Boolean(gate?.full),
+      meal_page_url: signedMealPageUrl(member.id),
       ...data,
     });
   } catch (e) {
