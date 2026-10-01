@@ -67,7 +67,13 @@ function emptyMessage(hearing: HearingMeta | null): string {
 }
 
 /** 会員カルテ：栄養目標（消費・摂取・PFC）表示＋編集 */
-export function MemberNutritionTargetSection({ memberId }: { memberId: string }) {
+export function MemberNutritionTargetSection({
+  memberId,
+  embedded = false,
+}: {
+  memberId: string;
+  embedded?: boolean;
+}) {
   const [target, setTarget] = useState<MemberNutritionTargetView | null | undefined>(undefined);
   const [hearing, setHearing] = useState<HearingMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -148,10 +154,10 @@ export function MemberNutritionTargetSection({ memberId }: { memberId: string })
     }
   };
 
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-bold text-slate-900">栄養目標（カロリー・PFC）</div>
+  const body = (
+    <>
+      <div className={embedded ? "flex justify-end" : "flex flex-wrap items-center justify-between gap-2"}>
+        {embedded ? null : <div className="text-sm font-bold text-slate-900">栄養目標（カロリー・PFC）</div>}
         {!editing ? (
           <button
             type="button"
@@ -303,7 +309,13 @@ export function MemberNutritionTargetSection({ memberId }: { memberId: string })
       ) : null}
 
       {msg ? <div className="text-xs text-slate-600">{msg}</div> : null}
-    </section>
+    </>
+  );
+
+  if (embedded) return <div className="space-y-3">{body}</div>;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">{body}</section>
   );
 }
 

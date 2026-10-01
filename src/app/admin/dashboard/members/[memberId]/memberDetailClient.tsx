@@ -56,6 +56,7 @@ import {
   KARTE_TRAINING_PARTS,
   type MenuItem,
 } from "@/lib/karteSession";
+import { parseKarteSessionTraining } from "@/lib/karteTrainingParse";
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -66,6 +67,14 @@ import {
 } from "@/lib/lowBookingMotivation";
 
 const TZ = "Asia/Tokyo";
+
+function karteNoteHasPart(content: string, part: string, id: string, date: string): boolean {
+  const parsed = parseKarteSessionTraining(content, { id, log_date: date });
+  if (parsed?.parts.includes(part)) return true;
+  const m = String(content ?? "").match(/部位\s*[:：]\s*(.+)/);
+  if (!m) return false;
+  return m[1].split(/[\/／,、]/).some((x) => x.trim() === part);
+}
 
 function surveyRateBadgeClass(rate: number | null): string {
   const base = "rounded-full px-3 py-1 text-xs font-semibold border";
@@ -99,21 +108,48 @@ function KarteSwipePager({
     const ro = new ResizeObserver(() => measure(index));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [index, measure, slides]);
+  }, [index, measure]);
 
-  function syncIndex() {
+  function currentIndex() {
     const el = scrollerRef.current;
-    if (!el || el.clientWidth <= 0) return;
-    const next = Math.max(0, Math.min(slides.length - 1, Math.round(el.scrollLeft / el.clientWidth)));
-    setIndex(next);
+    if (!el || el.clientWidth <= 0) return 0;
+    return Math.max(0, Math.min(slides.length - 1, Math.round(el.scrollLeft / el.clientWidth)));
   }
 
   function goTo(i: number) {
     const el = scrollerRef.current;
     if (!el) return;
-    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    const dest = slideRefs.current[i];
+    if (dest) {
+      const nextH = dest.scrollHeight;
+      if (!height || nextH > height) setHeight(nextH);
+    }
     setIndex(i);
+    const left = i * el.clientWidth;
+    requestAnimationFrame(() => {
+      el.scrollTo({ left, behavior: "smooth" });
+    });
   }
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    let timer = 0;
+    const onScroll = () => {
+      const next = currentIndex();
+      setIndex(next);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => measure(next), 120);
+    };
+    const onScrollEnd = () => measure(currentIndex());
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("scrollend", onScrollEnd);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("scrollend", onScrollEnd);
+      window.clearTimeout(timer);
+    };
+  }, [measure, slides.length]);
 
   return (
     <div className="space-y-3">
@@ -134,9 +170,8 @@ function KarteSwipePager({
       </div>
       <div
         ref={scrollerRef}
-        onScroll={syncIndex}
-        className="flex items-start snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        style={{ height, transition: "height 180ms ease" }}
+        className="flex w-full min-w-0 items-start snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        style={{ height }}
       >
         {slides.map((slide, i) => (
           <div
@@ -144,7 +179,8 @@ function KarteSwipePager({
             ref={(node) => {
               slideRefs.current[i] = node;
             }}
-            className="min-w-0 flex-[0_0_100%] snap-start self-start"
+            className="min-w-0 shrink-0 snap-start self-start overflow-hidden"
+            style={{ flex: "0 0 100%" }}
           >
             {slide}
           </div>
@@ -298,6 +334,7 @@ export function MemberDetailClient({
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
   const [changeLogs, setChangeLogs] = useState<ChangeLogRow[]>([]);
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
+  const [kartePartFilter, setKartePartFilter] = useState<string | null>(null);
   const [weightProgress, setWeightProgress] = useState<WeightProgressPanelData | null>(null);
   const [weightProgressLoading, setWeightProgressLoading] = useState(true);
   const [weightProgressError, setWeightProgressError] = useState<string | null>(null);
@@ -599,6 +636,10 @@ export function MemberDetailClient({
   }, [rows]);
 
   const { hearingNotes, sessionNotes } = useMemo(() => splitGoalHearingNotes(notes), [notes]);
+  const filteredSessionNotes = useMemo(() => {
+    if (!kartePartFilter) return sessionNotes;
+    return sessionNotes.filter((n) => karteNoteHasPart(n.content, kartePartFilter, n.id, n.date));
+  }, [sessionNotes, kartePartFilter]);
 
   const reservationsForToday = useMemo(() => {
     const ymd = noteDate || todayYmd;
@@ -1970,11 +2011,12 @@ export function MemberDetailClient({
         ) : null}
       </section>
 
-      <MemberGoalPhotoSection memberId={memberId} />
-
-      <MemberGoalHearingSection notes={hearingNotes} />
-
-      <MemberNutritionTargetSection memberId={memberId} />
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <KarteSwipePager labels={["目標ヒアリング", "目標写真"]}>
+          <MemberGoalHearingSection notes={hearingNotes} embedded />
+          <MemberGoalPhotoSection memberId={memberId} embedded />
+        </KarteSwipePager>
+      </section>
 
       {/* 画面下固定: メニュー追加（スクロール不要） */}
       {karteStep === "edit" ? (
@@ -1999,16 +2041,24 @@ export function MemberDetailClient({
 
       <MemberReservationHistory memberId={memberId} currentMonth={month} currentMonthRows={rows} />
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
+      {isMemberWeightLogEnabled(member.member_code) ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <KarteSwipePager labels={["体重", "目標PFC"]}>
+            <WeightLogPanel
+              compact
+              readOnly
+              showNutrition={false}
+              apiPath={`/api/admin/members/${encodeURIComponent(memberId)}/weight-logs`}
+            />
+            <MemberNutritionTargetSection memberId={memberId} embedded />
+          </KarteSwipePager>
+        </section>
+      ) : (
+        <MemberNutritionTargetSection memberId={memberId} />
+      )}
 
-        {isMemberWeightLogEnabled(member.member_code) ? (
-          <WeightLogPanel
-            compact
-            readOnly
-            apiPath={`/api/admin/members/${encodeURIComponent(memberId)}/weight-logs`}
-          />
-        ) : null}
+      <section className="min-w-0 space-y-3 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
 
         {member.meal_personal_full_enabled || isMemberMealPersonalEnabled(member.member_code) ? (
           <MealPersonalPanel
@@ -2018,106 +2068,149 @@ export function MemberDetailClient({
           />
         ) : null}
 
-        <WeightProgressPanel
-          data={weightProgress}
-          loading={weightProgressLoading}
-          error={weightProgressError}
-        />
-
-        {latestPreSession ? (
-          <div className="rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-3 text-sm space-y-1">
-            <div className="font-semibold text-slate-900">直近のセッション前ヒアリング</div>
-            <div className="text-xs text-slate-600">
-              {latestPreSession.session_date}
-              {[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).length > 0
-                ? `（${[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).join(" / ")}）`
-                : ""}
-            </div>
-            <div className="text-slate-800">{formatPreSessionSurveySummary(latestPreSession)}</div>
-          </div>
-        ) : null}
-
-        {latestSurvey ? (
-          <div
-            className={`rounded-xl border px-3 py-3 text-sm space-y-1 ${
-              latestSurvey.needs_followup
-                ? "border-red-200 bg-red-50"
-                : "border-rose-200 bg-rose-50/60"
-            }`}
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-slate-900">直近のセッション評価</span>
-              {latestSurvey.needs_followup ? (
-                <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                  要ヒアリング
-                </span>
-              ) : null}
-            </div>
-            <div className="text-xs text-slate-600">
-              {latestSurvey.session_date}
-              {[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).length > 0
-                ? `（${[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).join(" / ")}）`
-                : ""}
-            </div>
-            <div className="text-slate-800">{formatSurveySummary(latestSurvey)}</div>
-          </div>
-        ) : null}
-
-        {notes === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-        {notes !== null && sessionNotes.length === 0 && hearingNotes.length === 0 ? (
-          <div className="text-sm text-slate-600">履歴がありません。</div>
-        ) : null}
-        {notes !== null && sessionNotes.length === 0 && hearingNotes.length > 0 ? (
-          <div className="text-sm text-slate-600">セッション記録はまだありません。</div>
-        ) : null}
-        <div className="grid gap-2">
-          {sessionNotes.map((n) => {
-            const survey = surveyByDate[n.date];
-            const preSession = preSessionByDate[n.date];
-            return (
-              <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-2">
-                <div className="font-semibold">
-                  {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
-                </div>
-                <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
-                {preSession ? (
-                  <div className="rounded-lg border-l-4 border-blue-400 bg-blue-50/50 pl-3 py-2 space-y-0.5">
-                    <div className="text-xs font-semibold text-blue-800">セッション前ヒアリング（会員回答）</div>
-                    {formatPreSessionSurveyDetailLines(preSession).map((line) => (
-                      <div key={line} className="text-slate-700">
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                ) : preSessionInviteByDate[n.date] ? (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
-                    セッション前ヒアリング未回答（リマインド送信済み）
-                  </div>
-                ) : null}
-                {survey ? (
-                  <div
-                    className={`rounded-lg border-l-4 pl-3 py-2 space-y-0.5 ${
-                      survey.needs_followup
-                        ? "border-red-400 bg-red-50/80"
-                        : "border-rose-400 bg-rose-50/50"
-                    }`}
-                  >
-                    <div className="text-xs font-semibold text-rose-800">セッション評価（会員回答）</div>
-                    {formatSurveyDetailLines(survey).map((line) => (
-                      <div key={line} className="text-slate-700">
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                ) : inviteByDate[n.date] ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-                    セッションアンケート未回答（LINE送信済み）
-                  </div>
-                ) : null}
+        <KarteSwipePager labels={["カルテ履歴", "種目別MAX"]}>
+          <div className="space-y-3">
+            <div>
+              <div className="text-xs font-semibold text-slate-700">部位で絞り込み</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setKartePartFilter(null)}
+                  className={[
+                    "rounded-full border px-3 py-1.5 text-xs font-semibold",
+                    kartePartFilter === null
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50",
+                  ].join(" ")}
+                >
+                  すべて
+                </button>
+                {parts.map((p) => {
+                  const active = kartePartFilter === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setKartePartFilter(active ? null : p.id)}
+                      className={[
+                        "rounded-full border px-3 py-1.5 text-xs font-semibold",
+                        active
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50",
+                      ].join(" ")}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            </div>
+
+            {latestPreSession ? (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-3 text-sm space-y-1">
+                <div className="font-semibold text-slate-900">直近のセッション前ヒアリング</div>
+                <div className="text-xs text-slate-600">
+                  {latestPreSession.session_date}
+                  {[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).length > 0
+                    ? `（${[latestPreSession.store_name, latestPreSession.trainer_name].filter(Boolean).join(" / ")}）`
+                    : ""}
+                </div>
+                <div className="text-slate-800">{formatPreSessionSurveySummary(latestPreSession)}</div>
+              </div>
+            ) : null}
+
+            {latestSurvey ? (
+              <div
+                className={`rounded-xl border px-3 py-3 text-sm space-y-1 ${
+                  latestSurvey.needs_followup
+                    ? "border-red-200 bg-red-50"
+                    : "border-rose-200 bg-rose-50/60"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-900">直近のセッション評価</span>
+                  {latestSurvey.needs_followup ? (
+                    <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                      要ヒアリング
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-xs text-slate-600">
+                  {latestSurvey.session_date}
+                  {[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).length > 0
+                    ? `（${[latestSurvey.store_name, latestSurvey.trainer_name].filter(Boolean).join(" / ")}）`
+                    : ""}
+                </div>
+                <div className="text-slate-800">{formatSurveySummary(latestSurvey)}</div>
+              </div>
+            ) : null}
+
+            {notes === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
+            {notes !== null && sessionNotes.length === 0 && hearingNotes.length === 0 ? (
+              <div className="text-sm text-slate-600">履歴がありません。</div>
+            ) : null}
+            {notes !== null && sessionNotes.length === 0 && hearingNotes.length > 0 ? (
+              <div className="text-sm text-slate-600">セッション記録はまだありません。</div>
+            ) : null}
+            {notes !== null && sessionNotes.length > 0 && filteredSessionNotes.length === 0 ? (
+              <div className="text-sm text-slate-600">「{kartePartFilter}」の記録はありません。</div>
+            ) : null}
+            <div className="grid gap-2">
+              {filteredSessionNotes.map((n) => {
+                const survey = surveyByDate[n.date];
+                const preSession = preSessionByDate[n.date];
+                return (
+                  <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-2">
+                    <div className="font-semibold">
+                      {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+                    </div>
+                    <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
+                    {preSession ? (
+                      <div className="rounded-lg border-l-4 border-blue-400 bg-blue-50/50 pl-3 py-2 space-y-0.5">
+                        <div className="text-xs font-semibold text-blue-800">セッション前ヒアリング（会員回答）</div>
+                        {formatPreSessionSurveyDetailLines(preSession).map((line) => (
+                          <div key={line} className="text-slate-700">
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    ) : preSessionInviteByDate[n.date] ? (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+                        セッション前ヒアリング未回答（リマインド送信済み）
+                      </div>
+                    ) : null}
+                    {survey ? (
+                      <div
+                        className={`rounded-lg border-l-4 pl-3 py-2 space-y-0.5 ${
+                          survey.needs_followup
+                            ? "border-red-400 bg-red-50/80"
+                            : "border-rose-400 bg-rose-50/50"
+                        }`}
+                      >
+                        <div className="text-xs font-semibold text-rose-800">セッション評価（会員回答）</div>
+                        {formatSurveyDetailLines(survey).map((line) => (
+                          <div key={line} className="text-slate-700">
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    ) : inviteByDate[n.date] ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                        セッションアンケート未回答（LINE送信済み）
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <WeightProgressPanel
+            data={weightProgress}
+            loading={weightProgressLoading}
+            error={weightProgressError}
+            embedded
+          />
+        </KarteSwipePager>
       </section>
 
       {/* 種目選択モーダル */}

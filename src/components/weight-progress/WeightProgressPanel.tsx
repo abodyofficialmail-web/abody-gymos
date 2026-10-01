@@ -39,29 +39,33 @@ export function WeightProgressPanel({
   loading,
   error,
   compact = false,
+  embedded = false,
 }: {
   data: WeightProgressPanelData | null;
   loading?: boolean;
   error?: string | null;
   compact?: boolean;
+  embedded?: boolean;
 }) {
+  const shell = embedded ? "space-y-3" : "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3";
+
   if (loading) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
+      <div className={embedded ? "text-sm text-slate-600" : "rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600"}>
         種目別マックス重量を集計中…
       </div>
     );
   }
   if (error) {
     return (
-      <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+      <div className={embedded ? "text-sm text-rose-800" : "rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"}>
         {error}
       </div>
     );
   }
   if (!data || data.rows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+      <div className={embedded ? "rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600" : "rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600"}>
         まだ重量記録のある種目がありません。カルテに種目とkgを記録するとここに表示されます。
       </div>
     );
@@ -70,9 +74,9 @@ export function WeightProgressPanel({
   const rows = compact ? data.rows.slice(0, 12) : data.rows;
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+    <div className={shell}>
       <div className="space-y-1">
-        <div className="text-sm font-bold text-slate-900">種目別マックス重量</div>
+        {embedded ? null : <div className="text-sm font-bold text-slate-900">種目別マックス重量</div>}
         <p className="text-xs leading-relaxed text-slate-500">
           {data.yearMonthLabel}基準。初回・先月・今月の最高重量と、性別・体重・身長・年齢・履歴から推定した
           <span className="font-semibold text-slate-700">今月（{data.nextMonthLabel}）の目標重量</span>

@@ -29,7 +29,13 @@ function formatRespondedAt(iso: string) {
 }
 
 /** 会員カルテ：目標ヒアリングで提出されたなりたい体型写真 */
-export function MemberGoalPhotoSection({ memberId }: { memberId: string }) {
+export function MemberGoalPhotoSection({
+  memberId,
+  embedded = false,
+}: {
+  memberId: string;
+  embedded?: boolean;
+}) {
   const [photos, setPhotos] = useState<GoalPhoto[] | null>(null);
   const [meta, setMeta] = useState<GoalHearingMeta | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -63,10 +69,10 @@ export function MemberGoalPhotoSection({ memberId }: { memberId: string }) {
     void load();
   }, [load]);
 
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
+  const body = (
+    <>
       <div className="flex items-baseline justify-between gap-2">
-        <div className="text-sm font-bold text-slate-900">目標写真（なりたい体型）</div>
+        {embedded ? null : <div className="text-sm font-bold text-slate-900">目標写真（なりたい体型）</div>}
         {meta?.created_at ? (
           <div className="text-xs text-slate-500">回答日 {formatRespondedAt(meta.created_at)}</div>
         ) : null}
@@ -115,6 +121,12 @@ export function MemberGoalPhotoSection({ memberId }: { memberId: string }) {
           />
         </div>
       ) : null}
-    </section>
+    </>
+  );
+
+  if (embedded) return <div className="space-y-3">{body}</div>;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">{body}</section>
   );
 }
