@@ -1,6 +1,7 @@
 "use client";
 
 import { MemberBodyPhotoSection } from "@/components/karte/MemberBodyPhotoSection";
+import { MemberReservationHistory } from "@/components/karte/MemberReservationHistory";
 import { MemberGoalHearingSection, splitGoalHearingNotes } from "@/components/karte/MemberGoalHearingSection";
 import { MemberGoalPhotoSection } from "@/components/karte/MemberGoalPhotoSection";
 import { MemberNutritionTargetSection } from "@/components/karte/MemberNutritionTargetSection";
@@ -1996,24 +1997,7 @@ export function MemberDetailClient({
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
-        <div className="text-sm font-bold text-slate-900">予約履歴（当月）</div>
-        {rows === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-        {rows !== null && rows.length === 0 ? <div className="text-sm text-slate-600">予約がありません。</div> : null}
-        <div className="grid gap-2">
-          {(rows ?? []).map((r) => (
-            <div key={r.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-              <div className="font-semibold">
-                {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("M/d HH:mm")}〜
-                {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
-              </div>
-              <div className="text-xs text-slate-500">
-                トレーナー: {r.trainer_name || (r.trainer_id ?? "-")} / 店舗: {r.store_name || r.store_id}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <MemberReservationHistory memberId={memberId} currentMonth={month} currentMonthRows={rows} />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <div className="text-sm font-bold text-slate-900">カルテ（全店舗）</div>
