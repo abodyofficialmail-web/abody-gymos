@@ -2,10 +2,21 @@
 
 import { MealPersonalEntry } from "@/components/member/MealPersonalEntry";
 import { MealPersonalPanel } from "@/components/member/MealPersonalPanel";
+import { MealPersonalStart } from "@/components/member/MealPersonalStart";
 import type { MealSlot } from "@/lib/memberMealLogs";
 import { useCallback, useEffect, useState } from "react";
 
 type Gate = "checking" | "entry" | "ready";
+
+const LOGIN_ID_CONFIRMED_KEY = "meal-personal-login-id-v1";
+
+function loginIdConfirmed() {
+  try {
+    return window.localStorage.getItem(LOGIN_ID_CONFIRMED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export function MealLogClient({
   signed,
@@ -19,6 +30,7 @@ export function MealLogClient({
   const [priceLabel, setPriceLabel] = useState("食事パーソナル（月額）");
   const [subscribeUrl, setSubscribeUrl] = useState<string | null>(null);
   const [paidNotice, setPaidNotice] = useState<string | null>(null);
+  const [needsLoginId, setNeedsLoginId] = useState(false);
 
   const refresh = useCallback(async () => {
     if (signed) {
@@ -52,9 +64,11 @@ export function MealLogClient({
         return;
       }
       const json = (await res.json().catch(() => ({}))) as {
-        member?: { meal_personal_enabled?: boolean };
+        member?: { meal_personal_enabled?: boolean; email?: string | null };
         meal_personal_pass?: { active?: boolean; subscribe_url?: string | null; price_label?: string };
       };
+      const email = String(json?.member?.email ?? "").trim();
+      setNeedsLoginId(!email || !loginIdConfirmed());
       const enabled = Boolean(json?.member?.meal_personal_enabled || json?.meal_personal_pass?.active || justPaid);
       setPriceLabel(json?.meal_personal_pass?.price_label || "食事パーソナル（月額）");
       setSubscribeUrl(json?.meal_personal_pass?.subscribe_url ?? "/api/member/meal-personal/checkout");
@@ -76,6 +90,22 @@ export function MealLogClient({
 
   if (gate === "entry") {
     return <MealPersonalEntry onLoggedIn={() => void refresh()} />;
+  }
+
+  if (!signed && needsLoginId) {
+    return (
+      <MealPersonalStart
+        onlyProfile
+        onFinished={() => {
+          try {
+            window.localStorage.setItem(LOGIN_ID_CONFIRMED_KEY, "1");
+          } catch {
+            // 保存できなくても、次の読み込みでメールの有無を見る
+          }
+          void refresh();
+        }}
+      />
+    );
   }
 
   return (

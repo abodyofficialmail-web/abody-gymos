@@ -94,9 +94,11 @@ function needsPace(direction: string, weight: string, targetWeight: string): boo
 export function MealPersonalStart({
   onFinished,
   onExit,
+  onlyProfile = false,
 }: {
   onFinished: (target: MemberNutritionTargetView | null) => void;
   onExit?: () => void;
+  onlyProfile?: boolean;
 }) {
   const [step, setStep] = useState<Step>("nickname");
   const [nickname, setNickname] = useState("");
@@ -134,11 +136,12 @@ export function MealPersonalStart({
 
   const showPace = needsPace(direction, weight, targetWeight);
   const steps = useMemo(() => {
+    if (onlyProfile) return ["nickname"] as Step[];
     const list: Step[] = ["nickname", "primary", "direction", "sex", "age", "height", "weight", "fat", "target", "activity"];
     if (showPace) list.push("pace");
     list.push("confirm");
     return list;
-  }, [showPace]);
+  }, [showPace, onlyProfile]);
 
   const form = useMemo((): GoalHearingFormPayload | null => {
     const sexValue = sex === "male" || sex === "female" ? sex : null;
@@ -443,7 +446,7 @@ export function MealPersonalStart({
               className="w-full border-0 border-b-2 border-slate-200 bg-transparent px-1 py-2 text-3xl font-bold text-slate-900 outline-none placeholder:text-2xl placeholder:font-semibold placeholder:text-slate-300 focus:border-teal-800"
             />
             <div className="space-y-2 pt-2">
-              <div className="text-sm font-bold text-slate-900">ログインIDになるメールアドレス</div>
+              <h2 className="text-xl font-bold text-slate-900">ログインIDになるメールアドレス</h2>
               <p className="text-sm leading-relaxed text-slate-600">
                 このメールアドレスが、会員のログインIDになります。次からは、このアドレスだけで食事パーソナルに入れます。
               </p>
@@ -645,13 +648,15 @@ export function MealPersonalStart({
         {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{err}</div> : null}
 
         <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => go(-1)}
-            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
-          >
-            戻る
-          </button>
+          {onlyProfile ? null : (
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              戻る
+            </button>
+          )}
           {step === "confirm" ? (
             <button
               type="button"
@@ -673,15 +678,20 @@ export function MealPersonalStart({
                 }
                 if (step === "nickname") {
                   void registerProfile().then((ok) => {
-                    if (ok) go(1);
+                    if (!ok) return;
+                    if (onlyProfile) onFinished(null);
+                    else go(1);
                   });
                   return;
                 }
                 go(1);
               }}
-              className="rounded-2xl bg-teal-800 px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+              className={[
+                "rounded-2xl bg-teal-800 px-4 py-3 text-sm font-bold text-white disabled:opacity-60",
+                onlyProfile ? "col-span-2" : "",
+              ].join(" ")}
             >
-              {busy && step === "nickname" ? "登録中…" : "次へ"}
+              {busy && step === "nickname" ? "登録中…" : onlyProfile ? "ログインIDを登録" : "次へ"}
             </button>
           )}
         </div>
