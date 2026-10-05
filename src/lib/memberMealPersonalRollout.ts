@@ -11,6 +11,7 @@ export const MEAL_PERSONAL_PILOT_CODES = new Set([
   "UEN054",
   "SHI031",
   "YUT001", // トレーナーゆうと（佐々木優斗）本人
+  "SHI018",
   "ZAI001",
 ]);
 
@@ -27,6 +28,11 @@ export function isMemberMealPersonalPilot(memberCode: string | null | undefined)
   return Boolean(code) && MEAL_PERSONAL_PILOT_CODES.has(code);
 }
 
+/** SNSから入る食事パーソナル専用アカウント。ジムの会員番号とは別。 */
+export function isMealPersonalStandaloneAccount(memberCode: string | null | undefined): boolean {
+  return /^MPS\d{3}$/u.test(normalizeMemberCode(memberCode));
+}
+
 /** ログイン会員ならマイページに入口を出す（未課金はプレビュー）。 */
 export function isMemberMealPersonalVisible(memberCode: string | null | undefined): boolean {
   return Boolean(normalizeMemberCode(memberCode));
@@ -34,5 +40,5 @@ export function isMemberMealPersonalVisible(memberCode: string | null | undefine
 
 /** 全機能。課金パス判定は isMemberMealPersonalFullEnabled を使う。 */
 export function isMemberMealPersonalEnabled(memberCode: string | null | undefined): boolean {
-  return isMemberMealPersonalPilot(memberCode);
+  return isMemberMealPersonalPilot(memberCode) || isMealPersonalStandaloneAccount(memberCode);
 }

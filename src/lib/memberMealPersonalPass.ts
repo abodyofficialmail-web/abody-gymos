@@ -1,4 +1,4 @@
-import { isMemberMealPersonalPilot } from "@/lib/memberMealPersonalRollout";
+import { isMealPersonalStandaloneAccount, isMemberMealPersonalPilot } from "@/lib/memberMealPersonalRollout";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
@@ -43,7 +43,7 @@ export function isMemberMealPersonalFullEnabled(params: {
   memberCode?: string | null;
   pass?: MealPersonalPassRow | null;
 }): boolean {
-  if (isMemberMealPersonalPilot(params.memberCode)) return true;
+  if (isMemberMealPersonalPilot(params.memberCode) || isMealPersonalStandaloneAccount(params.memberCode)) return true;
   return isMealPersonalPassActive(params.pass);
 }
 

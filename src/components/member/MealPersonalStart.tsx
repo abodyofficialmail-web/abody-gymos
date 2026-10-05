@@ -13,8 +13,7 @@ import {
   type WeightPace,
 } from "@/lib/goalHearingNutrition";
 import { formatIntakeLabel, type MemberNutritionTargetView } from "@/lib/memberNutritionTargets";
-import { loginWithMemberIdentifier } from "@/components/member/memberIdentifierLogin";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 type Step =
   | "nickname"
@@ -103,8 +102,6 @@ export function MealPersonalStart({
   const [step, setStep] = useState<Step>("nickname");
   const [nickname, setNickname] = useState("");
   const [email, setEmail] = useState("");
-  const [memberCode, setMemberCode] = useState("");
-  const [askCode, setAskCode] = useState(false);
   const [motion, setMotion] = useState<"forward" | "back">("forward");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
@@ -119,20 +116,6 @@ export function MealPersonalStart({
   const [targetWeight, setTargetWeight] = useState("");
   const [activity, setActivity] = useState("light");
   const [pace, setPace] = useState<WeightPace>("normal");
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const res = await fetch("/api/member/me", { cache: "no-store" });
-      if (!res.ok) return;
-      const json = (await res.json().catch(() => ({}))) as { member?: { email?: string | null } };
-      const mail = String(json.member?.email ?? "").trim();
-      if (!cancelled && mail) setEmail((prev) => prev || mail);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const showPace = needsPace(direction, weight, targetWeight);
   const steps = useMemo(() => {
@@ -175,7 +158,7 @@ export function MealPersonalStart({
   );
 
   function openLink() {
-    setIdentifier((prev) => prev || email.trim() || memberCode.trim());
+    setIdentifier((prev) => prev || email.trim());
     setStep("link");
   }
 
@@ -253,28 +236,14 @@ export function MealPersonalStart({
     setBusy(true);
     setErr(null);
     try {
-      const me = await fetch("/api/member/me", { cache: "no-store" });
-      let includeEmail = true;
-      if (me.status === 401) {
-        try {
-          await loginWithMemberIdentifier(email.trim());
-        } catch (e) {
-          const message = String((e as Error)?.message ?? "");
-          const shared = message.includes("複数");
-          if (!memberCode.trim()) {
-            setAskCode(true);
-            setErr(
-              shared
-                ? "同じメールアドレスの会員が複数います。会員番号を入れてください。"
-                : "このメールアドレスの会員がまだいません。会員番号を入れると、このメールをその会員のログインIDにします。"
-            );
-            return false;
-          }
-          await loginWithMemberIdentifier(memberCode.trim());
-          if (shared) includeEmail = false;
-        }
-      }
-      return await saveProfile({ includeEmail });
+      const res = await fetch("/api/member/meal-personal/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ display_name: nickname.trim(), email: email.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || "アカウントの作成に失敗しました");
+      return true;
     } catch (e) {
       setErr(String((e as Error)?.message ?? "登録に失敗しました"));
       return false;
@@ -362,7 +331,14 @@ export function MealPersonalStart({
     setBusy(true);
     setErr(null);
     try {
-      await loginWithMemberIdentifier(identifier);
+      const mail = (identifier || email).trim();
+      const res = await fetch("/api/member/meal-personal/signup", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ display_name: nickname.trim() || "ゲスト", email: mail }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || "ログインに失敗しました");
       await finish();
     } catch (e) {
       setErr(String((e as Error)?.message ?? "ログインに失敗しました"));
@@ -375,18 +351,17 @@ export function MealPersonalStart({
       <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         <img src="/meal-personal/start-hero.jpg" alt="" className="h-40 w-full object-cover" />
         <div className="space-y-3 p-5">
-          <h2 className="text-xl font-bold text-slate-900">回答を会員データにつなぎます</h2>
+          <h2 className="text-xl font-bold text-slate-900">食事パーソナルのアカウントで保存します</h2>
           <p className="text-sm leading-relaxed text-slate-600">
-            {email.trim()
-              ? `${email.trim()} が会員のログインIDになります。このアドレスか会員番号でログインすると、いまの回答が保存されます。`
-              : "会員番号かメールアドレスでログインすると、いまの回答が食事パーソナルに保存されます。"}
+            このメールアドレスがログインIDです。ジムの会員番号とは別のアカウントに保存します。
           </p>
           <label className="block text-xs font-semibold text-slate-700">
-            会員番号 または メールアドレス
+            ログインIDになるメールアドレス
             <input
+              type="email"
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="EBI001 または example@gmail.com"
+              placeholder="例: misaki@example.com"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal"
             />
           </label>
@@ -448,7 +423,7 @@ export function MealPersonalStart({
             <div className="space-y-2 pt-2">
               <h2 className="text-xl font-bold text-slate-900">ログインIDになるメールアドレス</h2>
               <p className="text-sm leading-relaxed text-slate-600">
-                このメールアドレスが、会員のログインIDになります。次からは、このアドレスだけで食事パーソナルに入れます。
+                このメールアドレスがログインIDになります。ジムの会員番号とは別の、食事パーソナルだけのアカウントです。次からはこのアドレスで入れます。
               </p>
               <input
                 type="email"
@@ -460,18 +435,6 @@ export function MealPersonalStart({
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold outline-none focus:border-teal-800"
               />
             </div>
-            {askCode ? (
-              <div className="space-y-2">
-                <div className="text-sm font-bold text-slate-900">会員番号</div>
-                <input
-                  value={memberCode}
-                  onChange={(e) => setMemberCode(e.target.value)}
-                  placeholder="例: SAK001"
-                  autoCapitalize="characters"
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold uppercase outline-none focus:border-teal-800"
-                />
-              </div>
-            ) : null}
           </>
         ) : null}
 

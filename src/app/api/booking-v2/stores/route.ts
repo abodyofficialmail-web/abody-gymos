@@ -23,6 +23,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("stores")
       .select("id, name")
+      .eq("is_active", true)
       .order("created_at", { ascending: true });
     if (error) {
       return jsonResponse({ error: "店舗一覧の取得に失敗しました", detail: error.message }, 500);

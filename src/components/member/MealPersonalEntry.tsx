@@ -1,7 +1,6 @@
 "use client";
 
 import { MealPersonalStart, MEAL_START_SKIP_KEY } from "@/components/member/MealPersonalStart";
-import { loginWithMemberIdentifier } from "@/components/member/memberIdentifierLogin";
 import { useState } from "react";
 
 export function MealPersonalEntry({
@@ -20,7 +19,13 @@ export function MealPersonalEntry({
     setBusy(true);
     setErr(null);
     try {
-      await loginWithMemberIdentifier(identifier);
+      const res = await fetch("/api/member/meal-personal/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: identifier.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || "ログインに失敗しました");
       try {
         window.sessionStorage.removeItem(MEAL_START_SKIP_KEY);
       } catch {
@@ -66,15 +71,15 @@ export function MealPersonalEntry({
           </button>
           <h1 className="text-2xl font-bold text-slate-900">ログイン</h1>
           <p className="text-sm leading-relaxed text-slate-600">
-            会員番号かメールアドレスのどちらかでログインすると、いまの会員データと食事パーソナルがつながります。
+            新規スタートで登録したメールアドレスがログインIDです。ジムの会員番号とは別のアカウントです。
           </p>
           <label className="block text-xs font-semibold text-slate-700">
-            会員番号 または メールアドレス
+            ログインIDのメールアドレス
             <input
+              type="email"
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="EBI001 または example@gmail.com"
-              autoCapitalize="characters"
+              placeholder="例: misaki@example.com"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal"
             />
           </label>
@@ -100,7 +105,7 @@ export function MealPersonalEntry({
           <p className="text-xs font-semibold tracking-wide text-teal-800">食事パーソナル</p>
           <h1 className="text-2xl font-bold leading-snug text-slate-900">はじめ方を選んでください</h1>
           <p className="text-sm leading-relaxed text-slate-600">
-            すでに会員の人はログインすると、記録と目標がそのままホームにつながります。
+            食事パーソナルだけのアカウントです。ジムのパーソナル会員とは別に始まります。
           </p>
         </div>
       </section>
@@ -115,7 +120,7 @@ export function MealPersonalEntry({
         <img src="/meal-personal/goal-habit.jpg" alt="" className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
         <span>
           <span className="block text-base font-bold text-slate-900">ログイン</span>
-          <span className="mt-1 block text-xs leading-relaxed text-slate-500">会員番号またはメールアドレスで、既存の会員データとつなぐ</span>
+          <span className="mt-1 block text-xs leading-relaxed text-slate-500">登録したメールアドレス（ログインID）で入る</span>
         </span>
       </button>
       <a
@@ -125,7 +130,7 @@ export function MealPersonalEntry({
         <img src="/meal-personal/goal-diet.jpg" alt="" className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
         <span>
           <span className="block text-base font-bold">新規スタート</span>
-          <span className="mt-1 block text-xs leading-relaxed text-white/80">最初の質問から、食事の目標を作る</span>
+          <span className="mt-1 block text-xs leading-relaxed text-white/80">ニックネームとログインIDを作って、最初の質問からはじめる</span>
         </span>
       </a>
     </div>

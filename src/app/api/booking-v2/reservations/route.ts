@@ -13,6 +13,7 @@ import { sendBookingConfirmation } from "@/lib/email";
 import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
 import { canBookOrLogin, pickBookableMember } from "@/lib/memberMembershipStatus";
+import { isMealPersonalStandaloneAccount } from "@/lib/memberMealPersonalRollout";
 import { isMissingBookingVisibilityColumn } from "@/lib/inviteShiftBooking";
 import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
 import {
@@ -564,6 +565,9 @@ export async function POST(request: Request) {
     }
     const memberId = String(member.id);
     const memberCode = String(member.member_code ?? "");
+    if (isMealPersonalStandaloneAccount(memberCode)) {
+      return jsonResponse({ error: "食事パーソナルのアカウントではトレーニング予約はできません" }, 403);
+    }
 
     // 2026年4月の予約は一旦閉じる（UI回避・直叩き回避）
     {
