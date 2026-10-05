@@ -7,6 +7,7 @@ import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import { resolveTrainerVisibilityPassActive } from "@/lib/trainerVisibilityPass";
 import { safeMemberNextPath } from "@/lib/memberNextPath";
+import { isMealPersonalStandaloneAccount } from "@/lib/memberMealPersonalRollout";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -259,6 +260,7 @@ export default function BookingPage() {
   const [ticketKoma, setTicketKoma] = useState(0);
   const [ticketExpiryText, setTicketExpiryText] = useState("");
   const [remainingBookableKoma, setRemainingBookableKoma] = useState<number | null>(null);
+  const [mealSessionTickets, setMealSessionTickets] = useState(0);
   const [ticketBusy, setTicketBusy] = useState(false);
   const [ticketMsg, setTicketMsg] = useState<string | null>(null);
   const [ticketCheckoutSessionId, setTicketCheckoutSessionId] = useState("");
@@ -329,6 +331,7 @@ export default function BookingPage() {
           ticket_koma?: number;
           ticket_expiry_text?: string | null;
           remaining_bookable_koma?: number | null;
+          meal_session_tickets?: number;
         };
         const email = String(member?.email ?? "").trim();
         const code = String(member?.member_code ?? "").trim();
@@ -345,6 +348,7 @@ export default function BookingPage() {
         setRemainingBookableKoma(
           member?.remaining_bookable_koma == null ? null : Math.max(0, Number(member.remaining_bookable_koma) || 0)
         );
+        setMealSessionTickets(Math.max(0, Number(member?.meal_session_tickets ?? 0) || 0));
         setPassEmail(email);
         setPassEmailInput(email);
         setPassMemberCodeInput(code);
@@ -756,6 +760,10 @@ export default function BookingPage() {
   }
 
   async function handleCreateReservation(opts?: { convert?: boolean; useTicket?: boolean }) {
+    if (isMealPersonalStandaloneAccount(memberCode) && mealSessionTickets < 1) {
+      setError("パーソナルチケットを買うまで、予約はできません");
+      return;
+    }
     if (!selectedSlot || !selectedDate) return;
     const convertToOfferedPlan = Boolean(opts?.convert);
     const useTicket = Boolean(opts?.useTicket);
@@ -883,6 +891,9 @@ export default function BookingPage() {
     return { symbol, color };
   }
 
+  const standaloneMeal = isMealPersonalStandaloneAccount(memberCode);
+  const mealBookingLocked = standaloneMeal && mealSessionTickets < 1;
+
   const trainerPassBanner = (
     <div className="rounded-xl border border-line bg-white px-4 py-3 space-y-2">
       <div className="text-xs text-ink-500">
@@ -890,7 +901,9 @@ export default function BookingPage() {
       </div>
       <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-[#F9FAFB] px-3 py-2">
         <div>
-          {remainingBookableKoma != null ? (
+          {standaloneMeal ? (
+            <div className="text-sm font-semibold text-ink-900">パーソナルチケットで1回予約できます</div>
+          ) : remainingBookableKoma != null ? (
             <>
               <div className="text-[11px] text-ink-500">残り予約可能数</div>
               <div className="text-sm font-semibold text-ink-900">あと{remainingBookableKoma}コマ予約できます</div>
@@ -905,18 +918,20 @@ export default function BookingPage() {
             </div>
           ) : null}
         </div>
-        <button
-          type="button"
-          disabled={ticketBusy}
-          onClick={() => void goToTicketCheckout()}
-          className="rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
-          style={{ background: "var(--accent)" }}
-        >
-          {ticketBusy ? "処理中…" : "チケットを購入"}
-        </button>
+        {standaloneMeal ? null : (
+          <button
+            type="button"
+            disabled={ticketBusy}
+            onClick={() => void goToTicketCheckout()}
+            className="rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            style={{ background: "var(--accent)" }}
+          >
+            {ticketBusy ? "処理中…" : "チケットを購入"}
+          </button>
+        )}
       </div>
       {ticketMsg ? <div className="text-xs text-ink-500">{ticketMsg}</div> : null}
-      {passActive ? (
+      {standaloneMeal ? null : passActive ? (
         <>
           <div className="text-sm font-semibold">担当トレーナー表示中</div>
           <div className="text-xs text-ink-500">各日・各時間の出勤トレーナーを表示しています。</div>
@@ -974,6 +989,23 @@ export default function BookingPage() {
         <div className="rounded-2xl border border-line bg-white px-4 py-8 text-center text-sm text-ink-500">
           ログインを確認しています…
         </div>
+      ) : mealBookingLocked ? (
+        <section className="rounded-2xl border border-line bg-white p-5 space-y-3">
+          <div className="text-xs text-ink-500">
+            {memberName || "会員"}（{memberCode}）
+          </div>
+          <div className="text-base font-semibold">予約は、まだ開けません</div>
+          <p className="text-sm leading-relaxed text-ink-500">
+            食事の記録・目標・リマインドは無料です。トレーニングの予約は、パーソナルチケットを買ったあとに1回だけ開けます。
+          </p>
+          <a
+            href="/meal-log"
+            className="inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white"
+            style={{ background: "var(--accent)" }}
+          >
+            食事の記録に戻る
+          </a>
+        </section>
       ) : (
         <>
       <div className="flex items-center justify-between gap-2">

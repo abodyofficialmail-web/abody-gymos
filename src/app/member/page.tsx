@@ -18,6 +18,7 @@ import {
   isCrossDayRescheduleDateDisabled,
   type MemberRescheduleEligibility,
 } from "@/lib/memberReschedule";
+import { isMealPersonalStandaloneAccount } from "@/lib/memberMealPersonalRollout";
 import { DateTime } from "luxon";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -39,6 +40,7 @@ type MeResponse = {
     ticket_koma?: number;
     ticket_expiry_text?: string | null;
     remaining_bookable_koma?: number | null;
+    meal_session_tickets?: number;
   };
   meal_personal_pass?: {
     active: boolean;
@@ -198,6 +200,11 @@ export default function MemberPage() {
     if (!progressReports?.length) return null;
     return progressReports.find((r) => r.yearMonth === selectedReportYm) ?? progressReports[0];
   }, [progressReports, selectedReportYm]);
+
+  const mealBookingLocked =
+    isMealPersonalStandaloneAccount(data?.member.member_code) &&
+    Math.max(0, Number(data?.member.meal_session_tickets ?? 0) || 0) < 1;
+  const standaloneMeal = isMealPersonalStandaloneAccount(data?.member.member_code);
 
   const visibleTabs = useMemo(
     () =>
@@ -437,7 +444,7 @@ export default function MemberPage() {
     <GymShell
       title={title}
       nav={[
-        { href: "/booking", label: "予約" },
+        ...(mealBookingLocked ? [] : [{ href: "/booking", label: "予約" }]),
         ...(data ? [{ href: "/meal-log", label: "食事パーソナル" }] : []),
         { href: "/member/settings", label: "設定" },
         { href: "/login", label: "ログイン" },
@@ -461,7 +468,11 @@ export default function MemberPage() {
               <div className="text-xs text-slate-500">{data.member.line_user_id ? "LINE連携済み" : "LINE未連携"}</div>
               <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <div>
-                  {data.member.remaining_bookable_koma != null ? (
+                  {mealBookingLocked ? (
+                    <div className="text-sm font-semibold text-slate-900">予約は、パーソナルチケットを買ったあとに1回だけ開けます</div>
+                  ) : standaloneMeal ? (
+                    <div className="text-sm font-semibold text-slate-900">パーソナルチケットで1回予約できます</div>
+                  ) : data.member.remaining_bookable_koma != null ? (
                     <>
                       <div className="text-[11px] text-slate-500">残り予約可能数</div>
                       <div className="text-sm font-semibold text-slate-900">
@@ -471,19 +482,21 @@ export default function MemberPage() {
                   ) : (
                     <div className="text-sm font-semibold text-slate-900">予約できます</div>
                   )}
-                  {(data.member.ticket_koma ?? 0) > 0 ? (
+                  {!standaloneMeal && (data.member.ticket_koma ?? 0) > 0 ? (
                     <div className="pt-0.5 text-[11px] text-slate-500">
                       チケット {data.member.ticket_koma}コマ
                       {data.member.ticket_expiry_text ? `（${data.member.ticket_expiry_text}）` : ""}
                     </div>
                   ) : null}
                 </div>
-                <a
-                  href="/api/member/tickets/checkout?koma=1"
-                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                >
-                  チケットを購入
-                </a>
+                {standaloneMeal ? null : (
+                  <a
+                    href="/api/member/tickets/checkout?koma=1"
+                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    チケットを購入
+                  </a>
+                )}
               </div>
             </section>
 
