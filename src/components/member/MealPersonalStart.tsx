@@ -17,7 +17,7 @@ import { formatIntakeLabel, type MemberNutritionTargetView } from "@/lib/memberN
 import { loginWithMemberIdentifier } from "@/components/member/memberIdentifierLogin";
 import { useMemo, useState } from "react";
 
-type Step = "primary" | "direction" | "sex" | "body" | "activity" | "pace" | "confirm" | "link";
+type Step = "primary" | "direction" | "sex" | "age" | "height" | "weight" | "fat" | "target" | "activity" | "pace" | "confirm" | "link";
 
 export const MEAL_START_SKIP_KEY = "meal-personal-start-skipped";
 
@@ -72,7 +72,7 @@ export function MealPersonalStart({
 
   const showPace = needsPace(direction, weight, targetWeight);
   const steps = useMemo(() => {
-    const list: Step[] = ["primary", "direction", "sex", "body", "activity"];
+    const list: Step[] = ["primary", "direction", "sex", "age", "height", "weight", "fat", "target", "activity"];
     if (showPace) list.push("pace");
     list.push("confirm");
     return list;
@@ -122,25 +122,31 @@ export function MealPersonalStart({
     setStep(dest);
   }
 
-  function validateBody(): string | null {
-    const fat = parseOptional(bodyFat, 3, 60);
-    if (fat === "bad") return "体脂肪は 3〜60% で入れるか、空欄にしてください";
-    const target = parseOptional(targetWeight, 20, 300);
-    if (target === "bad") return "目標体重は 20〜300kg で入れるか、空欄にしてください";
-    if (!weight.trim()) return null;
-    const w = parseOptional(weight, 20, 300);
-    if (w === "bad") return "体重は 20〜300kg で入れるか、空欄にしてください";
-    const ageN = Number(age);
-    const heightN = Number(height);
-    if (!Number.isFinite(ageN) || ageN < 10 || ageN > 100) return "体重を入れるときは、年齢も入れてください";
-    if (!Number.isFinite(heightN) || heightN < 100 || heightN > 250) return "体重を入れるときは、身長も入れてください";
+  function validateStep(current: Step): string | null {
+    if (current === "age") {
+      const n = Number(age);
+      if (!age.trim() || !Number.isFinite(n) || n < 10 || n > 100) return "年齢を 10〜100 で入れてください";
+    }
+    if (current === "height") {
+      const n = Number(height);
+      if (!height.trim() || !Number.isFinite(n) || n < 100 || n > 250) return "身長を 100〜250cm で入れてください";
+    }
+    if (current === "weight" && weight.trim() && parseOptional(weight, 20, 300) === "bad") {
+      return "体重は 20〜300kg で入れるか、空欄にしてください";
+    }
+    if (current === "fat" && parseOptional(bodyFat, 3, 60) === "bad") {
+      return "体脂肪は 3〜60% で入れるか、空欄にしてください";
+    }
+    if (current === "target" && parseOptional(targetWeight, 20, 300) === "bad") {
+      return "目標体重は 20〜300kg で入れるか、空欄にしてください";
+    }
     return null;
   }
 
   async function finish() {
-    const bodyErr = validateBody();
-    if (bodyErr) {
-      setErr(bodyErr);
+    const numberErr = (["age", "height", "weight", "fat", "target"] as Step[]).map(validateStep).find(Boolean);
+    if (numberErr) {
+      setErr(numberErr);
       return;
     }
     if (!form || !preview) {
@@ -333,19 +339,42 @@ export function MealPersonalStart({
           </>
         ) : null}
 
-        {step === "body" ? (
-          <>
-            <img src="/meal-personal/body-check.jpg" alt="体重計" className="h-40 w-full rounded-2xl object-cover" />
-            <h2 className="text-xl font-bold text-slate-900">いまの体を教えてください</h2>
-            <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-950">{LATER_NOTE}</p>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="年齢" value={age} onChange={setAge} placeholder="30" />
-              <Field label="身長 cm" value={height} onChange={setHeight} placeholder="165" />
-              <Field label="体重 kg" value={weight} onChange={setWeight} placeholder="わからなければ空欄" />
-              <Field label="体脂肪 %" value={bodyFat} onChange={setBodyFat} placeholder="わからなければ空欄" />
-            </div>
-            <Field label="目標体重 kg（任意）" value={targetWeight} onChange={setTargetWeight} placeholder="空欄でも可" />
-          </>
+        {step === "age" ? (
+          <OneNumber title="年齢は？" value={age} onChange={setAge} placeholder="30" unit="歳" />
+        ) : null}
+        {step === "height" ? (
+          <OneNumber title="身長は？" value={height} onChange={setHeight} placeholder="165" unit="cm" />
+        ) : null}
+        {step === "weight" ? (
+          <OneNumber
+            title="いまの体重は？"
+            value={weight}
+            onChange={setWeight}
+            placeholder="空欄でも進めます"
+            unit="kg"
+            note={LATER_NOTE}
+            image="/meal-personal/body-check.jpg"
+          />
+        ) : null}
+        {step === "fat" ? (
+          <OneNumber
+            title="体脂肪率は？"
+            value={bodyFat}
+            onChange={setBodyFat}
+            placeholder="空欄でも進めます"
+            unit="%"
+            note={LATER_NOTE}
+          />
+        ) : null}
+        {step === "target" ? (
+          <OneNumber
+            title="目標の体重は？"
+            value={targetWeight}
+            onChange={setTargetWeight}
+            placeholder="空欄でも進めます"
+            unit="kg"
+            note="決まっていなければ空欄のまま次へ進めます。あとから設定で変更できます。"
+          />
         ) : null}
 
         {step === "activity" ? (
@@ -428,12 +457,10 @@ export function MealPersonalStart({
             <button
               type="button"
               onClick={() => {
-                if (step === "body") {
-                  const bodyErr = validateBody();
-                  if (bodyErr) {
-                    setErr(bodyErr);
-                    return;
-                  }
+                const stepErr = validateStep(step);
+                if (stepErr) {
+                  setErr(stepErr);
+                  return;
                 }
                 go(1);
               }}
@@ -481,28 +508,42 @@ function ChoiceList({
   );
 }
 
-function Field({
-  label,
+function OneNumber({
+  title,
   value,
   onChange,
   placeholder,
+  unit,
+  note,
+  image,
 }: {
-  label: string;
+  title: string;
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
+  unit: string;
+  note?: string;
+  image?: string;
 }) {
   return (
-    <label className="block text-xs font-semibold text-slate-700">
-      {label}
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        inputMode="decimal"
-        placeholder={placeholder}
-        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal text-slate-900"
-      />
-    </label>
+    <>
+      {image ? <img src={image} alt="" className="h-36 w-full rounded-2xl object-cover" /> : null}
+      <h2 className="text-xl font-bold text-slate-900">{title}</h2>
+      {note ? <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-relaxed text-amber-950">{note}</p> : null}
+      <label className="block">
+        <span className="sr-only">{title}</span>
+        <span className="flex items-end gap-2">
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            inputMode="decimal"
+            placeholder={placeholder}
+            className="min-w-0 flex-1 border-0 border-b-2 border-slate-200 bg-transparent px-1 py-2 text-4xl font-bold text-slate-900 outline-none placeholder:text-2xl placeholder:font-semibold placeholder:text-slate-300 focus:border-teal-800"
+          />
+          <span className="shrink-0 pb-2 text-lg font-bold text-slate-500">{unit}</span>
+        </span>
+      </label>
+    </>
   );
 }
 
