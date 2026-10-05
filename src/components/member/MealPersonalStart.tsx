@@ -9,7 +9,6 @@ import {
 } from "@/lib/goalHearing";
 import {
   estimateGoalHearingNutrition,
-  formatMonthlyChangeLabel,
   WEIGHT_PACE_OPTIONS,
   type WeightPace,
 } from "@/lib/goalHearingNutrition";
@@ -36,6 +35,38 @@ function parseOptional(raw: string, min: number, max: number): number | null | "
   const n = Number(text);
   if (!Number.isFinite(n) || n < min || n > max) return "bad";
   return n;
+}
+
+function forecastWeights(currentKg: number, monthlyMin: number, monthlyMax: number) {
+  return [1, 2, 3].map((months) => {
+    const low = Math.round((currentKg + monthlyMin * months) * 10) / 10;
+    const high = Math.round((currentKg + monthlyMax * months) * 10) / 10;
+    const a = Math.min(low, high);
+    const b = Math.max(low, high);
+    return {
+      months,
+      weight: a === b ? `${a}kg` : `${a}〜${b}kg`,
+    };
+  });
+}
+
+function appearanceAt(months: 1 | 2 | 3, monthlyMin: number, monthlyMax: number): string {
+  const mid = (monthlyMin + monthlyMax) / 2;
+  const gaining = mid >= 0.3;
+  const losing = mid <= -0.3;
+  if (gaining) {
+    if (months === 1) return "力が出やすくなり、体に張りが出始めます。";
+    if (months === 2) return "腕や胸、肩に厚みが出て、服のラインが変わり始めます。";
+    return "服の上からでも体が大きく見え、筋肉の輪郭がわかりやすくなります。";
+  }
+  if (losing) {
+    if (months === 1) return "顔まわりやお腹の張りが少し落ち着くことがあります。";
+    if (months === 2) return "ウエストが細くなり、服のフィットが変わることがあります。";
+    return "体のラインが出て、変化がまわりからもわかりやすくなります。";
+  }
+  if (months === 1) return "体重はほぼそのままです。むくみが落ち着いて見えることがあります。";
+  if (months === 2) return "食事がそろうと、お腹まわりが安定して見えます。";
+  return "体型をキープしながら、引き締まった印象になっていきます。";
 }
 
 function needsPace(direction: string, weight: string, targetWeight: string): boolean {
@@ -417,10 +448,27 @@ export function MealPersonalStart({
                   <Macro label="脂質" value={`${preview.fat_g}g`} tone="text-amber-700" />
                   <Macro label="炭水化物" value={`${preview.carb_g}g`} tone="text-sky-700" />
                 </div>
-                <p className="text-xs leading-relaxed text-slate-500">
-                  {formatMonthlyChangeLabel(preview) ? `1ヶ月の体重目安: ${formatMonthlyChangeLabel(preview)}。` : ""}
-                  体重や体脂肪は、あとから設定で変更できます。
-                </p>
+                <div className="space-y-2">
+                  <div className="text-sm font-bold text-slate-900">1〜3カ月後の目安</div>
+                  {forecastWeights(
+                    Number(weight),
+                    preview.monthly_change_min_kg,
+                    preview.monthly_change_max_kg
+                  ).map((row) => (
+                    <div key={row.months} className="rounded-2xl bg-slate-50 px-3 py-3">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <div className="text-xs font-bold text-slate-500">{row.months}カ月後</div>
+                        <div className="text-base font-bold text-slate-900">{row.weight}</div>
+                      </div>
+                      <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                        {appearanceAt(row.months as 1 | 2 | 3, preview.monthly_change_min_kg, preview.monthly_change_max_kg)}
+                      </p>
+                    </div>
+                  ))}
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    食事とトレーニングを続けたときの目安です。進み方には個人差があります。体重や体脂肪は、あとから設定で変更できます。
+                  </p>
+                </div>
               </>
             ) : (
               <>
