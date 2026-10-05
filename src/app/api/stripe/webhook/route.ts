@@ -9,6 +9,7 @@ import {
   subscriptionMatchesProduct,
   type StripeSubscription,
 } from "@/lib/stripeTrainerPass";
+import { grantMealSessionTicket, MEAL_SESSION_TICKET_PRODUCT } from "@/lib/mealSessionTicket";
 import {
   applyMealPersonalPassToMember,
   findMemberIdForMealPersonalPass,
@@ -109,6 +110,16 @@ export async function POST(request: Request) {
     const supabase = createSupabaseServiceClient();
 
     if (type === "checkout.session.completed") {
+      if (String(obj.metadata?.product ?? "") === MEAL_SESSION_TICKET_PRODUCT) {
+        const paid = String(obj.payment_status ?? "") === "paid" || String(obj.status ?? "") === "complete";
+        if (!paid) return json({ received: true, ignored: "unpaid" });
+        const granted = await grantMealSessionTicket({
+          supabase,
+          memberId: String(obj.metadata?.member_id ?? obj.client_reference_id ?? ""),
+          stripeSessionId: String(obj.id ?? ""),
+        });
+        return json({ received: true, product: MEAL_SESSION_TICKET_PRODUCT, ...granted });
+      }
       if (String(obj.mode ?? "") !== "subscription") return json({ received: true, ignored: "not_subscription" });
       const subscriptionId = customerIdOf(obj.subscription);
       const customerId = customerIdOf(obj.customer);

@@ -193,6 +193,33 @@ ${EMAIL_FOOTER}
   }
 }
 
+/** 食事パーソナルのログイン確認コード。予約メールと同じ送信口を使う。 */
+export async function sendMealPersonalLoginCode(params: { to: string; code: string }): Promise<boolean> {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn("SMTP not configured, skipping meal personal login code");
+    return false;
+  }
+  const from = process.env.MAIL_FROM || process.env.ABODY_EMAIL || process.env.SMTP_USER || "noreply@localhost";
+  const text = `
+食事パーソナルの確認コードは ${params.code} です。
+このコードの有効期限は10分です。
+身に覚えがない場合は、このメールを破棄してください。
+`.trim();
+  try {
+    await transporter.sendMail({
+      from,
+      to: params.to,
+      subject: "【Abody】食事パーソナルの確認コード",
+      text,
+    });
+    return true;
+  } catch (err: any) {
+    console.error("Send meal personal login code failed:", err?.message);
+    return false;
+  }
+}
+
 /**
  * 店舗ごとの日次予約レポート（管理者向け）を送信。
  * SMTP未設定の場合は送信せず false を返す。

@@ -102,6 +102,8 @@ export function MealPersonalStart({
   const [step, setStep] = useState<Step>("nickname");
   const [nickname, setNickname] = useState("");
   const [email, setEmail] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [code, setCode] = useState("");
   const [motion, setMotion] = useState<"forward" | "back">("forward");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
@@ -242,10 +244,35 @@ export function MealPersonalStart({
         body: JSON.stringify({ display_name: nickname.trim(), email: email.trim() }),
       });
       const json = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(json.error || "アカウントの作成に失敗しました");
-      return true;
+      if (!res.ok) throw new Error(json.error || "確認コードを送れませんでした");
+      setCodeSent(true);
+      return false;
     } catch (e) {
       setErr(String((e as Error)?.message ?? "登録に失敗しました"));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmCode() {
+    if (!/^\d{6}$/u.test(code.trim())) {
+      setErr("メールに届いた6桁の確認コードを入れてください");
+      return false;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/member/meal-personal/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: (identifier || email).trim(), code: code.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || "確認コードが違います");
+      return true;
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? "確認に失敗しました"));
       return false;
     } finally {
       setBusy(false);
@@ -338,8 +365,9 @@ export function MealPersonalStart({
         body: JSON.stringify({ display_name: nickname.trim() || "ゲスト", email: mail }),
       });
       const json = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(json.error || "ログインに失敗しました");
-      await finish();
+      if (!res.ok) throw new Error(json.error || "確認コードを送れませんでした");
+      setCodeSent(true);
+      setBusy(false);
     } catch (e) {
       setErr(String((e as Error)?.message ?? "ログインに失敗しました"));
       setBusy(false);
@@ -360,19 +388,44 @@ export function MealPersonalStart({
             <input
               type="email"
               value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
+              onChange={(e) => {
+                setIdentifier(e.target.value);
+                setCodeSent(false);
+                setCode("");
+              }}
               placeholder="例: misaki@example.com"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal"
             />
           </label>
+          {codeSent ? (
+            <label className="block text-xs font-semibold text-slate-700">
+              確認コード（6桁）
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="000000"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal tracking-[0.3em]"
+              />
+            </label>
+          ) : null}
           {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{err}</div> : null}
           <button
             type="button"
             disabled={busy}
-            onClick={() => void loginAndSave()}
+            onClick={() => {
+              if (!codeSent) {
+                void loginAndSave();
+                return;
+              }
+              void confirmCode().then((ok) => {
+                if (ok) void finish();
+              });
+            }}
             className="w-full rounded-2xl bg-teal-800 px-4 py-3.5 text-sm font-bold text-white disabled:opacity-60"
           >
-            {busy ? "ログイン中…" : "ログインして保存"}
+            {busy ? "確認中…" : codeSent ? "コードを確認して保存" : "確認コードを送る"}
           </button>
           <button
             type="button"
@@ -423,17 +476,34 @@ export function MealPersonalStart({
             <div className="space-y-2 pt-2">
               <h2 className="text-xl font-bold text-slate-900">ログインIDになるメールアドレス</h2>
               <p className="text-sm leading-relaxed text-slate-600">
-                このメールアドレスがログインIDになります。ジムの会員番号とは別の、食事パーソナルだけのアカウントです。次からはこのアドレスで入れます。
+                このメールアドレスがログインIDになります。ジムの会員番号とは別の、食事パーソナルだけのアカウントです。確認コードが届いて、6桁を入れると登録されます。
               </p>
               <input
                 type="email"
                 inputMode="email"
                 autoComplete="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setCodeSent(false);
+                  setCode("");
+                }}
                 placeholder="例: misaki@example.com"
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold outline-none focus:border-teal-800"
               />
+              {codeSent ? (
+                <label className="block text-xs font-semibold text-slate-700">
+                  メールに届いた確認コード
+                  <input
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="000000"
+                    className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-2xl font-bold tracking-[0.3em] outline-none focus:border-teal-800"
+                  />
+                </label>
+              ) : null}
             </div>
           </>
         ) : null}
@@ -640,7 +710,11 @@ export function MealPersonalStart({
                   return;
                 }
                 if (step === "nickname") {
-                  void registerProfile().then((ok) => {
+                  if (!codeSent) {
+                    void registerProfile();
+                    return;
+                  }
+                  void confirmCode().then((ok) => {
                     if (!ok) return;
                     if (onlyProfile) onFinished(null);
                     else go(1);
@@ -654,7 +728,7 @@ export function MealPersonalStart({
                 onlyProfile ? "col-span-2" : "",
               ].join(" ")}
             >
-              {busy && step === "nickname" ? "登録中…" : onlyProfile ? "ログインIDを登録" : "次へ"}
+              {busy && step === "nickname" ? "確認中…" : step === "nickname" && !codeSent ? "確認コードを送る" : step === "nickname" ? "コードを確認して次へ" : onlyProfile ? "ログインIDを登録" : "次へ"}
             </button>
           )}
         </div>

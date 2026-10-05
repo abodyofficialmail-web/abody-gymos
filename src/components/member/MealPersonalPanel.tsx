@@ -243,6 +243,8 @@ export function MealPersonalPanel({
   locked = false,
   subscribeUrl = null,
   priceLabel = "食事パーソナル（月額）",
+  gatePaidActions = false,
+  sessionTickets = 0,
 }: {
   signed?: { s: string; sig: string } | null;
   compact?: boolean;
@@ -252,10 +254,13 @@ export function MealPersonalPanel({
   locked?: boolean;
   subscribeUrl?: string | null;
   priceLabel?: string;
+  gatePaidActions?: boolean;
+  sessionTickets?: number;
 }) {
   const [data, setData] = useState<MealDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [ticketBusy, setTicketBusy] = useState(false);
   const [slot, setSlot] = useState<MealSlot>(initialSlot ?? "lunch");
   const [eatenTime, setEatenTime] = useState(() => DateTime.now().setZone(MEAL_LOG_TZ).toFormat("HH:mm"));
   const [dishes, setDishes] = useState<
@@ -809,6 +814,61 @@ export function MealPersonalPanel({
   const useTabs = !compact;
   const activeTab = readOnly && tab === "add" ? "home" : tab;
 
+  const paidActionsOpen = !gatePaidActions || sessionTickets >= 1;
+
+  async function buyTicket() {
+    setTicketBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/member/meal-personal/ticket/checkout", { method: "POST" });
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !json.url) throw new Error(json.error || "決済画面を開けませんでした");
+      window.location.href = json.url;
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? "決済画面を開けませんでした"));
+      setTicketBusy(false);
+    }
+  }
+
+  const ticketCard = gatePaidActions ? (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      {sessionTickets >= 1 ? (
+        <div className="space-y-3">
+          <div className="text-sm font-bold text-slate-900">パーソナルチケットが{sessionTickets}枚あります</div>
+          <p className="text-sm leading-relaxed text-slate-600">1枚で1回予約できます。相談も、このチケットがあるあいだ使えます。</p>
+          <a href="/booking" className="inline-flex w-full items-center justify-center rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white">
+            1回予約する
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              setAddMode("chat");
+              setTab("add");
+            }}
+            className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-800"
+          >
+            チャットで相談する
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-sm font-bold text-slate-900">記録・目標・リマインドは無料です</div>
+          <p className="text-sm leading-relaxed text-slate-600">
+            相談と予約は、パーソナルチケットを買ったあとに出ます。1枚で1回だけ予約できます。
+          </p>
+          <button
+            type="button"
+            disabled={ticketBusy}
+            onClick={() => void buyTicket()}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {ticketBusy ? "決済画面を開いています…" : "パーソナルチケットを買う"}
+          </button>
+        </div>
+      )}
+    </section>
+  ) : null;
+
   const statusBanners = (
     <>
       {savedMsg ? (
@@ -1350,7 +1410,9 @@ export function MealPersonalPanel({
     <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="space-y-1">
         <div className="text-sm font-bold text-slate-900">記録する</div>
-        <p className="text-xs leading-relaxed text-slate-500">チャットでも手入力でも、バーコードでも記録できます。</p>
+        <p className="text-xs leading-relaxed text-slate-500">
+          {paidActionsOpen ? "チャットでも手入力でも、バーコードでも記録できます。" : "手入力かバーコードで記録できます。"}
+        </p>
       </div>
       {slotButtons}
       {pendingCard}
@@ -1360,7 +1422,9 @@ export function MealPersonalPanel({
           { id: "record" as const, title: "手入力", desc: "メニュー・グラム・写真で記録する", icon: Keyboard },
           { id: "barcode" as const, title: "バーコード", desc: "コンビニ・スーパーのJANを読んで記録する", icon: ScanBarcode },
         ] as const
-      ).map((item) => {
+      )
+        .filter((item) => paidActionsOpen || item.id !== "chat")
+        .map((item) => {
         const Icon = item.icon;
         return (
           <button
@@ -1392,7 +1456,7 @@ export function MealPersonalPanel({
             analysis={data.analysis}
           />
           <div className="space-y-2 border-t border-slate-100 pt-3">
-            {readOnly ? null : (
+            {readOnly || !paidActionsOpen ? null : (
               <button
                 type="button"
                 onClick={() => {
@@ -1661,6 +1725,7 @@ export function MealPersonalPanel({
   return (
     <div className={useTabs ? "space-y-4 pb-28" : "space-y-4"}>
       {photoInputs}
+      {ticketCard}
       {statusBanners}
       {compact ? (
         homeBody

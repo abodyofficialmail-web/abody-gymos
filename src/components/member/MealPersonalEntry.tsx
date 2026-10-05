@@ -12,6 +12,8 @@ export function MealPersonalEntry({
 }) {
   const [view, setView] = useState<"choose" | "login" | "questions">(initialView);
   const [identifier, setIdentifier] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -25,7 +27,30 @@ export function MealPersonalEntry({
         body: JSON.stringify({ email: identifier.trim() }),
       });
       const json = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(json.error || "ログインに失敗しました");
+      if (!res.ok) throw new Error(json.error || "確認コードを送れませんでした");
+      setCodeSent(true);
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? "ログインに失敗しました"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verify() {
+    if (!/^\d{6}$/u.test(code.trim())) {
+      setErr("メールに届いた6桁の確認コードを入れてください");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/member/meal-personal/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: identifier.trim(), code: code.trim() }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(json.error || "確認コードが違います");
       try {
         window.sessionStorage.removeItem(MEAL_START_SKIP_KEY);
       } catch {
@@ -71,26 +96,43 @@ export function MealPersonalEntry({
           </button>
           <h1 className="text-2xl font-bold text-slate-900">ログイン</h1>
           <p className="text-sm leading-relaxed text-slate-600">
-            新規スタートで登録したメールアドレスがログインIDです。ジムの会員番号とは別のアカウントです。
+            登録したメールアドレスに確認コードを送ります。ジムの会員番号とは別のアカウントです。
           </p>
           <label className="block text-xs font-semibold text-slate-700">
             ログインIDのメールアドレス
             <input
               type="email"
               value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
+              onChange={(e) => {
+                setIdentifier(e.target.value);
+                setCodeSent(false);
+                setCode("");
+              }}
               placeholder="例: misaki@example.com"
               className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal"
             />
           </label>
+          {codeSent ? (
+            <label className="block text-xs font-semibold text-slate-700">
+              確認コード（6桁）
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                placeholder="000000"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal tracking-[0.3em]"
+              />
+            </label>
+          ) : null}
           {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{err}</div> : null}
           <button
             type="button"
             disabled={busy}
-            onClick={() => void login()}
+            onClick={() => void (codeSent ? verify() : login())}
             className="w-full rounded-2xl bg-teal-800 px-4 py-3.5 text-sm font-bold text-white disabled:opacity-60"
           >
-            {busy ? "ログイン中…" : "ログインしてはじめる"}
+            {busy ? "確認中…" : codeSent ? "コードを確認して入る" : "確認コードを送る"}
           </button>
         </div>
       </section>

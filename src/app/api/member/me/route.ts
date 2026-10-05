@@ -4,6 +4,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { getMemberIdFromCookie } from "../_cookies";
 import { isMemberWeightLogEnabled } from "@/lib/memberWeightLogRollout";
 import { isMemberMealPersonalEnabled } from "@/lib/memberMealPersonalRollout";
+import { readMealSessionTickets } from "@/lib/mealSessionTicket";
 import {
   fetchMealPersonalPassForMemberId,
   mealPersonalPassPriceLabel,
@@ -274,6 +275,7 @@ export async function GET() {
           weight_reminder_line_enabled: weightReminderEnabled,
           weight_log_enabled: isMemberWeightLogEnabled(member.member_code),
           meal_personal_enabled: mealPersonalEnabled,
+          meal_session_tickets: await readMealSessionTickets(supabase, memberId),
           ticket_koma: ticketKoma,
           ticket_expiry_text: ticketExpiryText,
           remaining_bookable_koma: remainingBookable,

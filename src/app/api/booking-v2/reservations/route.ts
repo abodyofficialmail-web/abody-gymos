@@ -14,6 +14,7 @@ import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChann
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
 import { canBookOrLogin, pickBookableMember } from "@/lib/memberMembershipStatus";
 import { isMealPersonalStandaloneAccount } from "@/lib/memberMealPersonalRollout";
+import { consumeMealSessionTicket, readMealSessionTickets, restoreMealSessionTicket } from "@/lib/mealSessionTicket";
 import { isMissingBookingVisibilityColumn } from "@/lib/inviteShiftBooking";
 import { getMemberIdFromCookie } from "@/app/api/member/_cookies";
 import {
@@ -565,8 +566,9 @@ export async function POST(request: Request) {
     }
     const memberId = String(member.id);
     const memberCode = String(member.member_code ?? "");
-    if (isMealPersonalStandaloneAccount(memberCode)) {
-      return jsonResponse({ error: "食事パーソナルのアカウントではトレーニング予約はできません" }, 403);
+    const mealTicketBooking = isMealPersonalStandaloneAccount(memberCode);
+    if (mealTicketBooking && (await readMealSessionTickets(supabase, memberId)) < 1) {
+      return jsonResponse({ error: "パーソナルチケットを買うと、1回予約できます" }, 403);
     }
 
     // 2026年4月の予約は一旦閉じる（UI回避・直叩き回避）
@@ -761,7 +763,7 @@ export async function POST(request: Request) {
     }
 
     let ticketsToConsume = 0;
-    {
+    if (!mealTicketBooking) {
       const ctx = await loadMemberBookingRuleContext(supabase, { memberId });
       let verdict = await evaluateLoadedMemberBooking(
         ctx,
@@ -819,6 +821,14 @@ export async function POST(request: Request) {
       ticketsToConsume = verdict.ticketsToConsume;
     }
 
+    let consumedMealTicket = false;
+    if (mealTicketBooking) {
+      consumedMealTicket = await consumeMealSessionTicket(supabase, memberId);
+      if (!consumedMealTicket) {
+        return jsonResponse({ error: "パーソナルチケットを買うと、1回予約できます" }, 403);
+      }
+    }
+
     console.log("③ DB前（reservations insert）");
     const insertRow: Database["public"]["Tables"]["reservations"]["Insert"] = {
       store_id,
@@ -827,7 +837,7 @@ export async function POST(request: Request) {
       end_at,
       session_type,
       status: "confirmed",
-      notes: "created_from=member_booking_site",
+      notes: mealTicketBooking ? "created_from=meal_personal_ticket" : "created_from=member_booking_site",
       blocks_capacity: true,
     };
     (insertRow as any).tickets_consumed = ticketsToConsume;
@@ -863,6 +873,7 @@ export async function POST(request: Request) {
       }
     }
     if (insErr) {
+      if (consumedMealTicket) await restoreMealSessionTicket(supabase, memberId);
       // partial unique index による二重予約防止（Postgres unique_violation）
       if ((insErr as any)?.code === "23505") {
         return jsonResponse({ error: "既に予約されています" }, 409);

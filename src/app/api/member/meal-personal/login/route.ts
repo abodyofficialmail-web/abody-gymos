@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { findMemberByEmail } from "@/lib/mealPersonalAccount";
+import { issueMealPersonalLoginCode } from "@/lib/mealPersonalLoginCode";
 import { isMealPersonalStandaloneAccount } from "@/lib/memberMealPersonalRollout";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
-import { setMemberIdCookie } from "../../_cookies";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -20,10 +20,11 @@ export async function POST(request: Request) {
     if (member === "multiple" || !member || !isMealPersonalStandaloneAccount(member.member_code)) {
       return json({ error: "このメールアドレスの食事パーソナルアカウントはありません" }, 401);
     }
-    setMemberIdCookie(member.id);
-    return json({ ok: true, member_code: member.member_code }, 200);
+    const issued = await issueMealPersonalLoginCode(supabase, { email: parsed.data.email });
+    if (!issued.ok) return json({ error: issued.error }, issued.status);
+    return json({ ok: true, verification_required: true }, 200);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "ログインに失敗しました";
+    const message = e instanceof Error ? e.message : "確認コードを送れませんでした";
     return json({ error: message }, 500);
   }
 }

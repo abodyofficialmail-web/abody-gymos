@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { getMemberIdFromCookie } from "../../../_cookies";
+import { restoreMealSessionTicket } from "@/lib/mealSessionTicket";
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -11,6 +12,12 @@ export async function PATCH(_request: Request, ctx: { params: { reservationId: s
     if (!memberId) return json({ error: "未ログイン" }, 401);
 
     const supabase = createSupabaseServiceClient();
+    const prior = await (supabase as any)
+      .from("reservations")
+      .select("notes, status")
+      .eq("id", ctx.params.reservationId)
+      .eq("member_id", memberId)
+      .maybeSingle();
     const { data: updated, error } = await (supabase as any)
       .from("reservations")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
@@ -22,10 +29,14 @@ export async function PATCH(_request: Request, ctx: { params: { reservationId: s
     if (error) return json({ error: "キャンセルに失敗しました", detail: error.message }, 500);
     if (!updated) return json({ error: "予約が見つかりません" }, 404);
 
+    const mealTicketBooking = String(prior.data?.notes ?? "").includes("meal_personal_ticket");
+    if (mealTicketBooking && String(prior.data?.status ?? "") !== "cancelled") {
+      await restoreMealSessionTicket(supabase, memberId);
+    }
+
     return json({ ok: true, reservation: updated }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json({ error: "エラーが発生しました", detail: message }, 500);
   }
 }
-
