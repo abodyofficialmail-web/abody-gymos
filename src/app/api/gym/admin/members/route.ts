@@ -2,11 +2,35 @@ import { z } from "zod";
 import { memberCodePrefixForStoreName, nextMemberCodeForStore, registerMember } from "@/lib/memberRegistration";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
+import { campaignNeedsReferrer, ENROLLMENT_BONUS_KOMA_OPTIONS, YMD_RE } from "@/lib/memberEnrollment";
+import { ENROLLMENT_COURSE_PLANS } from "@/lib/memberPlans";
 
 const createMemberSchema = z.object({
   store_id: z.string().uuid(),
   name: z.string().trim().min(1, "氏名を入力してください"),
   email: z.string().trim().min(1, "メールアドレスを入力してください").email("メールアドレスの形式が正しくありません"),
+  joined_at: z.string().regex(YMD_RE, "入会日は YYYY-MM-DD 形式で入力してください"),
+  min_commitment_months: z.number().int().min(0).nullable(),
+  has_enrollment_fee: z.boolean(),
+  enrollment_campaign: z.string().trim().min(1, "入会キャンペーンを入力してください").max(80),
+  membership_plan: z.enum(ENROLLMENT_COURSE_PLANS),
+  enrollment_bonus_koma: z
+    .number()
+    .int()
+    .refine((n) => (ENROLLMENT_BONUS_KOMA_OPTIONS as readonly number[]).includes(n), "入会特典はなし、または4〜8コマから選んでください")
+    .optional()
+    .nullable(),
+  referrer_member_id: z.string().uuid().nullable().optional(),
+  has_changing_clothes_plan: z.boolean(),
+  has_meal_personal: z.boolean(),
+}).superRefine((data, ctx) => {
+  if (campaignNeedsReferrer(data.enrollment_campaign) && !data.referrer_member_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "紹介者を選択してください",
+      path: ["referrer_member_id"],
+    });
+  }
 });
 
 export async function OPTIONS() {

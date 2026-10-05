@@ -243,6 +243,22 @@ describe("evaluateMemberBooking", () => {
     assert.equal(eleventh.reason, "quota");
   });
 
+  it("blocks monthly 4 after 4 koma even with tickets", () => {
+    const existing: RuleReservation[] = [1, 2, 3, 4].map((d) =>
+      res({ start_at: iso(`2026-10-0${d}`, "10:00"), end_at: iso(`2026-10-0${d}`, "10:30") })
+    );
+    const fifth = evaluateMemberBooking({
+      plan: "monthly_4",
+      ticketKoma: 5,
+      reservations: existing,
+      blockedDates: [],
+      candidate: { start_at: iso("2026-10-10", "10:00"), end_at: iso("2026-10-10", "10:30"), store_id: STORE_A },
+      nowIso: iso("2026-09-20", "12:00"),
+    });
+    assert.equal(fifth.ok, false);
+    assert.equal(fifth.reason, "quota");
+  });
+
   it("lets monthly 10 book 2 koma on the same day and blocks a 3rd", () => {
     const second = evaluateMemberBooking({
       plan: "monthly_10",

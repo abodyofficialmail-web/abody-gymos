@@ -12,7 +12,7 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
   const supabase = createSupabaseServiceClient();
   const { data: memberBase } = await supabase
     .from("members")
-    .select("id, member_code, name, line_user_id, line_channel_key, is_active")
+    .select("id, member_code, name, line_user_id, line_channel_key, is_active, created_at")
     .eq("id", params.memberId)
     .maybeSingle();
 
@@ -24,9 +24,15 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
   let hiatusStartAt: string | null = null;
   let hiatusEndAt: string | null = null;
   let joinedAt: string | null = null;
+  let lineFollowedAt: string | null = null;
   let minCommitmentMonths: number | null = null;
   let hasEnrollmentFee: boolean | null = null;
   let enrollmentCampaign: string | null = null;
+  let referrerMemberId: string | null = null;
+  let referrerMemberCode: string | null = null;
+  let referrerMemberName: string | null = null;
+  let hasChangingClothesPlan: boolean | null = null;
+  let hasMealPersonalOption: boolean | null = null;
   let membershipPlan: MembershipPlan | null = null;
   let bonusTicketKoma = 0;
 
@@ -68,11 +74,25 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
   }
 
   {
-    const { data: enrollment, error: enrollmentError } = await (supabase as any)
+    const enrollmentSelect =
+      "joined_at, min_commitment_months, has_enrollment_fee, enrollment_campaign, referrer_member_id, has_changing_clothes_plan, has_meal_personal";
+    let enrollmentResult = await (supabase as any)
       .from("members")
-      .select("joined_at, min_commitment_months, has_enrollment_fee, enrollment_campaign")
+      .select(enrollmentSelect)
       .eq("id", params.memberId)
       .maybeSingle();
+    if (
+      enrollmentResult.error &&
+      /referrer_member_id|has_changing_clothes_plan|has_meal_personal/i.test(String(enrollmentResult.error.message ?? ""))
+    ) {
+      enrollmentResult = await (supabase as any)
+        .from("members")
+        .select("joined_at, min_commitment_months, has_enrollment_fee, enrollment_campaign")
+        .eq("id", params.memberId)
+        .maybeSingle();
+    }
+    const enrollment = enrollmentResult.data;
+    const enrollmentError = enrollmentResult.error;
     if (!enrollmentError && enrollment) {
       joinedAt = (enrollment as { joined_at?: string | null }).joined_at ?? null;
       minCommitmentMonths =
@@ -84,6 +104,30 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
           ? (enrollment as { has_enrollment_fee: boolean }).has_enrollment_fee
           : null;
       enrollmentCampaign = (enrollment as { enrollment_campaign?: string | null }).enrollment_campaign ?? null;
+      referrerMemberId = (enrollment as { referrer_member_id?: string | null }).referrer_member_id ?? null;
+      hasChangingClothesPlan =
+        typeof (enrollment as { has_changing_clothes_plan?: boolean | null }).has_changing_clothes_plan === "boolean"
+          ? (enrollment as { has_changing_clothes_plan: boolean }).has_changing_clothes_plan
+          : null;
+      hasMealPersonalOption =
+        typeof (enrollment as { has_meal_personal?: boolean | null }).has_meal_personal === "boolean"
+          ? (enrollment as { has_meal_personal: boolean }).has_meal_personal
+          : null;
+    }
+  }
+
+  const lineUserId = (memberBase as { line_user_id?: string | null } | null)?.line_user_id ?? null;
+  if (lineUserId) {
+    const { data: follow, error: followError } = await supabase
+      .from("line_follow_events")
+      .select("followed_at")
+      .eq("line_user_id", lineUserId)
+      .eq("event_type", "follow")
+      .order("followed_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!followError && follow?.followed_at) {
+      lineFollowedAt = follow.followed_at;
     }
   }
 
@@ -111,6 +155,16 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
       hiatusEndAt = null;
       if (memberBase) (memberBase as { is_active: boolean }).is_active = true;
     }
+  }
+
+  if (referrerMemberId) {
+    const { data: referrer } = await supabase
+      .from("members")
+      .select("member_code, name")
+      .eq("id", referrerMemberId)
+      .maybeSingle();
+    referrerMemberCode = referrer?.member_code ?? null;
+    referrerMemberName = referrer?.name ?? null;
   }
 
   if (withdrawnTrainerId) {
@@ -209,9 +263,16 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
           hiatus_start_at: hiatusStartAt,
           hiatus_end_at: hiatusEndAt,
           joined_at: joinedAt,
+          created_at: (memberBase as { created_at?: string | null } | null)?.created_at ?? null,
+          line_followed_at: lineFollowedAt,
           min_commitment_months: minCommitmentMonths,
           has_enrollment_fee: hasEnrollmentFee,
           enrollment_campaign: enrollmentCampaign,
+          referrer_member_id: referrerMemberId,
+          referrer_member_code: referrerMemberCode,
+          referrer_member_name: referrerMemberName,
+          has_changing_clothes_plan: hasChangingClothesPlan,
+          has_meal_personal: hasMealPersonalOption,
           membership_plan: membershipPlan,
           bonus_ticket_koma: bonusTicketKoma,
           line_user_id: (memberBase as any)?.line_user_id ?? null,

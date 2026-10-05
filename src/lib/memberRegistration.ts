@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import { applyTicketDelta } from "@/lib/booking/memberBookingRulesDb";
+import { campaignNeedsReferrer } from "@/lib/memberEnrollment";
+import { parseMembershipPlan, type MembershipPlan } from "@/lib/memberPlans";
 
 /** 店舗名 → 会員番号プレフィックス */
 export const STORE_MEMBER_CODE_PREFIX: Record<string, string> = {
@@ -113,6 +116,15 @@ export type RegisterMemberInput = {
   store_id: string;
   name: string;
   email: string;
+  joined_at: string;
+  min_commitment_months: number | null;
+  has_enrollment_fee: boolean;
+  enrollment_campaign: string;
+  membership_plan: MembershipPlan;
+  enrollment_bonus_koma?: number | null;
+  referrer_member_id?: string | null;
+  has_changing_clothes_plan: boolean;
+  has_meal_personal: boolean;
 };
 
 export type RegisterMemberResult = {
@@ -122,6 +134,7 @@ export type RegisterMemberResult = {
   email: string | null;
   store_id: string;
   store_name: string;
+  bonus_ticket_koma: number;
 };
 
 export async function registerMember(
@@ -144,21 +157,86 @@ export async function registerMember(
 
   const member_code = await nextMemberCodeForStore(supabase, store.name);
 
-  const { data: member, error: insertErr } = await supabase
+  const membershipPlan = parseMembershipPlan(input.membership_plan);
+  if (!membershipPlan) throw new Error("コースを選択してください");
+
+  const campaign = input.enrollment_campaign.trim();
+  let referrerMemberId: string | null = null;
+  if (campaignNeedsReferrer(campaign)) {
+    referrerMemberId = String(input.referrer_member_id ?? "").trim() || null;
+    if (!referrerMemberId) throw new Error("紹介者を選択してください");
+    const { data: referrer, error: referrerErr } = await supabase
+      .from("members")
+      .select("id")
+      .eq("id", referrerMemberId)
+      .maybeSingle();
+    if (referrerErr) throw referrerErr;
+    if (!referrer) throw new Error("紹介者が見つかりません");
+  }
+
+  const enrollment = {
+    joined_at: input.joined_at,
+    min_commitment_months: input.min_commitment_months,
+    has_enrollment_fee: input.has_enrollment_fee,
+    enrollment_campaign: campaign,
+    membership_plan: membershipPlan,
+    referrer_member_id: referrerMemberId,
+    has_changing_clothes_plan: input.has_changing_clothes_plan,
+    has_meal_personal: input.has_meal_personal,
+  };
+
+  const baseRow = {
+    member_code,
+    name,
+    display_name: name,
+    email,
+    store_id: store.id,
+    is_active: true,
+    membership_status: "active" as const,
+    line_user_id: null,
+  };
+
+  const first = await supabase
     .from("members")
-    .insert({
-      member_code,
-      name,
-      display_name: name,
-      email,
-      store_id: store.id,
-      is_active: true,
-      membership_status: "active" as const,
-      line_user_id: null,
-    })
+    .insert({ ...baseRow, ...enrollment })
     .select("id, member_code, name, email, store_id")
     .single();
+  let member = first.data;
+  let insertErr = first.error;
+  if (
+    insertErr &&
+    /joined_at|min_commitment_months|has_enrollment_fee|enrollment_campaign|referrer_member_id|has_changing_clothes_plan|has_meal_personal|membership_plan_check|monthly_4|monthly_8/i.test(
+      insertErr.message ?? ""
+    )
+  ) {
+    throw new Error("入会情報の保存準備ができていません（DBマイグレーション未適用の可能性）");
+  }
+  if (insertErr && /membership_plan/i.test(insertErr.message ?? "")) {
+    const withoutPlan = { ...baseRow, ...enrollment } as Record<string, unknown>;
+    delete withoutPlan.membership_plan;
+    const retry = await supabase
+      .from("members")
+      .insert(withoutPlan as typeof baseRow)
+      .select("id, member_code, name, email, store_id")
+      .single();
+    member = retry.data;
+    insertErr = retry.error;
+  }
   if (insertErr) throw insertErr;
+  if (!member) throw new Error("会員の登録に失敗しました");
+
+  const bonus = Math.max(0, Math.floor(Number(input.enrollment_bonus_koma ?? 0) || 0));
+  let bonusTicketKoma = 0;
+  if (bonus > 0) {
+    const granted = await applyTicketDelta(supabase, {
+      memberId: member.id,
+      delta: bonus,
+      reason: "enrollment_bonus",
+      note: "入会特典",
+    });
+    if (!granted.ok) throw new Error(granted.error ?? "入会特典の付与に失敗しました");
+    bonusTicketKoma = granted.ticketKoma;
+  }
 
   return {
     id: member.id,
@@ -167,5 +245,6 @@ export async function registerMember(
     email: member.email ?? null,
     store_id: store.id,
     store_name: store.name,
+    bonus_ticket_koma: bonusTicketKoma,
   };
 }

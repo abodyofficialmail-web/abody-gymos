@@ -3,6 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { DateTime } from "luxon";
+import { ReferrerMemberPicker, type ReferrerChoice } from "@/components/admin/ReferrerMemberPicker";
+import {
+  campaignNeedsReferrer,
+  ENROLLMENT_BONUS_KOMA_OPTIONS,
+  ENROLLMENT_CAMPAIGN_PRESETS,
+  MIN_COMMITMENT_MONTH_OPTIONS,
+} from "@/lib/memberEnrollment";
+import { ENROLLMENT_COURSE_PLANS, MEMBERSHIP_PLAN_OPTIONS, type MembershipPlan } from "@/lib/memberPlans";
 
 type Store = { id: string; name: string };
 
@@ -32,6 +41,10 @@ function storeSortRank(storeName: string): number {
   return 99;
 }
 
+function todayYmd() {
+  return DateTime.now().setZone("Asia/Tokyo").toISODate() ?? "";
+}
+
 export function NewMemberClient({
   stores,
   initialNextCodesByStoreId,
@@ -48,6 +61,15 @@ export function NewMemberClient({
   const [storeId, setStoreId] = useState(() => sortedStores[0]?.id ?? "");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [joinedAt, setJoinedAt] = useState(todayYmd);
+  const [minCommitment, setMinCommitment] = useState("");
+  const [hasEnrollmentFee, setHasEnrollmentFee] = useState<boolean | null>(null);
+  const [campaignPreset, setCampaignPreset] = useState("");
+  const [referrer, setReferrer] = useState<ReferrerChoice | null>(null);
+  const [hasChangingClothes, setHasChangingClothes] = useState<boolean | null>(null);
+  const [hasMealPersonal, setHasMealPersonal] = useState<boolean | null>(null);
+  const [membershipPlan, setMembershipPlan] = useState<MembershipPlan | "">("");
+  const [bonusKoma, setBonusKoma] = useState<number>(0);
   const [nextCode, setNextCode] = useState<string | null>(() => {
     const id = sortedStores[0]?.id ?? "";
     return initialNextCodesByStoreId[id] ?? null;
@@ -85,6 +107,36 @@ export function NewMemberClient({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!joinedAt) {
+      setErr("入会日を入力してください");
+      return;
+    }
+    if (hasEnrollmentFee == null) {
+      setErr("入会金のあり・なしを選んでください");
+      return;
+    }
+    const campaign = campaignPreset.trim();
+    if (!campaign) {
+      setErr("入会キャンペーンを選んでください");
+      return;
+    }
+    if (!membershipPlan) {
+      setErr("コースを選択してください");
+      return;
+    }
+    if (campaignNeedsReferrer(campaign) && !referrer) {
+      setErr("紹介者を選択してください");
+      return;
+    }
+    if (hasChangingClothes == null) {
+      setErr("着替えプランのあり・なしを選んでください");
+      return;
+    }
+    if (hasMealPersonal == null) {
+      setErr("食事パーソナルのあり・なしを選んでください");
+      return;
+    }
+
     setBusy(true);
     setErr(null);
     try {
@@ -95,6 +147,15 @@ export function NewMemberClient({
           store_id: storeId,
           name,
           email,
+          joined_at: joinedAt,
+          min_commitment_months: minCommitment ? Number(minCommitment) : null,
+          has_enrollment_fee: hasEnrollmentFee,
+          enrollment_campaign: campaign,
+          membership_plan: membershipPlan,
+          enrollment_bonus_koma: bonusKoma,
+          referrer_member_id: campaignNeedsReferrer(campaign) ? referrer?.id ?? null : null,
+          has_changing_clothes_plan: hasChangingClothes,
+          has_meal_personal: hasMealPersonal,
         }),
       });
       const json = (await res.json().catch(() => ({}))) as CreateResponse;
@@ -115,10 +176,25 @@ export function NewMemberClient({
     }
   }
 
+  const canSubmit =
+    !busy &&
+    !codeLoading &&
+    Boolean(storeId) &&
+    Boolean(name.trim()) &&
+    Boolean(email.trim()) &&
+    Boolean(nextCode) &&
+    Boolean(joinedAt) &&
+    hasEnrollmentFee != null &&
+    Boolean(campaignPreset) &&
+    Boolean(membershipPlan) &&
+    hasChangingClothes != null &&
+    hasMealPersonal != null &&
+    (!campaignNeedsReferrer(campaignPreset) || Boolean(referrer));
+
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="text-sm text-slate-600">
-        店舗・氏名・メールを入力して会員登録します。登録後、カウンセリング内容と体験セッションの入力画面に進みます。
+        店舗・氏名・メールと入会情報を入力して会員登録します。目標はヒアリングシートで取得するので、トレーナーが目標を記入する画面はありません。登録後は体験セッションの記録へ進みます。
       </div>
 
       <label className="block space-y-1">
@@ -168,12 +244,184 @@ export function NewMemberClient({
         />
       </label>
 
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+        <div className="text-sm font-bold text-slate-900">入会情報</div>
+
+        <label className="block space-y-1">
+          <span className="text-sm font-semibold text-slate-700">入会日</span>
+          <input
+            type="date"
+            value={joinedAt}
+            onChange={(e) => setJoinedAt(e.target.value)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+            required
+          />
+        </label>
+
+        <label className="block space-y-1">
+          <span className="text-sm font-semibold text-slate-700">最低継続期間</span>
+          <select
+            value={minCommitment}
+            onChange={(e) => setMinCommitment(e.target.value)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+          >
+            <option value="">なし</option>
+            {MIN_COMMITMENT_MONTH_OPTIONS.map((n) => (
+              <option key={n} value={String(n)}>
+                {n}ヶ月
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-slate-700">入会金</div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: true, label: "あり" },
+              { id: false, label: "なし" },
+            ].map((opt) => (
+              <button
+                key={String(opt.id)}
+                type="button"
+                onClick={() => setHasEnrollmentFee(opt.id)}
+                className={[
+                  "rounded-full border px-4 py-2 text-sm font-semibold",
+                  hasEnrollmentFee === opt.id
+                    ? "border-slate-400 bg-slate-100 text-slate-900"
+                    : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="block space-y-1">
+          <span className="text-sm font-semibold text-slate-700">入会キャンペーン</span>
+          <select
+            value={campaignPreset}
+            onChange={(e) => setCampaignPreset(e.target.value)}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+            required
+          >
+            <option value="">選択してください</option>
+            {ENROLLMENT_CAMPAIGN_PRESETS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        {campaignNeedsReferrer(campaignPreset) ? (
+          <ReferrerMemberPicker value={referrer} onChange={setReferrer} />
+        ) : null}
+
+        <label className="block space-y-1">
+          <span className="text-sm font-semibold text-slate-700">コース</span>
+          <select
+            value={membershipPlan}
+            onChange={(e) => setMembershipPlan((e.target.value || "") as MembershipPlan | "")}
+            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[16px] outline-none focus:border-slate-400"
+            required
+          >
+            <option value="">選択してください</option>
+            {ENROLLMENT_COURSE_PLANS.map((id) => {
+              const opt = MEMBERSHIP_PLAN_OPTIONS.find((o) => o.id === id);
+              return (
+                <option key={id} value={id}>
+                  {opt?.label ?? id}
+                </option>
+              );
+            })}
+          </select>
+          <div className="text-xs text-slate-500">
+            {MEMBERSHIP_PLAN_OPTIONS.find((o) => o.id === membershipPlan)?.hint ??
+              "30分が1コマ、60分が2コマです。月回数プランは1ヶ月のコマ数が上限です。"}
+          </div>
+        </label>
+
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-slate-700">着替えプラン</div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: true, label: "あり" },
+              { id: false, label: "なし" },
+            ].map((opt) => (
+              <button
+                key={String(opt.id)}
+                type="button"
+                onClick={() => setHasChangingClothes(opt.id)}
+                className={[
+                  "rounded-full border px-4 py-2 text-sm font-semibold",
+                  hasChangingClothes === opt.id
+                    ? "border-slate-400 bg-slate-100 text-slate-900"
+                    : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-slate-700">食事パーソナル</div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: true, label: "あり" },
+              { id: false, label: "なし" },
+            ].map((opt) => (
+              <button
+                key={String(opt.id)}
+                type="button"
+                onClick={() => setHasMealPersonal(opt.id)}
+                className={[
+                  "rounded-full border px-4 py-2 text-sm font-semibold",
+                  hasMealPersonal === opt.id
+                    ? "border-slate-400 bg-slate-100 text-slate-900"
+                    : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-slate-500">入会時の契約有無です。マイページの食事機能は、別途の利用開始後に有効になります。</div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-slate-700">入会特典チケット</div>
+          <div className="flex flex-wrap gap-2">
+            {ENROLLMENT_BONUS_KOMA_OPTIONS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setBonusKoma(n)}
+                className={[
+                  "rounded-full border px-4 py-2 text-sm font-semibold",
+                  bonusKoma === n
+                    ? "border-slate-400 bg-slate-100 text-slate-900"
+                    : "border-slate-200 bg-white text-slate-700",
+                ].join(" ")}
+              >
+                {n === 0 ? "なし" : `${n}コマ`}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-slate-500">
+            4〜8コマの入会プレゼント用です。付与すると予約画面とマイページに残数が表示されます。
+          </div>
+        </div>
+      </div>
+
       {err ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div> : null}
 
       <div className="flex flex-wrap gap-2">
         <button
           type="submit"
-          disabled={busy || codeLoading || !storeId || !name.trim() || !email.trim() || !nextCode}
+          disabled={!canSubmit}
           className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
         >
           {busy ? "登録中…" : "登録して次へ"}

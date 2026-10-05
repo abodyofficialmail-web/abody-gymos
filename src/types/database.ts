@@ -55,6 +55,8 @@ export interface Database {
           is_active: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
+          bonus_ticket_koma?: number;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;
@@ -77,6 +79,9 @@ export interface Database {
           min_commitment_months?: number | null;
           has_enrollment_fee?: boolean | null;
           enrollment_campaign?: string | null;
+          referrer_member_id?: string | null;
+          has_changing_clothes_plan?: boolean | null;
+          has_meal_personal?: boolean | null;
           created_at: string;
           updated_at: string;
         };
@@ -95,6 +100,8 @@ export interface Database {
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
+          bonus_ticket_koma?: number;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;
@@ -117,6 +124,9 @@ export interface Database {
           min_commitment_months?: number | null;
           has_enrollment_fee?: boolean | null;
           enrollment_campaign?: string | null;
+          referrer_member_id?: string | null;
+          has_changing_clothes_plan?: boolean | null;
+          has_meal_personal?: boolean | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -135,6 +145,8 @@ export interface Database {
           is_active?: boolean;
           reservation_reminder_line_enabled?: boolean;
           plan?: "4" | "8" | "unlimited" | null;
+          membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
+          bonus_ticket_koma?: number;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;
@@ -157,6 +169,9 @@ export interface Database {
           min_commitment_months?: number | null;
           has_enrollment_fee?: boolean | null;
           enrollment_campaign?: string | null;
+          referrer_member_id?: string | null;
+          has_changing_clothes_plan?: boolean | null;
+          has_meal_personal?: boolean | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -831,6 +846,8 @@ export interface Database {
           notes: string | null;
           guest_name?: string | null;
           blocks_capacity?: boolean;
+          quota_consumed?: boolean;
+          tickets_consumed?: number;
           created_at: string;
           updated_at: string;
         };
@@ -848,6 +865,8 @@ export interface Database {
           notes?: string | null;
           guest_name?: string | null;
           blocks_capacity?: boolean;
+          quota_consumed?: boolean;
+          tickets_consumed?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -865,6 +884,8 @@ export interface Database {
           notes?: string | null;
           guest_name?: string | null;
           blocks_capacity?: boolean;
+          quota_consumed?: boolean;
+          tickets_consumed?: number;
           created_at?: string;
           updated_at?: string;
         };

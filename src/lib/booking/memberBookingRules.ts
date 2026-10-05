@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import {
+  isHardMonthlyCapPlan,
   limitsForMembershipPlan,
   type MembershipPlan,
   type MemberPlanLimits,
@@ -309,8 +310,7 @@ export function remainingBookableKoma(snap: MemberBookingSnapshot): number | nul
   if (!snap.plan || snap.maxHoldKoma == null) return null;
   const holdLeft = Math.max(0, snap.maxHoldKoma - snap.holdKoma);
   const tickets = Math.max(0, snap.ticketKoma);
-  const hardMonth =
-    snap.plan === "monthly_10" || snap.plan === "monthly_20" || snap.plan === "this_month_10";
+  const hardMonth = snap.plan ? isHardMonthlyCapPlan(snap.plan) : false;
   if (hardMonth) {
     const monthLeft =
       snap.monthlyMaxKoma == null ? holdLeft : Math.max(0, snap.monthlyMaxKoma - snap.monthKoma);
@@ -372,7 +372,7 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
       : null;
   const monthly = cycle ? komaInCycle(rows, cycle, zone, true) : 0;
   const monthlyOverflow = limits.monthlyMaxKoma != null && monthly + newKoma > limits.monthlyMaxKoma;
-  const hardMonthCap = plan === "monthly_10" || plan === "monthly_20" || plan === "this_month_10";
+  const hardMonthCap = isHardMonthlyCapPlan(plan);
 
   if (hardMonthCap && (holdOverflow || monthlyOverflow)) {
     return blocked("quota", plan);

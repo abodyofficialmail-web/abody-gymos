@@ -13,6 +13,7 @@ import {
   WeightProgressPanel,
   type WeightProgressPanelData,
 } from "@/components/weight-progress/WeightProgressPanel";
+import { ReferrerMemberPicker, type ReferrerChoice } from "@/components/admin/ReferrerMemberPicker";
 import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
 import type { MembershipPlan } from "@/lib/memberPlans";
 import {
@@ -36,14 +37,18 @@ import {
   type MembershipStatus,
 } from "@/lib/memberMembershipStatus";
 import {
+  campaignNeedsReferrer,
   ENROLLMENT_CAMPAIGN_OTHER,
   ENROLLMENT_CAMPAIGN_PRESETS,
   formatEnrollmentCampaign,
   formatEnrollmentFee,
   formatJoinedAt,
   formatMinCommitmentMonths,
+  formatTenureFromYmd,
   isPresetCampaign,
   MIN_COMMITMENT_MONTH_OPTIONS,
+  provisionalContractSourceLabel,
+  resolveProvisionalContractDate,
 } from "@/lib/memberEnrollment";
 import {
   createKarteRepOptions,
@@ -273,9 +278,16 @@ export function MemberDetailClient({
     hiatus_start_at?: string | null;
     hiatus_end_at?: string | null;
     joined_at?: string | null;
+    created_at?: string | null;
+    line_followed_at?: string | null;
     min_commitment_months?: number | null;
     has_enrollment_fee?: boolean | null;
     enrollment_campaign?: string | null;
+    referrer_member_id?: string | null;
+    referrer_member_code?: string | null;
+    referrer_member_name?: string | null;
+    has_changing_clothes_plan?: boolean | null;
+    has_meal_personal?: boolean | null;
     membership_plan?: MembershipPlan | null;
     bonus_ticket_koma?: number;
     line_user_id: string | null;
@@ -308,7 +320,21 @@ export function MemberDetailClient({
   const [hiatusStartAt, setHiatusStartAt] = useState(member.hiatus_start_at ?? todayYmd);
   const [hiatusEndAt, setHiatusEndAt] = useState(member.hiatus_end_at ?? todayYmd);
   const [hiatusFormOpen, setHiatusFormOpen] = useState(false);
-  const [joinedAt, setJoinedAt] = useState(member.joined_at ?? "");
+  const provisionalContract = useMemo(
+    () =>
+      resolveProvisionalContractDate({
+        joinedAt: member.joined_at,
+        lineFollowedAt: member.line_followed_at,
+        createdAt: member.created_at,
+      }),
+    [member.joined_at, member.line_followed_at, member.created_at]
+  );
+  const [joinedAt, setJoinedAt] = useState(provisionalContract.ymd);
+  const [contractDateConfirmed, setContractDateConfirmed] = useState(Boolean(member.joined_at));
+  const provisionalContractLabel =
+    !contractDateConfirmed && joinedAt && joinedAt === provisionalContract.ymd
+      ? provisionalContractSourceLabel(provisionalContract.source)
+      : null;
   const [minCommitment, setMinCommitment] = useState(
     member.min_commitment_months != null && member.min_commitment_months > 0
       ? String(member.min_commitment_months)
@@ -326,6 +352,21 @@ export function MemberDetailClient({
     const c = String(member.enrollment_campaign ?? "").trim();
     return c && !isPresetCampaign(c) ? c : "";
   });
+  const [referrer, setReferrer] = useState<ReferrerChoice | null>(() =>
+    member.referrer_member_id
+      ? {
+          id: member.referrer_member_id,
+          member_code: member.referrer_member_code ?? "",
+          name: member.referrer_member_name ?? "",
+        }
+      : null
+  );
+  const [hasChangingClothes, setHasChangingClothes] = useState<boolean | null>(
+    typeof member.has_changing_clothes_plan === "boolean" ? member.has_changing_clothes_plan : null
+  );
+  const [hasMealPersonalOption, setHasMealPersonalOption] = useState<boolean | null>(
+    typeof member.has_meal_personal === "boolean" ? member.has_meal_personal : null
+  );
   const [enrollmentSaving, setEnrollmentSaving] = useState(false);
   const [enrollmentMsg, setEnrollmentMsg] = useState<string | null>(null);
   const [withdrawTrainers, setWithdrawTrainers] = useState<TrainerRow[]>([]);
@@ -1011,6 +1052,18 @@ export function MemberDetailClient({
       setEnrollmentMsg("入会キャンペーンを選んでください");
       return;
     }
+    if (campaignNeedsReferrer(campaign) && !referrer) {
+      setEnrollmentMsg("紹介者を選択してください");
+      return;
+    }
+    if (hasChangingClothes == null) {
+      setEnrollmentMsg("着替えプランのあり・なしを選んでください");
+      return;
+    }
+    if (hasMealPersonalOption == null) {
+      setEnrollmentMsg("食事パーソナルのあり・なしを選んでください");
+      return;
+    }
     if (enrollmentSaving) return;
 
     setEnrollmentSaving(true);
@@ -1022,14 +1075,21 @@ export function MemberDetailClient({
           min_commitment_months?: number | null;
           has_enrollment_fee?: boolean | null;
           enrollment_campaign?: string | null;
+          referrer_member_id?: string | null;
+          has_changing_clothes_plan?: boolean | null;
+          has_meal_personal?: boolean | null;
         };
       }>(`/api/admin/members/${encodeURIComponent(memberId)}`, {
         joined_at: joinedAt,
         min_commitment_months: minCommitment ? Number(minCommitment) : null,
         has_enrollment_fee: hasEnrollmentFee,
         enrollment_campaign: campaign,
+        referrer_member_id: campaignNeedsReferrer(campaign) ? referrer?.id ?? null : null,
+        has_changing_clothes_plan: hasChangingClothes,
+        has_meal_personal: hasMealPersonalOption,
       });
       setJoinedAt(res.member?.joined_at ?? joinedAt);
+      setContractDateConfirmed(true);
       setMinCommitment(
         res.member?.min_commitment_months != null && res.member.min_commitment_months > 0
           ? String(res.member.min_commitment_months)
@@ -1045,6 +1105,13 @@ export function MemberDetailClient({
       } else {
         setCampaignPreset(ENROLLMENT_CAMPAIGN_OTHER);
         setCampaignOther(savedCampaign);
+      }
+      if (!campaignNeedsReferrer(savedCampaign)) setReferrer(null);
+      if (typeof res.member?.has_changing_clothes_plan === "boolean") {
+        setHasChangingClothes(res.member.has_changing_clothes_plan);
+      }
+      if (typeof res.member?.has_meal_personal === "boolean") {
+        setHasMealPersonalOption(res.member.has_meal_personal);
       }
       setEnrollmentMsg("入会情報を保存しました");
       router.refresh();
@@ -1437,7 +1504,11 @@ export function MemberDetailClient({
         <div className="pt-2 space-y-2 border-t border-slate-100">
           <div className="text-xs font-semibold text-slate-700">入会情報</div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 space-y-0.5">
-            <div>入会日: {formatJoinedAt(joinedAt)}</div>
+            <div>
+              入会日: {formatJoinedAt(joinedAt)}
+              {provisionalContractLabel ? `（${provisionalContractLabel}）` : ""}
+            </div>
+            <div>継続期間: {formatTenureFromYmd(joinedAt, todayYmd)}</div>
             <div>最低継続期間: {formatMinCommitmentMonths(minCommitment ? Number(minCommitment) : null)}</div>
             <div>入会金: {formatEnrollmentFee(hasEnrollmentFee)}</div>
             <div>
@@ -1446,6 +1517,13 @@ export function MemberDetailClient({
                 campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? campaignOther : campaignPreset
               )}
             </div>
+            {campaignNeedsReferrer(campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? campaignOther : campaignPreset) ? (
+              <div>
+                紹介者: {referrer ? `${referrer.member_code} ${referrer.name}`.trim() : "未選択"}
+              </div>
+            ) : null}
+            <div>着替えプラン: {formatEnrollmentFee(hasChangingClothes)}</div>
+            <div>食事パーソナル: {formatEnrollmentFee(hasMealPersonalOption)}</div>
           </div>
           <label className="block space-y-1">
             <span className="text-xs font-medium text-slate-700">入会日</span>
@@ -1523,9 +1601,22 @@ export function MemberDetailClient({
                   {c}
                 </option>
               ))}
-              <option value={ENROLLMENT_CAMPAIGN_OTHER}>{ENROLLMENT_CAMPAIGN_OTHER}</option>
+              {campaignPreset === ENROLLMENT_CAMPAIGN_OTHER && campaignOther ? (
+                <option value={ENROLLMENT_CAMPAIGN_OTHER}>{campaignOther}</option>
+              ) : null}
             </select>
           </label>
+          {campaignNeedsReferrer(campaignPreset) ? (
+            <ReferrerMemberPicker
+              compact
+              value={referrer}
+              excludeMemberId={memberId}
+              onChange={(next) => {
+                setReferrer(next);
+                setEnrollmentMsg(null);
+              }}
+            />
+          ) : null}
           {campaignPreset === ENROLLMENT_CAMPAIGN_OTHER ? (
             <label className="block space-y-1">
               <span className="text-xs font-medium text-slate-700">キャンペーン名</span>
@@ -1540,6 +1631,59 @@ export function MemberDetailClient({
               />
             </label>
           ) : null}
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-slate-700">着替えプラン</div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: true, label: "あり" },
+                { id: false, label: "なし" },
+              ].map((opt) => (
+                <button
+                  key={`clothes-${String(opt.id)}`}
+                  type="button"
+                  onClick={() => {
+                    setHasChangingClothes(opt.id);
+                    setEnrollmentMsg(null);
+                  }}
+                  className={[
+                    "rounded-full border px-3 py-1 text-xs font-semibold",
+                    hasChangingClothes === opt.id
+                      ? "border-slate-400 bg-white text-slate-900"
+                      : "border-slate-200 bg-white text-slate-700",
+                  ].join(" ")}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-slate-700">食事パーソナル</div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: true, label: "あり" },
+                { id: false, label: "なし" },
+              ].map((opt) => (
+                <button
+                  key={`meal-${String(opt.id)}`}
+                  type="button"
+                  onClick={() => {
+                    setHasMealPersonalOption(opt.id);
+                    setEnrollmentMsg(null);
+                  }}
+                  className={[
+                    "rounded-full border px-3 py-1 text-xs font-semibold",
+                    hasMealPersonalOption === opt.id
+                      ? "border-slate-400 bg-white text-slate-900"
+                      : "border-slate-200 bg-white text-slate-700",
+                  ].join(" ")}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[11px] text-slate-500">入会時の契約有無です。マイページの食事機能は、別途の利用開始後に有効になります。</div>
+          </div>
           <button
             type="button"
             disabled={enrollmentSaving}
