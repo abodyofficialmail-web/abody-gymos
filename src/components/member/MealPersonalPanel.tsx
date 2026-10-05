@@ -39,6 +39,7 @@ import { WeightLogPanel } from "@/components/member/WeightLogPanel";
 import { HOME_PAGE_CLASS, HomeSwipePager } from "@/components/member/WeightHomeCarousel";
 import { MealPersonalPaywall } from "@/components/member/MealPersonalPaywall";
 import { MealPersonalGoalSettings } from "@/components/member/MealPersonalGoalSettings";
+import { MEAL_START_SKIP_KEY, MealPersonalStart } from "@/components/member/MealPersonalStart";
 import {
   DEFAULT_MEAL_REMINDER_SETTINGS,
   type MealReminderSettings,
@@ -294,6 +295,9 @@ export function MealPersonalPanel({
   const [kartePage, setKartePage] = useState(0);
   const [suggestView, setSuggestView] = useState<"menu" | "map">("menu");
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
+  const [startPaused, setStartPaused] = useState(false);
+  const [startReady, setStartReady] = useState(false);
+  const [startForced, setStartForced] = useState(false);
 
   const mealPhotosRef = useRef(mealPhotos);
   mealPhotosRef.current = mealPhotos;
@@ -355,6 +359,25 @@ export function MealPersonalPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    try {
+      setStartPaused(window.sessionStorage.getItem(MEAL_START_SKIP_KEY) === "1");
+    } catch {
+      setStartPaused(false);
+    }
+    setStartReady(true);
+  }, []);
+
+  function pauseStart() {
+    try {
+      window.sessionStorage.setItem(MEAL_START_SKIP_KEY, "1");
+    } catch {
+      // このタブではホームを見せる
+    }
+    setStartPaused(true);
+    setStartForced(false);
+  }
 
   useEffect(() => {
     if (tab !== "settings") setSettingsPage("menu");
@@ -735,6 +758,52 @@ export function MealPersonalPanel({
     return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div>;
   }
   if (!data) return null;
+
+  const needsStart = !compact && !readOnly && !locked && !data.nutrition;
+  if (needsStart && !startReady) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+        食事パーソナルを読み込み中…
+      </div>
+    );
+  }
+  if (needsStart && (!startPaused || startForced)) {
+    return (
+      <MealPersonalStart
+        onExit={pauseStart}
+        onFinished={(target) => {
+          if (target) {
+            setData((prev) => (prev ? { ...prev, nutrition: target } : prev));
+            try {
+              window.sessionStorage.removeItem(MEAL_START_SKIP_KEY);
+            } catch {
+              // 目標が保存されていれば、次回は質問を出さない
+            }
+            setStartPaused(true);
+            setStartForced(false);
+            return;
+          }
+          pauseStart();
+        }}
+      />
+    );
+  }
+
+  const startBanner = needsStart ? (
+    <button
+      type="button"
+      onClick={() => setStartForced(true)}
+      className="flex w-full items-center gap-3 overflow-hidden rounded-2xl border border-teal-200 bg-white p-2 text-left shadow-sm"
+    >
+      <img src="/meal-personal/start-hero.jpg" alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
+      <span className="min-w-0">
+        <span className="block text-sm font-bold text-slate-900">目標カロリーがまだありません</span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">
+          体重や体脂肪がわからなくても始められます。わかったら、いつでも変更できます。
+        </span>
+      </span>
+    </button>
+  ) : null;
 
   const remaining = data.remaining;
   const useTabs = !compact;
@@ -1597,7 +1666,12 @@ export function MealPersonalPanel({
         homeBody
       ) : (
         <>
-          {activeTab === "home" ? homeBody : null}
+          {activeTab === "home" ? (
+            <div className="space-y-4">
+              {startBanner}
+              {homeBody}
+            </div>
+          ) : null}
           {activeTab === "diary" ? withPaywall(diaryBody) : null}
           {activeTab === "add" && !readOnly ? withPaywall(addBody) : null}
           {activeTab === "suggest" ? withPaywall(suggestBody) : null}

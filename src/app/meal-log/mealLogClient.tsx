@@ -1,10 +1,11 @@
 "use client";
 
+import { MealPersonalEntry } from "@/components/member/MealPersonalEntry";
 import { MealPersonalPanel } from "@/components/member/MealPersonalPanel";
 import type { MealSlot } from "@/lib/memberMealLogs";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-type Gate = "checking" | "ready";
+type Gate = "checking" | "entry" | "ready";
 
 export function MealLogClient({
   signed,
@@ -19,40 +20,35 @@ export function MealLogClient({
   const [subscribeUrl, setSubscribeUrl] = useState<string | null>(null);
   const [paidNotice, setPaidNotice] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (signed) {
       setLocked(false);
       setGate("ready");
       return;
     }
-    let cancelled = false;
-
-    const activateIfNeeded = async () => {
-      try {
-        const q = new URLSearchParams(window.location.search);
-        const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
-        if (q.get("meal_pass") !== "success" && !sessionId) return false;
-        if (!sessionId) return false;
-        const res = await fetch(`/api/member/meal-personal/from-checkout?session_id=${encodeURIComponent(sessionId)}`, {
+    setGate("checking");
+    let justPaid = false;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const sessionId = (q.get("session_id") || q.get("checkout_session_id") || "").trim();
+      if ((q.get("meal_pass") === "success" || sessionId) && sessionId) {
+        const paid = await fetch(`/api/member/meal-personal/from-checkout?session_id=${encodeURIComponent(sessionId)}`, {
           cache: "no-store",
         });
-        if (res.ok) {
+        if (paid.ok) {
           window.history.replaceState({}, "", "/meal-log");
-          if (!cancelled) setPaidNotice("お申し込みが完了しました。食事記録が使えます。");
-          return true;
+          setPaidNotice("お申し込みが完了しました。食事記録が使えます。");
+          justPaid = true;
         }
-      } catch {
-        // webhook 側で有効化される場合もある
       }
-      return false;
-    };
+    } catch {
+      // webhook 側で有効化される場合もある
+    }
 
-    (async () => {
-      const justPaid = await activateIfNeeded();
+    try {
       const res = await fetch("/api/member/me", { cache: "no-store" });
-      if (cancelled) return;
       if (res.status === 401) {
-        window.location.href = "/login";
+        setGate("entry");
         return;
       }
       const json = (await res.json().catch(() => ({}))) as {
@@ -64,20 +60,22 @@ export function MealLogClient({
       setSubscribeUrl(json?.meal_personal_pass?.subscribe_url ?? "/api/member/meal-personal/checkout");
       setLocked(!enabled);
       setGate("ready");
-    })().catch(() => {
-      if (!cancelled) {
-        setLocked(true);
-        setGate("ready");
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
+    } catch {
+      setLocked(true);
+      setGate("ready");
+    }
   }, [signed]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   if (gate === "checking") {
     return <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">読み込み中…</div>;
+  }
+
+  if (gate === "entry") {
+    return <MealPersonalEntry onLoggedIn={() => void refresh()} />;
   }
 
   return (

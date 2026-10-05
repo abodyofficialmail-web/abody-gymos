@@ -507,7 +507,9 @@ export function MealPersonalGoalSettings({
             ) : target ? (
               <ResultCard shown={target} />
             ) : (
-              <p className="text-sm text-slate-600">まだ出せていません。下から目標設定してください。</p>
+              <p className="text-sm text-slate-600">
+                まだ出せていません。下から目標設定してください。体重や体脂肪がわからなければ空欄のままでもよく、あとから変更できます。
+              </p>
             )}
           </section>
           <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
