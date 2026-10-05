@@ -16,7 +16,20 @@ import { formatIntakeLabel, type MemberNutritionTargetView } from "@/lib/memberN
 import { loginWithMemberIdentifier } from "@/components/member/memberIdentifierLogin";
 import { useMemo, useState } from "react";
 
-type Step = "primary" | "direction" | "sex" | "age" | "height" | "weight" | "fat" | "target" | "activity" | "pace" | "confirm" | "link";
+type Step =
+  | "nickname"
+  | "primary"
+  | "direction"
+  | "sex"
+  | "age"
+  | "height"
+  | "weight"
+  | "fat"
+  | "target"
+  | "activity"
+  | "pace"
+  | "confirm"
+  | "link";
 
 export const MEAL_START_SKIP_KEY = "meal-personal-start-skipped";
 
@@ -85,7 +98,8 @@ export function MealPersonalStart({
   onFinished: (target: MemberNutritionTargetView | null) => void;
   onExit?: () => void;
 }) {
-  const [step, setStep] = useState<Step>("primary");
+  const [step, setStep] = useState<Step>("nickname");
+  const [nickname, setNickname] = useState("");
   const [motion, setMotion] = useState<"forward" | "back">("forward");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
@@ -103,7 +117,7 @@ export function MealPersonalStart({
 
   const showPace = needsPace(direction, weight, targetWeight);
   const steps = useMemo(() => {
-    const list: Step[] = ["primary", "direction", "sex", "age", "height", "weight", "fat", "target", "activity"];
+    const list: Step[] = ["nickname", "primary", "direction", "sex", "age", "height", "weight", "fat", "target", "activity"];
     if (showPace) list.push("pace");
     list.push("confirm");
     return list;
@@ -154,6 +168,10 @@ export function MealPersonalStart({
   }
 
   function validateStep(current: Step): string | null {
+    if (current === "nickname") {
+      const name = nickname.trim();
+      if (name.length < 1 || name.length > 20) return "ニックネームを20文字以内で入れてください";
+    }
     if (current === "age") {
       const n = Number(age);
       if (!age.trim() || !Number.isFinite(n) || n < 10 || n > 100) return "年齢を 10〜100 で入れてください";
@@ -174,8 +192,27 @@ export function MealPersonalStart({
     return null;
   }
 
+  async function saveNickname() {
+    const name = nickname.trim();
+    if (!name) return true;
+    const res = await fetch("/api/member/me", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ display_name: name }),
+    });
+    if (res.status === 401) {
+      setStep("link");
+      return false;
+    }
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(json.error || "ニックネームの保存に失敗しました");
+    }
+    return true;
+  }
+
   async function finish() {
-    const numberErr = (["age", "height", "weight", "fat", "target"] as Step[]).map(validateStep).find(Boolean);
+    const numberErr = (["nickname", "age", "height", "weight", "fat", "target"] as Step[]).map(validateStep).find(Boolean);
     if (numberErr) {
       setErr(numberErr);
       return;
@@ -186,12 +223,21 @@ export function MealPersonalStart({
         setStep("link");
         return;
       }
+      try {
+        const savedName = await saveNickname();
+        if (!savedName) return;
+      } catch (e) {
+        setErr(String((e as Error)?.message ?? "ニックネームの保存に失敗しました"));
+        return;
+      }
       onFinished(null);
       return;
     }
     setBusy(true);
     setErr(null);
     try {
+      const savedName = await saveNickname();
+      if (!savedName) return;
       const fat = parseOptional(bodyFat, 3, 60);
       if (weight.trim()) {
         const weightRes = await fetch("/api/member/weight-logs", {
@@ -312,6 +358,22 @@ export function MealPersonalStart({
         <div className="text-[11px] font-semibold text-slate-400">
           {index + 1} / {steps.length}
         </div>
+        {step === "nickname" ? (
+          <>
+            <h2 className="text-xl font-bold text-slate-900">なんて呼びましょうか？</h2>
+            <p className="text-sm leading-relaxed text-slate-600">
+              食事パーソナルに表示する名前です。本名でなくても大丈夫です。この名前は、ログインした会員にだけ保存されます。
+            </p>
+            <input
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              maxLength={20}
+              placeholder="例: みさき"
+              className="w-full border-0 border-b-2 border-slate-200 bg-transparent px-1 py-2 text-3xl font-bold text-slate-900 outline-none placeholder:text-2xl placeholder:font-semibold placeholder:text-slate-300 focus:border-teal-800"
+            />
+          </>
+        ) : null}
+
         {step === "primary" ? (
           <>
             <h2 className="text-xl font-bold text-slate-900">いちばん近い目標は？</h2>

@@ -46,9 +46,13 @@ const patchSchema = z
   .object({
     reservation_reminder_line_enabled: z.boolean().optional(),
     weight_reminder_line_enabled: z.boolean().optional(),
+    display_name: z.string().trim().min(1).max(20).optional(),
   })
   .refine(
-    (d) => d.reservation_reminder_line_enabled !== undefined || d.weight_reminder_line_enabled !== undefined,
+    (d) =>
+      d.reservation_reminder_line_enabled !== undefined ||
+      d.weight_reminder_line_enabled !== undefined ||
+      d.display_name !== undefined,
     { message: "at least one setting required" }
   );
 
@@ -364,6 +368,14 @@ export async function PATCH(req: Request) {
       reservationReminderEnabled = Boolean(updated?.reservation_reminder_line_enabled ?? value);
     }
 
+    let displayName: string | undefined;
+    if (parsed.data.display_name !== undefined) {
+      const value = parsed.data.display_name;
+      const { error: uErr } = await (supabase as any).from("members").update({ display_name: value }).eq("id", memberId);
+      if (uErr) return json({ error: "ニックネームの保存に失敗しました", detail: uErr.message }, 500);
+      displayName = value;
+    }
+
     let weightReminderEnabled: boolean | undefined;
     if (parsed.data.weight_reminder_line_enabled !== undefined) {
       const saved = await saveWeightReminderEnabled(
@@ -380,6 +392,7 @@ export async function PATCH(req: Request) {
         ok: true,
         member: {
           id: memberId,
+          display_name: displayName,
           reservation_reminder_line_enabled: reservationReminderEnabled,
           weight_reminder_line_enabled: weightReminderEnabled,
         },
