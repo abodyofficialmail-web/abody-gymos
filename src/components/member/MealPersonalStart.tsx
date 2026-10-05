@@ -55,6 +55,7 @@ export function MealPersonalStart({
   onExit?: () => void;
 }) {
   const [step, setStep] = useState<Step>("primary");
+  const [motion, setMotion] = useState<"forward" | "back">("forward");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -117,6 +118,7 @@ export function MealPersonalStart({
     const dest = steps[i + next];
     if (!dest) return;
     setErr(null);
+    setMotion(next > 0 ? "forward" : "back");
     setStep(dest);
   }
 
@@ -261,9 +263,15 @@ export function MealPersonalStart({
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="h-1.5 bg-slate-100">
-        <div className="h-full bg-teal-800" style={{ width: progress }} />
+        <div className="h-full bg-teal-800 transition-[width] duration-500 ease-out" style={{ width: progress }} />
       </div>
-      <div className="space-y-4 p-5">
+      <div
+        key={step}
+        className={[
+          "space-y-4 p-5",
+          motion === "back" ? "meal-q-back" : "meal-q-in",
+        ].join(" ")}
+      >
         <div className="text-[11px] font-semibold text-slate-400">
           {index + 1} / {steps.length}
         </div>
@@ -271,15 +279,16 @@ export function MealPersonalStart({
           <>
             <h2 className="text-xl font-bold text-slate-900">いちばん近い目標は？</h2>
             <div className="grid grid-cols-1 gap-2">
-              {PRIMARY_GOAL_OPTIONS.filter((o) => GOAL_IMAGES[o.id]).map((opt) => {
+              {PRIMARY_GOAL_OPTIONS.filter((o) => GOAL_IMAGES[o.id]).map((opt, i) => {
                 const active = primaryGoal === opt.id;
                 return (
                   <button
                     key={opt.id}
                     type="button"
                     onClick={() => setPrimaryGoal(opt.id)}
+                    style={{ animationDelay: `${80 + i * 70}ms` }}
                     className={[
-                      "overflow-hidden rounded-2xl border text-left",
+                      "meal-choice-in overflow-hidden rounded-2xl border text-left",
                       active ? "border-teal-800 ring-2 ring-teal-800" : "border-slate-200",
                     ].join(" ")}
                   >
@@ -450,15 +459,16 @@ function ChoiceList({
 }) {
   return (
     <div className="space-y-2">
-      {options.map((opt) => {
+      {options.map((opt, i) => {
         const active = value === opt.id;
         return (
           <button
             key={opt.id}
             type="button"
             onClick={() => onChange(opt.id)}
+            style={{ animationDelay: `${90 + i * 55}ms` }}
             className={[
-              "w-full rounded-2xl border px-4 py-3.5 text-left",
+              "meal-choice-in w-full rounded-2xl border px-4 py-3.5 text-left",
               active ? "border-teal-800 bg-teal-800 text-white" : "border-slate-200 bg-white text-slate-800",
             ].join(" ")}
           >

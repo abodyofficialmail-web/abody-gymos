@@ -12,3 +12,56 @@ body {
   color: #0f172a;
 }
 
+@keyframes meal-q-in {
+  from {
+    opacity: 0;
+    transform: translateX(36px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes meal-q-back {
+  from {
+    opacity: 0;
+    transform: translateX(-36px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes meal-choice-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.meal-q-in {
+  animation: meal-q-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.meal-q-back {
+  animation: meal-q-back 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.meal-choice-in {
+  animation: meal-choice-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meal-q-in,
+  .meal-q-back,
+  .meal-choice-in {
+    animation: none;
+  }
+}
+
