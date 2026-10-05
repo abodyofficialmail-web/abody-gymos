@@ -14,7 +14,7 @@ import {
 } from "@/lib/goalHearingNutrition";
 import { formatIntakeLabel, type MemberNutritionTargetView } from "@/lib/memberNutritionTargets";
 import { loginWithMemberIdentifier } from "@/components/member/memberIdentifierLogin";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Step =
   | "nickname"
@@ -100,6 +100,9 @@ export function MealPersonalStart({
 }) {
   const [step, setStep] = useState<Step>("nickname");
   const [nickname, setNickname] = useState("");
+  const [email, setEmail] = useState("");
+  const [memberCode, setMemberCode] = useState("");
+  const [askCode, setAskCode] = useState(false);
   const [motion, setMotion] = useState<"forward" | "back">("forward");
   const [identifier, setIdentifier] = useState("");
   const [busy, setBusy] = useState(false);
@@ -114,6 +117,20 @@ export function MealPersonalStart({
   const [targetWeight, setTargetWeight] = useState("");
   const [activity, setActivity] = useState("light");
   const [pace, setPace] = useState<WeightPace>("normal");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch("/api/member/me", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json().catch(() => ({}))) as { member?: { email?: string | null } };
+      const mail = String(json.member?.email ?? "").trim();
+      if (!cancelled && mail) setEmail((prev) => prev || mail);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const showPace = needsPace(direction, weight, targetWeight);
   const steps = useMemo(() => {
@@ -154,6 +171,11 @@ export function MealPersonalStart({
     [form, pace, showPace]
   );
 
+  function openLink() {
+    setIdentifier((prev) => prev || email.trim() || memberCode.trim());
+    setStep("link");
+  }
+
   function go(next: 1 | -1) {
     const i = steps.indexOf(step);
     if (next < 0 && i <= 0) {
@@ -171,6 +193,7 @@ export function MealPersonalStart({
     if (current === "nickname") {
       const name = nickname.trim();
       if (name.length < 1 || name.length > 20) return "ニックネームを20文字以内で入れてください";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email.trim())) return "ログインIDにするメールアドレスを入れてください";
     }
     if (current === "age") {
       const n = Number(age);
@@ -192,23 +215,69 @@ export function MealPersonalStart({
     return null;
   }
 
-  async function saveNickname() {
+  async function saveProfile(options?: { includeEmail?: boolean }) {
     const name = nickname.trim();
-    if (!name) return true;
+    const mail = email.trim().toLowerCase();
+    const includeEmail = options?.includeEmail !== false && Boolean(mail);
+    if (!name && !includeEmail) return true;
     const res = await fetch("/api/member/me", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ display_name: name }),
+      body: JSON.stringify({
+        ...(name ? { display_name: name } : {}),
+        ...(includeEmail ? { email: mail } : {}),
+      }),
     });
     if (res.status === 401) {
-      setStep("link");
+      openLink();
       return false;
     }
     if (!res.ok) {
       const json = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(json.error || "ニックネームの保存に失敗しました");
+      throw new Error(
+        res.status === 400 ? "メールアドレスの形を確認してください" : json.error || "ニックネームとログインIDの保存に失敗しました"
+      );
     }
     return true;
+  }
+
+  async function registerProfile() {
+    const stepErr = validateStep("nickname");
+    if (stepErr) {
+      setErr(stepErr);
+      return false;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const me = await fetch("/api/member/me", { cache: "no-store" });
+      let includeEmail = true;
+      if (me.status === 401) {
+        try {
+          await loginWithMemberIdentifier(email.trim());
+        } catch (e) {
+          const message = String((e as Error)?.message ?? "");
+          const shared = message.includes("複数");
+          if (!memberCode.trim()) {
+            setAskCode(true);
+            setErr(
+              shared
+                ? "同じメールアドレスの会員が複数います。会員番号を入れてください。"
+                : "このメールアドレスの会員がまだいません。会員番号を入れると、このメールをその会員のログインIDにします。"
+            );
+            return false;
+          }
+          await loginWithMemberIdentifier(memberCode.trim());
+          if (shared) includeEmail = false;
+        }
+      }
+      return await saveProfile({ includeEmail });
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? "登録に失敗しました"));
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function finish() {
@@ -220,11 +289,11 @@ export function MealPersonalStart({
     if (!form || !preview) {
       const me = await fetch("/api/member/me", { cache: "no-store" });
       if (me.status === 401) {
-        setStep("link");
+        openLink();
         return;
       }
       try {
-        const savedName = await saveNickname();
+        const savedName = await saveProfile();
         if (!savedName) return;
       } catch (e) {
         setErr(String((e as Error)?.message ?? "ニックネームの保存に失敗しました"));
@@ -236,7 +305,7 @@ export function MealPersonalStart({
     setBusy(true);
     setErr(null);
     try {
-      const savedName = await saveNickname();
+      const savedName = await saveProfile();
       if (!savedName) return;
       const fat = parseOptional(bodyFat, 3, 60);
       if (weight.trim()) {
@@ -249,7 +318,7 @@ export function MealPersonalStart({
           }),
         });
         if (weightRes.status === 401) {
-          setStep("link");
+          openLink();
           return;
         }
         if (!weightRes.ok && weightRes.status !== 403) {
@@ -274,7 +343,7 @@ export function MealPersonalStart({
       });
       const json = (await res.json().catch(() => ({}))) as { target?: MemberNutritionTargetView; error?: string };
       if (res.status === 401) {
-        setStep("link");
+        openLink();
         return;
       }
       if (!res.ok || !json.target) throw new Error(json.error || "カロリーとPFCを出せませんでした");
@@ -305,7 +374,9 @@ export function MealPersonalStart({
         <div className="space-y-3 p-5">
           <h2 className="text-xl font-bold text-slate-900">回答を会員データにつなぎます</h2>
           <p className="text-sm leading-relaxed text-slate-600">
-            会員番号かメールアドレスのどちらかでログインすると、いまの回答が食事パーソナルに保存されます。
+            {email.trim()
+              ? `${email.trim()} が会員のログインIDになります。このアドレスか会員番号でログインすると、いまの回答が保存されます。`
+              : "会員番号かメールアドレスでログインすると、いまの回答が食事パーソナルに保存されます。"}
           </p>
           <label className="block text-xs font-semibold text-slate-700">
             会員番号 または メールアドレス
@@ -362,7 +433,7 @@ export function MealPersonalStart({
           <>
             <h2 className="text-xl font-bold text-slate-900">なんて呼びましょうか？</h2>
             <p className="text-sm leading-relaxed text-slate-600">
-              食事パーソナルに表示する名前です。本名でなくても大丈夫です。この名前は、ログインした会員にだけ保存されます。
+              食事パーソナルに表示する名前です。本名でなくても大丈夫です。
             </p>
             <input
               value={nickname}
@@ -371,6 +442,33 @@ export function MealPersonalStart({
               placeholder="例: みさき"
               className="w-full border-0 border-b-2 border-slate-200 bg-transparent px-1 py-2 text-3xl font-bold text-slate-900 outline-none placeholder:text-2xl placeholder:font-semibold placeholder:text-slate-300 focus:border-teal-800"
             />
+            <div className="space-y-2 pt-2">
+              <div className="text-sm font-bold text-slate-900">ログインIDになるメールアドレス</div>
+              <p className="text-sm leading-relaxed text-slate-600">
+                このメールアドレスが、会員のログインIDになります。次からは、このアドレスだけで食事パーソナルに入れます。
+              </p>
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="例: misaki@example.com"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold outline-none focus:border-teal-800"
+              />
+            </div>
+            {askCode ? (
+              <div className="space-y-2">
+                <div className="text-sm font-bold text-slate-900">会員番号</div>
+                <input
+                  value={memberCode}
+                  onChange={(e) => setMemberCode(e.target.value)}
+                  placeholder="例: SAK001"
+                  autoCapitalize="characters"
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-base font-semibold uppercase outline-none focus:border-teal-800"
+                />
+              </div>
+            ) : null}
           </>
         ) : null}
 
@@ -566,17 +664,24 @@ export function MealPersonalStart({
           ) : (
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 const stepErr = validateStep(step);
                 if (stepErr) {
                   setErr(stepErr);
                   return;
                 }
+                if (step === "nickname") {
+                  void registerProfile().then((ok) => {
+                    if (ok) go(1);
+                  });
+                  return;
+                }
                 go(1);
               }}
-              className="rounded-2xl bg-teal-800 px-4 py-3 text-sm font-bold text-white"
+              className="rounded-2xl bg-teal-800 px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
             >
-              次へ
+              {busy && step === "nickname" ? "登録中…" : "次へ"}
             </button>
           )}
         </div>

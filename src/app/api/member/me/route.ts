@@ -47,12 +47,14 @@ const patchSchema = z
     reservation_reminder_line_enabled: z.boolean().optional(),
     weight_reminder_line_enabled: z.boolean().optional(),
     display_name: z.string().trim().min(1).max(20).optional(),
+    email: z.string().trim().email().max(200).optional(),
   })
   .refine(
     (d) =>
       d.reservation_reminder_line_enabled !== undefined ||
       d.weight_reminder_line_enabled !== undefined ||
-      d.display_name !== undefined,
+      d.display_name !== undefined ||
+      d.email !== undefined,
     { message: "at least one setting required" }
   );
 
@@ -369,11 +371,31 @@ export async function PATCH(req: Request) {
     }
 
     let displayName: string | undefined;
-    if (parsed.data.display_name !== undefined) {
-      const value = parsed.data.display_name;
-      const { error: uErr } = await (supabase as any).from("members").update({ display_name: value }).eq("id", memberId);
-      if (uErr) return json({ error: "ニックネームの保存に失敗しました", detail: uErr.message }, 500);
-      displayName = value;
+    let savedEmail: string | undefined;
+    if (parsed.data.display_name !== undefined || parsed.data.email !== undefined) {
+      const profile: { display_name?: string; email?: string } = {};
+      if (parsed.data.display_name !== undefined) {
+        profile.display_name = parsed.data.display_name;
+        displayName = parsed.data.display_name;
+      }
+      if (parsed.data.email !== undefined) {
+        const email = parsed.data.email.trim().toLowerCase();
+        const pattern = email.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+        const { data: rows, error: findErr } = await (supabase as any)
+          .from("members")
+          .select("id, email")
+          .ilike("email", pattern)
+          .limit(5);
+        if (findErr) return json({ error: "メールアドレスの確認に失敗しました", detail: findErr.message }, 500);
+        const taken = ((rows ?? []) as Array<{ id: string; email?: string | null }>).some(
+          (row) => row.id !== memberId && String(row.email ?? "").trim().toLowerCase() === email
+        );
+        if (taken) return json({ error: "このメールアドレスは別の会員のログインIDです" }, 409);
+        profile.email = email;
+        savedEmail = email;
+      }
+      const { error: uErr } = await (supabase as any).from("members").update(profile).eq("id", memberId);
+      if (uErr) return json({ error: "プロフィールの保存に失敗しました", detail: uErr.message }, 500);
     }
 
     let weightReminderEnabled: boolean | undefined;
@@ -393,6 +415,7 @@ export async function PATCH(req: Request) {
         member: {
           id: memberId,
           display_name: displayName,
+          email: savedEmail,
           reservation_reminder_line_enabled: reservationReminderEnabled,
           weight_reminder_line_enabled: weightReminderEnabled,
         },
