@@ -3,6 +3,7 @@
  * - 10/1〜9 の来店（予約件数・キャンセル除外）が 0回または1回
  * - 休会・退会は除外
  * - 10/9以降の予約を足すと 10/1以降の合計が2枠以上になる人は除外
+ * - 手動指定の8名も除外
  * 枠は30分=1枠。10/9以降の予約が無く、合計がすでに2枠の人は残す。
  * node scripts/list-oct1-9-visits-0or1-members.mjs
  */
@@ -17,6 +18,18 @@ const RANGE_START = "2026-10-01T00:00:00+09:00";
 const OCT9_START = "2026-10-09T00:00:00+09:00";
 const RANGE_END = "2026-10-10T00:00:00+09:00";
 const TZ = "Asia/Tokyo";
+
+/** 2026-10-10 依頼: 浅野・鈴木大輝・井上・井口・福田・北山・ゆうと・あ */
+const EXCLUDE_MEMBER_CODES = new Set([
+  "UEN027", // 浅野清香
+  "EBI031", // 鈴木大輝
+  "SAK053", // 井上京介
+  "UEN014", // 井口誠
+  "UEN050", // 福田翔吾
+  "SAK050", // 北山潤美
+  "YUT001", // ゆうと
+  "MPS001", // あ
+]);
 
 /** 在籍会員のみ（退会・休会除外） */
 function isActiveMember(m) {
@@ -99,6 +112,7 @@ async function main() {
 
   const results = [];
   const excludedByFutureSlots = [];
+  const excludedManual = [];
   let excludedMembership = 0;
   let activeMemberCount = 0;
   let baseListCount = 0;
@@ -139,6 +153,11 @@ async function main() {
       continue;
     }
 
+    if (EXCLUDE_MEMBER_CODES.has(row.memberCode)) {
+      excludedManual.push(row);
+      continue;
+    }
+
     results.push(row);
   }
 
@@ -149,6 +168,7 @@ async function main() {
     String(a.memberCode).localeCompare(String(b.memberCode));
   results.sort(byStoreThenCode);
   excludedByFutureSlots.sort(byStoreThenCode);
+  excludedManual.sort(byStoreThenCode);
 
   const byVisits = { 0: 0, 1: 0 };
   for (const r of results) {
@@ -165,6 +185,7 @@ async function main() {
           metric: "来店回数 = 予約レコード件数 / 枠 = 30分",
           visitRange: "10/1〜9 は 0回または1回",
           exclude: "10/9以降の予約があり、10/1以降の合計枠が2以上",
+          excludeMemberCodes: [...EXCLUDE_MEMBER_CODES].sort(),
           membership: "在籍会員のみ（退会・休会除外）",
           generatedAt,
         },
@@ -177,10 +198,12 @@ async function main() {
         excludedMembershipCount: excludedMembership,
         baseListCount,
         excludedByFutureSlotsCount: excludedByFutureSlots.length,
+        excludedManualCount: excludedManual.length,
         memberCount: results.length,
         breakdownByVisits: byVisits,
         storeBreakdown: countByStore(results),
         members: results,
+        excludedManual,
         excludedByFutureSlots,
       },
       null,
@@ -191,7 +214,7 @@ async function main() {
   console.log("\n--- サマリー ---");
   console.log(`集計時点: ${generatedAt} JST`);
   console.log(
-    `対象: ${results.length}名（10/1〜9が0〜1回の在籍 ${baseListCount}名から、9日以降の予約で2枠以上になる ${excludedByFutureSlots.length}名を除外）`,
+    `対象: ${results.length}名（10/1〜9が0〜1回の在籍 ${baseListCount}名から、9日以降の予約で2枠以上になる ${excludedByFutureSlots.length}名と手動指定 ${excludedManual.length}名を除外）`,
   );
   console.log(`在籍 ${activeMemberCount}名 / 退会・休会除外: ${excludedMembership}名`);
   console.log(`内訳: 0回=${byVisits[0]} / 1回=${byVisits[1]}`);
