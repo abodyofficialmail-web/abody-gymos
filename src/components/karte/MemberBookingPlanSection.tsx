@@ -2,6 +2,7 @@
 
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MemberMealLineDeliverySwitch } from "@/components/karte/MemberMealLineDeliverySwitch";
 import {
   MEMBERSHIP_PLAN_OPTIONS,
   membershipPlanLabel,
@@ -159,6 +160,7 @@ export function MemberBookingPlanSection({
   const body = (
     <>
       {embedded ? null : <div className="text-sm font-bold text-slate-900">プラン・予約制限</div>}
+      <MemberMealLineDeliverySwitch memberId={memberId} />
       {!schemaReady ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
           DBマイグレーション未適用のため、プラン保存がまだできません。
