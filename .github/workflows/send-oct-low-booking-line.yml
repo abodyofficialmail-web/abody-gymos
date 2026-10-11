@@ -1,0 +1,76 @@
+name: Send Oct Low Booking LINE
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "true で本番送信（デフォルト dry-run）"
+        required: false
+        default: "false"
+  push:
+    branches:
+      - cursor/oct1-9-visits-0or1-2693
+    paths:
+      - ".github/workflows/send-oct-low-booking-line.yml"
+      - "scripts/send-oct-low-booking-line.mjs"
+      - "scripts/upload-line-campaign-media.mjs"
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci --legacy-peer-deps
+      - id: media
+        continue-on-error: true
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          export GOOGLE_SERVICE_ACCOUNT_EMAIL="$(printf '%s' "$GOOGLE_SERVICE_ACCOUNT_EMAIL" | tr -d '\r\n')"
+          export GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="$(printf '%s' "$GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY" | tr -d '\r')"
+          node scripts/upload-line-campaign-media.mjs \
+            --prefix=oct-low-booking-2026-10 \
+            --video-url="https://drive.google.com/uc?export=download&id=1sKbDTt4ZEuGoy1EO9r4Z4DLoW9H1t_3d" \
+            | tee /tmp/oct-line-media.log
+          node --input-type=module -e '
+            import fs from "fs";
+            const text = fs.readFileSync("/tmp/oct-line-media.log", "utf8");
+            const start = text.indexOf("{");
+            const end = text.lastIndexOf("}");
+            if (start < 0 || end < start) throw new Error("upload JSON not found");
+            const json = JSON.parse(text.slice(start, end + 1));
+            fs.appendFileSync(process.env.GITHUB_ENV, `OCT_LOW_BOOKING_VIDEO_URL=${json.video.signedUrl}\n`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `OCT_LOW_BOOKING_VIDEO_PREVIEW_URL=${json.preview.signedUrl}\n`);
+          '
+      - name: dry-run
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+          OCT_LOW_BOOKING_VIDEO_URL: ${{ env.OCT_LOW_BOOKING_VIDEO_URL }}
+          OCT_LOW_BOOKING_VIDEO_PREVIEW_URL: ${{ env.OCT_LOW_BOOKING_VIDEO_PREVIEW_URL }}
+        run: |
+          set -euo pipefail
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-oct-low-booking-line.mjs --dry-run
+      - name: send
+        if: steps.media.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct-line-confirm]'))
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+          OCT_LOW_BOOKING_VIDEO_URL: ${{ env.OCT_LOW_BOOKING_VIDEO_URL }}
+          OCT_LOW_BOOKING_VIDEO_PREVIEW_URL: ${{ env.OCT_LOW_BOOKING_VIDEO_PREVIEW_URL }}
+        run: |
+          set -euo pipefail
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-oct-low-booking-line.mjs --confirm
