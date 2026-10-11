@@ -49,6 +49,10 @@ export async function GET(req: Request) {
       return jsonResponse({ error: "unauthorized" }, 401);
     }
 
+    if (process.env.DAILY_STORE_RESERVATION_REPORT !== "1") {
+      return jsonResponse({ ok: true, skipped: "daily_store_reservation_report_disabled" }, 200);
+    }
+
     const url = new URL(req.url);
     const parsed = querySchema.safeParse({ target: url.searchParams.get("target") });
     if (!parsed.success) return jsonResponse({ error: "invalid_query", detail: parsed.error.flatten() }, 400);
