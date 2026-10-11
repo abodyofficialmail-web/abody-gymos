@@ -95,7 +95,10 @@ async function main() {
     process.exit(1);
   }
   console.log(JSON.stringify(json, null, 2));
-  if (!json.ok) process.exit(1);
+  const results = Array.isArray(json.results) ? json.results : [];
+  const hardFails = results.filter((r) => !r.ok && r.error !== "no_line_user_id");
+  if (!json.ok && hardFails.length) process.exit(1);
+  if (!json.ok && !results.length) process.exit(1);
 }
 
 main().catch((e) => {

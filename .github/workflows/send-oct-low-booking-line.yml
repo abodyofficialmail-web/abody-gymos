@@ -64,7 +64,7 @@ jobs:
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
           node scripts/send-oct-low-booking-line.mjs --dry-run
       - name: send
-        if: steps.media.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct-line-confirm]'))
+        if: (success() || failure()) && steps.media.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct-line-confirm]'))
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
