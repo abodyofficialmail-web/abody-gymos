@@ -1351,6 +1351,8 @@ export interface Database {
           lunch_time: string;
           dinner_time: string;
           snack_time: string;
+          line_delivery_trial_started_at?: string | null;
+          line_delivery_trial_ends_at?: string | null;
           updated_at: string;
         };
         Insert: {
@@ -1359,6 +1361,8 @@ export interface Database {
           lunch_time?: string;
           dinner_time?: string;
           snack_time?: string;
+          line_delivery_trial_started_at?: string | null;
+          line_delivery_trial_ends_at?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -1367,6 +1371,8 @@ export interface Database {
           lunch_time?: string;
           dinner_time?: string;
           snack_time?: string;
+          line_delivery_trial_started_at?: string | null;
+          line_delivery_trial_ends_at?: string | null;
           updated_at?: string;
         };
         Relationships: [];

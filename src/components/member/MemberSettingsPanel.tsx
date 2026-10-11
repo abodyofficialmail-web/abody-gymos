@@ -1,5 +1,6 @@
 "use client";
 
+import { MealLineDeliveryPlan } from "@/components/member/MealLineDeliveryPlan";
 import { useEffect, useState } from "react";
 
 type MemberSettings = {
@@ -216,6 +217,8 @@ export function MemberSettingsPanel() {
           </>
         ) : null}
       </section>
+
+      <MealLineDeliveryPlan />
 
       <section className="space-y-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="text-sm font-bold text-slate-900">食事パーソナル</div>

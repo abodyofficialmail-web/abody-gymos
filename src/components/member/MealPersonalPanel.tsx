@@ -1,6 +1,7 @@
 "use client";
 
 import { Apple, ChevronLeft, ChevronRight, Home, Keyboard, Lock, MapPin, MessageCircle, Plus, ScanBarcode, Settings } from "lucide-react";
+import { MealLineDeliveryPlan } from "@/components/member/MealLineDeliveryPlan";
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { MemberNutritionTargetView } from "@/lib/memberNutritionTargets";
@@ -257,6 +258,7 @@ export function MealPersonalPanel({
   gatePaidActions?: boolean;
   sessionTickets?: number;
 }) {
+  const [deliveryEntitled, setDeliveryEntitled] = useState(false);
   const [data, setData] = useState<MealDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -602,7 +604,7 @@ export function MealPersonalPanel({
   }
 
   async function saveReminderTimes() {
-    if (locked) return;
+    if (locked && !deliveryEntitled) return;
     setBusy(true);
     setErr(null);
     setSavedMsg(null);
@@ -1646,8 +1648,8 @@ export function MealPersonalPanel({
           />
           <SettingsRow
             title="LINE配信時間"
-            hint={locked ? "課金すると使えます" : undefined}
-            locked={locked}
+            hint={locked && !deliveryEntitled ? "1週間無料お試し" : undefined}
+            locked={locked && !deliveryEntitled}
             onClick={() => setSettingsPage("reminders")}
           />
           <SettingsRow
@@ -1676,7 +1678,11 @@ export function MealPersonalPanel({
             <ChevronLeft className="h-4 w-4" />
             設定に戻る
           </button>
-          {locked ? lockedFeatureCard : reminderSection}
+          {locked && !deliveryEntitled ? (
+            <MealLineDeliveryPlan onChange={(view) => setDeliveryEntitled(view.entitled)} />
+          ) : (
+            reminderSection
+          )}
         </div>
       ) : null}
 
@@ -1733,6 +1739,9 @@ export function MealPersonalPanel({
         <>
           {activeTab === "home" ? (
             <div className="space-y-4">
+              {!readOnly ? (
+                <MealLineDeliveryPlan onChange={(view) => setDeliveryEntitled(view.entitled)} />
+              ) : null}
               {startBanner}
               {homeBody}
             </div>

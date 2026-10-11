@@ -1,4 +1,4 @@
-import { isMealPersonalStandaloneAccount, isMemberMealPersonalPilot } from "@/lib/memberMealPersonalRollout";
+import { isMealPersonalStandaloneAccount, isMemberMealPersonalPilot } from "./memberMealPersonalRollout";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);

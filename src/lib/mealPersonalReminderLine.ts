@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAppUrl } from "@/lib/constants";
 import { lineMemberProfileReachable, linePushTokenForMemberRow } from "@/lib/lineChannel";
-import { isMemberMealPersonalFullEnabled, isMissingMealPersonalPassColumn, type MealPersonalPassRow } from "@/lib/memberMealPersonalPass";
+import { fetchActiveMealLineDeliveryTrials, fetchMealLineDeliveryTrial, isMealLineDeliveryEntitled } from "@/lib/mealLineDelivery";
+import { isMissingMealPersonalPassColumn, type MealPersonalPassRow } from "@/lib/memberMealPersonalPass";
 import { memberMealLogPageUrl } from "@/lib/memberMealLogSigned";
 import {
   hasMealSlotLogged,
@@ -94,6 +95,7 @@ export type MealReminderTarget = {
   is_active?: boolean | null;
   meal_personal_pass_status?: string | null;
   meal_personal_pass_current_period_end?: string | null;
+  line_delivery_trial_ends_at?: string | null;
 };
 
 export type SendMealReminderResult = {
@@ -130,15 +132,26 @@ export async function listMealPersonalReminderTargets(supabase: SupabaseClient):
     if (!data || data.length < pageSize) break;
     from += pageSize;
   }
-  return rows.filter((m) => {
-    const pass: MealPersonalPassRow | null = usePassCols
-      ? {
-          meal_personal_pass_status: m.meal_personal_pass_status,
-          meal_personal_pass_current_period_end: m.meal_personal_pass_current_period_end,
-        }
-      : null;
-    return isMemberMealPersonalFullEnabled({ memberCode: m.member_code, pass }) && isActiveMember(m) && Boolean(m.line_user_id);
-  });
+  const trials = await fetchActiveMealLineDeliveryTrials(supabase);
+  return rows
+    .filter((m) => {
+      const pass: MealPersonalPassRow | null = usePassCols
+        ? {
+            meal_personal_pass_status: m.meal_personal_pass_status,
+            meal_personal_pass_current_period_end: m.meal_personal_pass_current_period_end,
+          }
+        : null;
+      return (
+        isMealLineDeliveryEntitled({
+          memberCode: m.member_code,
+          pass,
+          trialEndsAt: trials.get(m.id) ?? null,
+        }) &&
+        isActiveMember(m) &&
+        Boolean(m.line_user_id)
+      );
+    })
+    .map((m) => ({ ...m, line_delivery_trial_ends_at: trials.get(m.id) ?? null }));
 }
 
 export async function sendMealPersonalReminder(
@@ -164,7 +177,13 @@ export async function sendMealPersonalReminder(
     meal_personal_pass_status: (opts.member as MealReminderTarget).meal_personal_pass_status,
     meal_personal_pass_current_period_end: (opts.member as MealReminderTarget).meal_personal_pass_current_period_end,
   };
-  if (!isMemberMealPersonalFullEnabled({ memberCode, pass })) {
+  if (
+    !isMealLineDeliveryEntitled({
+      memberCode,
+      pass,
+      trialEndsAt: opts.member.line_delivery_trial_ends_at,
+    })
+  ) {
     return { member_code: memberCode, slot, sent: false, skipped: "not_in_rollout" };
   }
   if (!opts.member.line_user_id) {
@@ -261,8 +280,11 @@ export async function sendMealPersonalReminderForCode(
   }
   if (error) return { member_code: memberCode, slot: opts.slot, sent: false, error: "member_fetch_failed", detail: error.message };
   if (!data) return { member_code: memberCode, slot: opts.slot, sent: false, error: "member_not_found" };
+  const trial = await fetchMealLineDeliveryTrial(supabase, String(data.id));
+  const member = data as MealReminderTarget;
+  if (trial.ok) member.line_delivery_trial_ends_at = trial.row.trialEndsAt;
   return sendMealPersonalReminder(supabase, {
-    member: data as MealReminderTarget,
+    member,
     slot: opts.slot,
     dryRun: opts.dryRun,
     force: opts.force,

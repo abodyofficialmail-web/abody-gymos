@@ -310,7 +310,11 @@ export async function POST(req: Request) {
 
     if (contentType.includes("application/json")) {
       const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      const resolved = await resolveMember(supabase, { s: String(raw.s ?? ""), sig: String(raw.sig ?? "") });
+      const resolved = await resolveMember(
+        supabase,
+        { s: String(raw.s ?? ""), sig: String(raw.sig ?? "") },
+        { allowLocked: raw.kind === "reminder_settings" }
+      );
       if (!resolved.ok) return jsonResponse({ error: resolved.error }, resolved.status);
 
       if (raw.kind === "reminder_settings") {
