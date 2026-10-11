@@ -4,6 +4,7 @@ import { MemberBodyPhotoSection } from "@/components/karte/MemberBodyPhotoSectio
 import { MemberReservationHistory } from "@/components/karte/MemberReservationHistory";
 import { MemberGoalHearingSection, splitGoalHearingNotes } from "@/components/karte/MemberGoalHearingSection";
 import { MemberGoalPhotoSection } from "@/components/karte/MemberGoalPhotoSection";
+import { MemberMealLineDeliverySwitch } from "@/components/karte/MemberMealLineDeliverySwitch";
 import { MemberNutritionTargetSection } from "@/components/karte/MemberNutritionTargetSection";
 import { WeightLogPanel } from "@/components/member/WeightLogPanel";
 import { isMemberWeightLogEnabled } from "@/lib/memberWeightLogRollout";
@@ -1717,6 +1718,7 @@ export function MemberDetailClient({
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
         <div className="text-sm font-bold text-slate-900">本日のカルテ入力</div>
+        <MemberMealLineDeliverySwitch memberId={memberId} />
 
         {preSessionStats.invite_count > 0 || surveyStats.invite_count > 0 ? (
           <div className="flex flex-wrap gap-2">

@@ -19,6 +19,10 @@ export const MEAL_LINE_DELIVERY_TRIAL_NOTE =
   "最初の課金はなしで、自動課金もございませんのでご安心ください。";
 /** 配信する期間は3日。お試し終了後に自動課金はしない。 */
 export const MEAL_LINE_DELIVERY_TRIAL_MS = 3 * 24 * 60 * 60 * 1000;
+/** トレーナーがカルテでONにした印。この時刻まで配信する。 */
+export const MEAL_LINE_DELIVERY_STAFF_ON_END = "2099-01-01T00:00:00.000Z";
+/** トレーナーがカルテでOFFにした印。有料・お試し中でも配信しない。 */
+export const MEAL_LINE_DELIVERY_STAFF_OFF_END = "1970-01-01T00:00:00.000Z";
 
 export type MealLineDeliveryStatus = "active" | "trial" | "expired" | "none";
 
@@ -30,6 +34,8 @@ export type MealLineDeliveryView = {
   price_label: string;
   trial_button_label: string;
   subscribe_url: string | null;
+  /** トレーナーがカルテでオンオフしたあとは、会員のお試しボタンでは上書きしない。 */
+  staff_controlled: boolean;
 };
 
 export type MealLineDeliveryTrialRow = {
@@ -43,8 +49,19 @@ export function mealLineDeliveryTrialEndsAt(startedAt: Date): Date {
 
 export function isMealLineDeliveryTrialActive(endsAt: string | null | undefined, now = new Date()): boolean {
   if (!endsAt) return false;
+  if (mealLineDeliveryStaffOverride(endsAt) != null) return false;
   const ms = Date.parse(endsAt);
   return Number.isFinite(ms) && ms > now.getTime();
+}
+
+/** 2099年はトレーナーON、1970年はトレーナーOFF。それ以外は会員のお試し期間。 */
+export function mealLineDeliveryStaffOverride(endsAt: string | null | undefined): boolean | null {
+  if (!endsAt) return null;
+  const ms = Date.parse(endsAt);
+  if (!Number.isFinite(ms)) return null;
+  if (ms >= Date.parse("2090-01-01T00:00:00.000Z")) return true;
+  if (ms <= Date.parse("1980-01-01T00:00:00.000Z")) return false;
+  return null;
 }
 
 export function isMissingMealLineDeliveryColumn(err: unknown): boolean {
@@ -59,6 +76,9 @@ export function isMealLineDeliveryEntitled(params: {
   trialEndsAt?: string | null;
   now?: Date;
 }): boolean {
+  const staff = mealLineDeliveryStaffOverride(params.trialEndsAt);
+  if (staff === true) return true;
+  if (staff === false) return false;
   if (isMemberMealPersonalFullEnabled({ memberCode: params.memberCode, pass: params.pass })) return true;
   return isMealLineDeliveryTrialActive(params.trialEndsAt, params.now);
 }
@@ -71,19 +91,22 @@ export function mealLineDeliveryView(params: {
   now?: Date;
 }): MealLineDeliveryView {
   const now = params.now ?? new Date();
+  const staff = mealLineDeliveryStaffOverride(params.trialEndsAt);
   const paidOrPilot = isMemberMealPersonalFullEnabled({ memberCode: params.memberCode, pass: params.pass });
   const trialActive = isMealLineDeliveryTrialActive(params.trialEndsAt, now);
   const trialUsed = Boolean(params.trialStartedAt);
-  const entitled = paidOrPilot || trialActive;
-  const status: MealLineDeliveryStatus = paidOrPilot ? "active" : trialActive ? "trial" : trialUsed ? "expired" : "none";
+  const entitled = staff === true || (staff !== false && (paidOrPilot || trialActive));
+  const status: MealLineDeliveryStatus =
+    staff === true || (staff !== false && paidOrPilot) ? "active" : trialActive ? "trial" : trialUsed ? "expired" : "none";
   return {
     entitled,
     status,
     trial_used: trialUsed,
-    trial_ends_at: params.trialEndsAt ?? null,
+    trial_ends_at: staff == null ? (params.trialEndsAt ?? null) : null,
     price_label: MEAL_LINE_DELIVERY_PRICE_LABEL,
     trial_button_label: MEAL_LINE_DELIVERY_TRIAL_BUTTON,
     subscribe_url: entitled || isMealPersonalPassActive(params.pass, now) ? null : mealPersonalSubscribeUrl(),
+    staff_controlled: staff != null,
   };
 }
 
@@ -114,24 +137,6 @@ export async function fetchMealLineDeliveryTrial(
   };
 }
 
-export async function fetchActiveMealLineDeliveryTrials(
-  supabase: SupabaseClient,
-  now = new Date()
-): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  const { data, error } = await (supabase as any)
-    .from("member_meal_reminder_settings")
-    .select("member_id, line_delivery_trial_ends_at")
-    .gt("line_delivery_trial_ends_at", now.toISOString());
-  if (error) return map;
-  for (const row of (data ?? []) as Array<{ member_id?: string; line_delivery_trial_ends_at?: string | null }>) {
-    const id = String(row.member_id ?? "");
-    const ends = row.line_delivery_trial_ends_at ?? null;
-    if (id && isMealLineDeliveryTrialActive(ends, now)) map.set(id, String(ends));
-  }
-  return map;
-}
-
 export async function startMealLineDeliveryTrial(
   supabase: SupabaseClient,
   memberId: string,
@@ -141,6 +146,9 @@ export async function startMealLineDeliveryTrial(
   if (!existing.ok) return existing;
   if (existing.missingColumn) {
     return { ok: false, error: "配信お試しの保存準備ができていません", missingColumn: true, code: "missing_column" };
+  }
+  if (mealLineDeliveryStaffOverride(existing.row.trialEndsAt) != null) {
+    return { ok: false, error: "配信のオンオフはカルテで切り替えています", code: "staff_controlled" };
   }
   if (existing.row.trialStartedAt) {
     return { ok: false, error: "お試しはすでに利用済みです", code: "trial_used" };
@@ -194,4 +202,76 @@ export async function startMealLineDeliveryTrial(
     return { ok: false, error: String(error.message ?? error) };
   }
   return { ok: true, trialEndsAt };
+}
+
+export async function fetchMealLineDeliveryEndsByMember(supabase: SupabaseClient): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const pageSize = 1000;
+  let from = 0;
+  for (;;) {
+    const { data, error } = await (supabase as any)
+      .from("member_meal_reminder_settings")
+      .select("member_id, line_delivery_trial_ends_at")
+      .not("line_delivery_trial_ends_at", "is", null)
+      .range(from, from + pageSize - 1);
+    if (error) return map;
+    const rows = (data ?? []) as Array<{ member_id?: string; line_delivery_trial_ends_at?: string | null }>;
+    for (const row of rows) {
+      const id = String(row.member_id ?? "");
+      const ends = row.line_delivery_trial_ends_at ?? null;
+      if (id && ends) map.set(id, String(ends));
+    }
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+  return map;
+}
+
+export async function setMealLineDeliveryStaffEnabled(
+  supabase: SupabaseClient,
+  memberId: string,
+  enabled: boolean,
+  now = new Date()
+): Promise<{ ok: true; enabled: boolean } | { ok: false; error: string; missingColumn?: boolean }> {
+  const ends = enabled ? MEAL_LINE_DELIVERY_STAFF_ON_END : MEAL_LINE_DELIVERY_STAFF_OFF_END;
+  const payload = {
+    line_delivery_trial_ends_at: ends,
+    updated_at: now.toISOString(),
+  };
+  const { data: current, error: readErr } = await (supabase as any)
+    .from("member_meal_reminder_settings")
+    .select("member_id")
+    .eq("member_id", memberId)
+    .maybeSingle();
+  if (readErr) {
+    if (isMissingMealLineDeliveryColumn(readErr)) {
+      return { ok: false, error: "配信設定の保存準備ができていません", missingColumn: true };
+    }
+    return { ok: false, error: String(readErr.message ?? readErr) };
+  }
+  if (current) {
+    const { error } = await (supabase as any)
+      .from("member_meal_reminder_settings")
+      .update(payload)
+      .eq("member_id", memberId);
+    if (error) {
+      if (isMissingMealLineDeliveryColumn(error)) {
+        return { ok: false, error: "配信設定の保存準備ができていません", missingColumn: true };
+      }
+      return { ok: false, error: String(error.message ?? error) };
+    }
+    return { ok: true, enabled };
+  }
+  const { error } = await (supabase as any).from("member_meal_reminder_settings").insert({
+    member_id: memberId,
+    ...DEFAULT_REMINDER_TIMES,
+    ...payload,
+  });
+  if (error) {
+    if (isMissingMealLineDeliveryColumn(error)) {
+      return { ok: false, error: "配信設定の保存準備ができていません", missingColumn: true };
+    }
+    return { ok: false, error: String(error.message ?? error) };
+  }
+  return { ok: true, enabled };
 }

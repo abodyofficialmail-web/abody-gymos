@@ -88,7 +88,11 @@ export function MealLineDeliveryPlan({ onChange }: { onChange?: (view: MealLineD
         </div>
       ) : null}
 
-      {view && view.status === "none" ? (
+      {view?.staff_controlled && !view.entitled ? (
+        <div className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-700">配信は停止中です。</div>
+      ) : null}
+
+      {view && view.status === "none" && !view.staff_controlled ? (
         <div className="space-y-2">
           <button
             type="button"

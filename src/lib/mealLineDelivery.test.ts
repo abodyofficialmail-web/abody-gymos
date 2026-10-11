@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  MEAL_LINE_DELIVERY_STAFF_OFF_END,
+  MEAL_LINE_DELIVERY_STAFF_ON_END,
   MEAL_LINE_DELIVERY_TRIAL_BUTTON,
   MEAL_LINE_DELIVERY_TRIAL_MS,
   isMealLineDeliveryEntitled,
@@ -65,5 +67,32 @@ describe("meal line delivery trial", () => {
     assert.equal(expired.status, "expired");
     assert.equal(expired.trial_used, true);
     assert.equal(expired.entitled, false);
+  });
+
+  it("lets the karte switch force delivery on or off", () => {
+    assert.equal(
+      isMealLineDeliveryEntitled({
+        memberCode: "SAK025",
+        pass: { meal_personal_pass_status: "inactive" },
+        trialEndsAt: MEAL_LINE_DELIVERY_STAFF_ON_END,
+      }),
+      true
+    );
+    assert.equal(
+      isMealLineDeliveryEntitled({
+        memberCode: "SAK025",
+        pass: { meal_personal_pass_status: "active" },
+        trialEndsAt: MEAL_LINE_DELIVERY_STAFF_OFF_END,
+      }),
+      false
+    );
+    const stopped = mealLineDeliveryView({
+      memberCode: "SAK025",
+      pass: { meal_personal_pass_status: "active" },
+      trialEndsAt: MEAL_LINE_DELIVERY_STAFF_OFF_END,
+    });
+    assert.equal(stopped.entitled, false);
+    assert.equal(stopped.staff_controlled, true);
+    assert.equal(stopped.status, "none");
   });
 });

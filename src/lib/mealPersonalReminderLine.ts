@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAppUrl } from "@/lib/constants";
 import { lineMemberProfileReachable, linePushTokenForMemberRow } from "@/lib/lineChannel";
-import { fetchActiveMealLineDeliveryTrials, fetchMealLineDeliveryTrial, isMealLineDeliveryEntitled } from "@/lib/mealLineDelivery";
+import { fetchMealLineDeliveryEndsByMember, fetchMealLineDeliveryTrial, isMealLineDeliveryEntitled } from "@/lib/mealLineDelivery";
 import { isMissingMealPersonalPassColumn, type MealPersonalPassRow } from "@/lib/memberMealPersonalPass";
 import { memberMealLogPageUrl } from "@/lib/memberMealLogSigned";
 import {
@@ -132,7 +132,7 @@ export async function listMealPersonalReminderTargets(supabase: SupabaseClient):
     if (!data || data.length < pageSize) break;
     from += pageSize;
   }
-  const trials = await fetchActiveMealLineDeliveryTrials(supabase);
+  const deliveryEnds = await fetchMealLineDeliveryEndsByMember(supabase);
   return rows
     .filter((m) => {
       const pass: MealPersonalPassRow | null = usePassCols
@@ -145,13 +145,13 @@ export async function listMealPersonalReminderTargets(supabase: SupabaseClient):
         isMealLineDeliveryEntitled({
           memberCode: m.member_code,
           pass,
-          trialEndsAt: trials.get(m.id) ?? null,
+          trialEndsAt: deliveryEnds.get(m.id) ?? null,
         }) &&
         isActiveMember(m) &&
         Boolean(m.line_user_id)
       );
     })
-    .map((m) => ({ ...m, line_delivery_trial_ends_at: trials.get(m.id) ?? null }));
+    .map((m) => ({ ...m, line_delivery_trial_ends_at: deliveryEnds.get(m.id) ?? null }));
 }
 
 export async function sendMealPersonalReminder(
