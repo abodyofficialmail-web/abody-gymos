@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   MEAL_LINE_DELIVERY_PRICE_LABEL,
   MEAL_LINE_DELIVERY_TRIAL_BUTTON,
+  MEAL_LINE_DELIVERY_TRIAL_NOTE,
   type MealLineDeliveryView,
 } from "@/lib/mealLineDelivery";
 
@@ -88,14 +89,17 @@ export function MealLineDeliveryPlan({ onChange }: { onChange?: (view: MealLineD
       ) : null}
 
       {view && view.status === "none" ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void startTrial()}
-          className="inline-flex w-full items-center justify-center rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
-        >
-          {busy ? "開始しています…" : button}
-        </button>
+        <div className="space-y-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void startTrial()}
+            className="inline-flex w-full items-center justify-center rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {busy ? "開始しています…" : button}
+          </button>
+          <p className="text-xs leading-relaxed text-slate-500">{MEAL_LINE_DELIVERY_TRIAL_NOTE}</p>
+        </div>
       ) : null}
 
       {view && !view.entitled && view.subscribe_url ? (

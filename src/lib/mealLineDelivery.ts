@@ -14,8 +14,10 @@ const DEFAULT_REMINDER_TIMES = {
 };
 
 export const MEAL_LINE_DELIVERY_PRICE_LABEL = "月額1,100円";
-export const MEAL_LINE_DELIVERY_TRIAL_BUTTON = "1週間無料お試し";
-/** ボタン文言は1週間。実際に配信する期間は3日。 */
+export const MEAL_LINE_DELIVERY_TRIAL_BUTTON = "3日間無料お試し";
+export const MEAL_LINE_DELIVERY_TRIAL_NOTE =
+  "最初の課金はなしで、自動課金もございませんのでご安心ください。";
+/** 配信する期間は3日。お試し終了後に自動課金はしない。 */
 export const MEAL_LINE_DELIVERY_TRIAL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export type MealLineDeliveryStatus = "active" | "trial" | "expired" | "none";

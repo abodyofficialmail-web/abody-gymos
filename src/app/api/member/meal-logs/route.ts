@@ -310,10 +310,14 @@ export async function POST(req: Request) {
 
     if (contentType.includes("application/json")) {
       const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      const kind = String(raw.kind ?? "");
       const resolved = await resolveMember(
         supabase,
         { s: String(raw.s ?? ""), sig: String(raw.sig ?? "") },
-        { allowLocked: raw.kind === "reminder_settings" }
+        {
+          allowLocked:
+            kind === "reminder_settings" || kind === "barcode" || kind === "delete_meal" || kind === "update_meal",
+        }
       );
       if (!resolved.ok) return jsonResponse({ error: resolved.error }, resolved.status);
 
@@ -453,10 +457,14 @@ export async function POST(req: Request) {
     }
 
     const form = await req.formData();
-    const resolved = await resolveMember(supabase, {
-      s: String(form.get("s") ?? ""),
-      sig: String(form.get("sig") ?? ""),
-    });
+    const resolved = await resolveMember(
+      supabase,
+      {
+        s: String(form.get("s") ?? ""),
+        sig: String(form.get("sig") ?? ""),
+      },
+      { allowLocked: true }
+    );
     if (!resolved.ok) return jsonResponse({ error: resolved.error }, resolved.status);
 
     const logDate = String(form.get("log_date") ?? today).trim();

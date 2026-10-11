@@ -12,8 +12,8 @@ import {
 describe("meal line delivery trial", () => {
   const started = new Date("2026-10-11T08:00:00.000Z");
 
-  it("labels the button as one week and lasts three days", () => {
-    assert.equal(MEAL_LINE_DELIVERY_TRIAL_BUTTON, "1週間無料お試し");
+  it("labels the button as three days and lasts three days", () => {
+    assert.equal(MEAL_LINE_DELIVERY_TRIAL_BUTTON, "3日間無料お試し");
     assert.equal(MEAL_LINE_DELIVERY_TRIAL_MS, 3 * 24 * 60 * 60 * 1000);
     assert.equal(mealLineDeliveryTrialEndsAt(started).toISOString(), "2026-10-14T08:00:00.000Z");
   });
