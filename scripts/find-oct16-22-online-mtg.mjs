@@ -285,6 +285,13 @@ async function main() {
       if (ymd < todayYmd) continue;
       if (ymd === todayYmd && start < nowMin) continue;
       const decisions = NAMES.map((name) => ({ name, ...canAttend(name, ymd, start, end) }));
+      if (ymd === "2026-10-17" && start === 12 * 60) {
+        console.log("DEBUG17", JSON.stringify({ decisions, yutoOff: isOffDay("ゆうと", ymd), intervals: {
+          ゆうと: ownByNameDate.get(`ゆうと|${ymd}`) ?? [],
+          たけはる: ownByNameDate.get(`たけはる|${ymd}`) ?? [],
+          ともき: ownByNameDate.get(`ともき|${ymd}`) ?? [],
+        } }));
+      }
       if (decisions.some((d) => d.reason === "shift" || d.reason === "not-off")) continue;
       const held = decisions.filter((d) => !d.ok);
       const row = { date: ymd, dow: dayOfWeek(ymd), time: formatRange(start, end), startMin: start };
