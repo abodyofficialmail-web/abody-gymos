@@ -1,12 +1,14 @@
 /**
  * ゆうと・たけはる・ともきの30分オンライン面談
- * 2026-10-16〜22（JST）で3人ともシフト内かつ、店舗の未割当予約を残しても抜けられる開始時刻
+ * ゆうとは公休（シフトなしの日）。たけはる・ともきはシフト内で予約とブロックを抜けられる開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const NAMES = ["ゆうと", "たけはる", "ともき"];
+/** この人は公休（その日のシフトが無い）のときだけ参加できる */
+const OFF_DAY_NAMES = new Set(["ゆうと"]);
 const RANGE_START = "2026-10-16";
 const RANGE_END = "2026-10-22";
 const RANGE_END_EXCLUSIVE = "2026-10-23T00:00:00+09:00";
@@ -236,6 +238,19 @@ async function main() {
     return (ownByNameDate.get(`${name}|${ymd}`) ?? []).find((i) => covers(i.startMin, i.endMin, start, end)) ?? null;
   }
 
+  function isOffDay(name, ymd) {
+    return (ownByNameDate.get(`${name}|${ymd}`) ?? []).length === 0;
+  }
+
+  function canAttend(name, ymd, start, end) {
+    if (OFF_DAY_NAMES.has(name)) {
+      if (!isOffDay(name, ymd)) return { ok: false, reason: "not-off" };
+      if (isPersonallyBusy(idByName[name], ymd, start, end)) return { ok: false, reason: "busy" };
+      return { ok: true, reason: "off" };
+    }
+    return canLeave(name, ymd, start, end);
+  }
+
   function canLeave(name, ymd, start, end) {
     const shift = coveringShift(name, ymd, start, end);
     if (!shift) return { ok: false, reason: "shift" };
@@ -269,8 +284,8 @@ async function main() {
       const end = start + MTG_DURATION_MIN;
       if (ymd < todayYmd) continue;
       if (ymd === todayYmd && start < nowMin) continue;
-      const decisions = NAMES.map((name) => ({ name, ...canLeave(name, ymd, start, end) }));
-      if (decisions.some((d) => d.reason === "shift")) continue;
+      const decisions = NAMES.map((name) => ({ name, ...canAttend(name, ymd, start, end) }));
+      if (decisions.some((d) => d.reason === "shift" || d.reason === "not-off")) continue;
       const held = decisions.filter((d) => !d.ok);
       const row = { date: ymd, dow: dayOfWeek(ymd), time: formatRange(start, end), startMin: start };
       if (held.length) booked.push({ ...row, held: held.map((d) => ({ name: d.name, reason: d.reason, store: d.store })) });
@@ -306,7 +321,7 @@ async function main() {
         })),
         period: `${RANGE_START}〜${RANGE_END}`,
         duration: "30分",
-        criteria: "3人ともシフト内。担当予約・休憩・予定がなく、店舗の未割当予約は残った人数で埋まる",
+        criteria: "ゆうとは公休。たけはる・ともきはシフト内で、予約・ブロックを残して抜けられる",
         searchWindow: "08:00-21:00開始",
         openCount: open.length,
         byDate,
