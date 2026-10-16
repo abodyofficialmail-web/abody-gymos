@@ -134,6 +134,64 @@ async function main() {
     ),
   ]);
 
+  const yutoIds = named.filter((t) => t.display_name === "ゆうと").map((t) => t.id);
+  const yutoDay = await fetchAllChecked(
+    supabase,
+    "reservations",
+    "id, trainer_id, member_id, store_id, start_at, end_at, status, blocks_capacity, session_type",
+    (q) =>
+      q
+        .in("trainer_id", yutoIds.length ? yutoIds : ["00000000-0000-0000-0000-000000000000"])
+        .gte("start_at", "2026-10-18T00:00:00+09:00")
+        .lt("start_at", "2026-10-19T00:00:00+09:00"),
+    "reservations.yuto.oct18",
+  );
+  const tenAm = await fetchAllChecked(
+    supabase,
+    "reservations",
+    "id, trainer_id, member_id, store_id, start_at, end_at, status, blocks_capacity, session_type",
+    (q) =>
+      q
+        .gte("start_at", "2026-10-18T09:30:00+09:00")
+        .lt("start_at", "2026-10-18T11:00:00+09:00")
+        .neq("status", "cancelled"),
+    "reservations.oct18.0930-1100",
+  );
+  const tenTrainerIds = [...new Set(tenAm.rows.map((r) => r.trainer_id).filter(Boolean))];
+  const tenTrainers = tenTrainerIds.length
+    ? await fetchAllChecked(
+        supabase,
+        "trainers",
+        "id, display_name, is_active",
+        (q) => q.in("id", tenTrainerIds),
+        "trainers.oct18.morning",
+      )
+    : { rows: [] };
+  const tenName = Object.fromEntries(tenTrainers.rows.map((t) => [t.id, t.display_name]));
+  console.log(
+    JSON.stringify(
+      {
+        yutoTrainers: named.filter((t) => t.display_name === "ゆうと"),
+        chosenYutoId: idByName["ゆうと"],
+        yutoOct18Reservations: yutoDay.rows.map((r) => ({
+          ...r,
+          jst: `${isoToJstParts(r.start_at).ymd} ${fmtHm(isoToJstParts(r.start_at).min)}-${fmtHm(isoToJstParts(r.end_at).min)}`,
+        })),
+        oct18_0930_1100: tenAm.rows.map((r) => ({
+          trainer: tenName[r.trainer_id] ?? r.trainer_id,
+          status: r.status,
+          blocks_capacity: r.blocks_capacity,
+          session_type: r.session_type,
+          start_at: r.start_at,
+          end_at: r.end_at,
+          jst: `${fmtHm(isoToJstParts(r.start_at).min)}-${fmtHm(isoToJstParts(r.end_at).min)}`,
+        })),
+      },
+      null,
+      2,
+    ),
+  );
+
   const shiftIds = shiftsResult.rows.map((s) => s.id);
   const breaksResult = shiftIds.length
     ? await fetchAllChecked(
