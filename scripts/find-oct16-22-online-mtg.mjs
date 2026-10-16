@@ -1,6 +1,6 @@
 /**
  * ともき・ゆうと・ひろむの30分オンライン面談
- * 2026-10-16〜22（JST）で3人ともシフト内かつ予約・予定と重ならない開始時刻
+ * 2026-10-16〜22（JST）で3人ともシフト内かつ、いま予約が入っていない開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
@@ -197,18 +197,22 @@ async function main() {
     return (shiftsByNameDate.get(`${name}|${ymd}`) ?? []).some((i) => covers(i.startMin, i.endMin, start, end));
   }
 
-  function busyNames(ymd, start, end) {
-    return NAMES.filter((name) =>
-      (busyByNameDate.get(`${name}|${ymd}`) ?? []).some((b) => overlaps(b.startMin, b.endMin, start, end)),
-    );
+  function busyHits(ymd, start, end) {
+    const hits = [];
+    for (const name of NAMES) {
+      for (const b of busyByNameDate.get(`${name}|${ymd}`) ?? []) {
+        if (overlaps(b.startMin, b.endMin, start, end)) hits.push({ name, kind: b.kind });
+      }
+    }
+    return hits;
   }
 
   const nowJst = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
   const todayYmd = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(nowJst);
   const nowMin = nowJst.getHours() * 60 + nowJst.getMinutes();
 
-  const free = [];
-  const shiftedButBusy = [];
+  const open = [];
+  const booked = [];
   for (const ymd of eachDate()) {
     for (let start = SEARCH_START; start <= SEARCH_END; start += SLOT_STEP_MIN) {
       const end = start + MTG_DURATION_MIN;
@@ -216,15 +220,22 @@ async function main() {
       if (ymd === todayYmd && start < nowMin) continue;
       const missingShift = NAMES.filter((name) => !onShift(name, ymd, start, end));
       if (missingShift.length) continue;
-      const busy = busyNames(ymd, start, end);
-      const row = { date: ymd, dow: dayOfWeek(ymd), time: formatRange(start, end), startMin: start };
-      if (busy.length) shiftedButBusy.push({ ...row, busy });
-      else free.push(row);
+      const hits = busyHits(ymd, start, end);
+      const reservationHits = hits.filter((h) => h.kind === "reservation");
+      const row = {
+        date: ymd,
+        dow: dayOfWeek(ymd),
+        time: formatRange(start, end),
+        startMin: start,
+        other: hits.filter((h) => h.kind !== "reservation"),
+      };
+      if (reservationHits.length) booked.push({ ...row, reservations: reservationHits });
+      else open.push(row);
     }
   }
 
   const byDate = {};
-  for (const s of free) {
+  for (const s of open) {
     const key = `${s.date} (${s.dow})`;
     if (!byDate[key]) byDate[key] = [];
     byDate[key].push(s.time);
@@ -251,11 +262,18 @@ async function main() {
         })),
         period: `${RANGE_START}〜${RANGE_END}`,
         duration: "30分",
-        criteria: "3人ともシフト内、かつ予約・予定・休憩と重ならない",
+        criteria: "3人ともシフト内で、キャンセル以外の予約が重なっていない",
         searchWindow: "08:00-21:00開始",
-        freeCount: free.length,
+        openCount: open.length,
         byDate,
-        shiftedButBusyCount: shiftedButBusy.length,
+        bookedWhileAllOnShift: booked.map((s) => ({
+          date: s.date,
+          time: s.time,
+          reservations: s.reservations,
+        })),
+        openButBreakOrEvent: open
+          .filter((s) => s.other.length)
+          .map((s) => ({ date: s.date, time: s.time, other: s.other })),
         shiftSummary,
         fetched: {
           shifts: shiftsResult.count,
@@ -269,8 +287,8 @@ async function main() {
     ),
   );
 
-  console.log("\n--- 3人とも空いている30分 ---");
-  if (!free.length) console.log("該当なし");
+  console.log("\n--- 予約が入っていない30分 ---");
+  if (!open.length) console.log("該当なし");
   for (const [label, times] of Object.entries(byDate)) {
     console.log(`\n### ${label}`);
     for (const t of times) console.log(`- ${t}`);
