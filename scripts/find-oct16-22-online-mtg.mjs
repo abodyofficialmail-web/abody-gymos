@@ -1,12 +1,12 @@
 /**
- * ともき・ゆうと・ひろむの30分オンライン面談
+ * ゆうと・たけはる・ともきの30分オンライン面談
  * 2026-10-16〜22（JST）で3人ともシフト内かつ、店舗の未割当予約を残しても抜けられる開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
-const NAMES = ["ともき", "ゆうと", "ひろむ"];
+const NAMES = ["ゆうと", "たけはる", "ともき"];
 const RANGE_START = "2026-10-16";
 const RANGE_END = "2026-10-22";
 const RANGE_END_EXCLUSIVE = "2026-10-23T00:00:00+09:00";
