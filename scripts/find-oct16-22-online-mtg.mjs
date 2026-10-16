@@ -1,6 +1,6 @@
 /**
  * ともき・ゆうと・ひろむの30分オンライン面談
- * 2026-10-16〜22（JST）で3人ともシフト内かつ、いま予約が入っていない開始時刻
+ * 2026-10-16〜22（JST）で3人ともシフト内かつ、店舗の未割当予約を残しても抜けられる開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
@@ -99,147 +99,60 @@ async function main() {
   const idByName = Object.fromEntries(trainers.map((t) => [t.display_name, t.id]));
   const trainerIds = trainers.map((t) => t.id);
 
-  const [shiftsResult, reservationsResult, eventsResult] = await Promise.all([
+  const ownShifts = await fetchAllChecked(
+    supabase,
+    "trainer_shifts",
+    "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break",
+    (q) =>
+      q
+        .in("trainer_id", trainerIds)
+        .gte("shift_date", RANGE_START)
+        .lte("shift_date", RANGE_END)
+        .neq("status", "draft")
+        .eq("is_break", false),
+    "trainer_shifts.oct16-22.own",
+  );
+  const storeIds = [...new Set(ownShifts.rows.map((s) => s.store_id).filter(Boolean))];
+  const [storeRows, floorShifts] = await Promise.all([
+    fetchAllChecked(supabase, "stores", "id, name", (q) => q.in("id", storeIds), "stores.mtg"),
     fetchAllChecked(
       supabase,
       "trainer_shifts",
-      "id, trainer_id, shift_date, start_local, end_local, status, is_break",
+      "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break",
       (q) =>
         q
-          .in("trainer_id", trainerIds)
+          .in("store_id", storeIds)
           .gte("shift_date", RANGE_START)
           .lte("shift_date", RANGE_END)
           .neq("status", "draft")
           .eq("is_break", false),
-      "trainer_shifts.oct16-22",
+      "trainer_shifts.oct16-22.floor",
     ),
+  ]);
+  const storeNameById = Object.fromEntries(storeRows.rows.map((s) => [s.id, s.name]));
+  const floorTrainerIds = [...new Set(floorShifts.rows.map((s) => s.trainer_id))];
+  const [reservationsResult, eventsResult] = await Promise.all([
     fetchAllChecked(
       supabase,
       "reservations",
-      "trainer_id, start_at, end_at, status",
+      "trainer_id, store_id, start_at, end_at, status, blocks_capacity",
       (q) =>
         q
-          .in("trainer_id", trainerIds)
+          .in("store_id", storeIds)
           .gte("start_at", RANGE_START_ISO)
           .lt("start_at", RANGE_END_EXCLUSIVE)
           .neq("status", "cancelled"),
-      "reservations.oct16-22",
+      "reservations.oct16-22.stores",
     ),
     fetchAllChecked(
       supabase,
       "trainer_events",
-      "trainer_id, event_date, start_local, end_local, title, block_booking",
-      (q) => q.in("trainer_id", trainerIds).gte("event_date", RANGE_START).lte("event_date", RANGE_END),
-      "trainer_events.oct16-22",
+      "trainer_id, event_date, start_local, end_local, block_booking",
+      (q) => q.in("trainer_id", floorTrainerIds).gte("event_date", RANGE_START).lte("event_date", RANGE_END),
+      "trainer_events.oct16-22.floor",
     ),
   ]);
-
-  const yutoIds = named.filter((t) => t.display_name === "ゆうと").map((t) => t.id);
-  const yutoDay = await fetchAllChecked(
-    supabase,
-    "reservations",
-    "id, trainer_id, member_id, store_id, start_at, end_at, status, blocks_capacity, session_type",
-    (q) =>
-      q
-        .in("trainer_id", yutoIds.length ? yutoIds : ["00000000-0000-0000-0000-000000000000"])
-        .gte("start_at", "2026-10-18T00:00:00+09:00")
-        .lt("start_at", "2026-10-19T00:00:00+09:00"),
-    "reservations.yuto.oct18",
-  );
-  const tenAm = await fetchAllChecked(
-    supabase,
-    "reservations",
-    "id, trainer_id, member_id, store_id, start_at, end_at, status, blocks_capacity, session_type",
-    (q) =>
-      q
-        .gte("start_at", "2026-10-18T09:30:00+09:00")
-        .lt("start_at", "2026-10-18T11:00:00+09:00")
-        .neq("status", "cancelled"),
-    "reservations.oct18.0930-1100",
-  );
-  const tenTrainerIds = [...new Set(tenAm.rows.map((r) => r.trainer_id).filter(Boolean))];
-  const tenTrainers = tenTrainerIds.length
-    ? await fetchAllChecked(
-        supabase,
-        "trainers",
-        "id, display_name, is_active",
-        (q) => q.in("id", tenTrainerIds),
-        "trainers.oct18.morning",
-      )
-    : { rows: [] };
-  const tenName = Object.fromEntries(tenTrainers.rows.map((t) => [t.id, t.display_name]));
-  const yutoShift = await fetchAllChecked(
-    supabase,
-    "trainer_shifts",
-    "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break",
-    (q) => q.in("trainer_id", yutoIds).eq("shift_date", "2026-10-18").neq("status", "draft"),
-    "trainer_shifts.yuto.oct18",
-  );
-  const storeIds = [...new Set([...tenAm.rows.map((r) => r.store_id), ...yutoShift.rows.map((s) => s.store_id)].filter(Boolean))];
-  const memberIds = [...new Set(tenAm.rows.map((r) => r.member_id).filter(Boolean))];
-  const [storeRows, memberRows, storeShifts] = await Promise.all([
-    storeIds.length
-      ? fetchAllChecked(supabase, "stores", "id, name", (q) => q.in("id", storeIds), "stores.oct18")
-      : Promise.resolve({ rows: [] }),
-    memberIds.length
-      ? fetchAllChecked(supabase, "members", "id, name, member_code", (q) => q.in("id", memberIds), "members.oct18")
-      : Promise.resolve({ rows: [] }),
-    storeIds.length
-      ? fetchAllChecked(
-          supabase,
-          "trainer_shifts",
-          "trainer_id, store_id, start_local, end_local, status, is_break",
-          (q) => q.in("store_id", storeIds).eq("shift_date", "2026-10-18").neq("status", "draft").eq("is_break", false),
-          "trainer_shifts.stores.oct18",
-        )
-      : Promise.resolve({ rows: [] }),
-  ]);
-  const storeName = Object.fromEntries(storeRows.rows.map((s) => [s.id, s.name]));
-  const memberName = Object.fromEntries(memberRows.rows.map((m) => [`${m.member_code} ${m.name ?? ""}`, m.id]));
-  const memberLabel = Object.fromEntries(memberRows.rows.map((m) => [m.id, `${m.member_code} ${m.name ?? ""}`.trim()]));
-  const shiftTrainerIds = [...new Set(storeShifts.rows.map((s) => s.trainer_id))];
-  const shiftTrainers = shiftTrainerIds.length
-    ? await fetchAllChecked(
-        supabase,
-        "trainers",
-        "id, display_name",
-        (q) => q.in("id", shiftTrainerIds),
-        "trainers.stores.oct18",
-      )
-    : { rows: [] };
-  const shiftName = Object.fromEntries(shiftTrainers.rows.map((t) => [t.id, t.display_name]));
-  console.log(
-    JSON.stringify(
-      {
-        yutoTrainers: named.filter((t) => t.display_name === "ゆうと"),
-        chosenYutoId: idByName["ゆうと"],
-        yutoOct18Shift: yutoShift.rows.map((s) => ({
-          store: storeName[s.store_id] ?? s.store_id,
-          time: `${String(s.start_local).slice(0, 5)}-${String(s.end_local).slice(0, 5)}`,
-          is_break: s.is_break,
-          status: s.status,
-        })),
-        yutoOct18AssignedReservations: yutoDay.rows.length,
-        oct18_0930_1100: tenAm.rows.map((r) => ({
-          store: storeName[r.store_id] ?? r.store_id,
-          trainer: r.trainer_id ? (tenName[r.trainer_id] ?? r.trainer_id) : null,
-          member: r.member_id ? memberLabel[r.member_id] ?? r.member_id : null,
-          status: r.status,
-          session_type: r.session_type,
-          jst: `${fmtHm(isoToJstParts(r.start_at).min)}-${fmtHm(isoToJstParts(r.end_at).min)}`,
-        })),
-        shiftsAtThoseStores: storeShifts.rows.map((s) => ({
-          store: storeName[s.store_id] ?? s.store_id,
-          trainer: shiftName[s.trainer_id] ?? s.trainer_id,
-          time: `${String(s.start_local).slice(0, 5)}-${String(s.end_local).slice(0, 5)}`,
-        })),
-        memberLookupCount: Object.keys(memberName).length,
-      },
-      null,
-      2,
-    ),
-  );
-
+  const shiftsResult = floorShifts;
   const shiftIds = shiftsResult.rows.map((s) => s.id);
   const breaksResult = shiftIds.length
     ? await fetchAllChecked(
@@ -252,65 +165,97 @@ async function main() {
     : { rows: [], count: 0 };
   const shiftById = Object.fromEntries(shiftsResult.rows.map((s) => [s.id, s]));
 
-  const shiftsByNameDate = new Map();
-  for (const s of shiftsResult.rows) {
-    const name = nameById[s.trainer_id];
-    const key = `${name}|${s.shift_date}`;
-    const list = shiftsByNameDate.get(key) ?? [];
-    list.push({ startMin: toMinutes(s.start_local), endMin: toMinutes(s.end_local) });
-    shiftsByNameDate.set(key, list);
-  }
-
-  const busyByNameDate = new Map();
-  for (const r of reservationsResult.rows) {
-    const name = nameById[r.trainer_id];
-    if (!name) continue;
+  function reservationWindow(r) {
     const start = isoToJstParts(r.start_at);
     const end = isoToJstParts(r.end_at);
     const endMin = end.ymd === start.ymd && end.min > start.min ? end.min : start.min + 30;
-    const key = `${name}|${start.ymd}`;
-    const list = busyByNameDate.get(key) ?? [];
-    list.push({ startMin: start.min, endMin, kind: "reservation" });
-    busyByNameDate.set(key, list);
+    return { ymd: start.ymd, startMin: start.min, endMin };
+  }
+
+  const ownByNameDate = new Map();
+  for (const s of ownShifts.rows) {
+    const name = nameById[s.trainer_id];
+    const key = `${name}|${s.shift_date}`;
+    const list = ownByNameDate.get(key) ?? [];
+    list.push({
+      startMin: toMinutes(s.start_local),
+      endMin: toMinutes(s.end_local),
+      storeId: s.store_id,
+    });
+    ownByNameDate.set(key, list);
+  }
+
+  const floorByStoreDate = new Map();
+  for (const s of shiftsResult.rows) {
+    const key = `${s.store_id}|${s.shift_date}`;
+    const list = floorByStoreDate.get(key) ?? [];
+    list.push({
+      trainerId: s.trainer_id,
+      startMin: toMinutes(s.start_local),
+      endMin: toMinutes(s.end_local),
+    });
+    floorByStoreDate.set(key, list);
+  }
+
+  const personalBusy = new Map();
+  function addBusy(trainerId, ymd, startMin, endMin) {
+    if (!trainerId || !ymd) return;
+    const key = `${trainerId}|${ymd}`;
+    const list = personalBusy.get(key) ?? [];
+    list.push({ startMin, endMin });
+    personalBusy.set(key, list);
+  }
+  const unassignedByStoreDate = new Map();
+  for (const r of reservationsResult.rows) {
+    if (r.blocks_capacity === false) continue;
+    const w = reservationWindow(r);
+    if (!r.trainer_id) {
+      const key = `${r.store_id}|${w.ymd}`;
+      const list = unassignedByStoreDate.get(key) ?? [];
+      list.push({ startMin: w.startMin, endMin: w.endMin });
+      unassignedByStoreDate.set(key, list);
+      continue;
+    }
+    addBusy(r.trainer_id, w.ymd, w.startMin, w.endMin);
   }
   for (const b of breaksResult.rows) {
     const shift = shiftById[b.shift_id];
-    const name = shift ? nameById[shift.trainer_id] : null;
-    if (!name || !shift) continue;
-    const key = `${name}|${shift.shift_date}`;
-    const list = busyByNameDate.get(key) ?? [];
-    list.push({
-      startMin: toMinutes(b.start_time),
-      endMin: toMinutes(b.end_time),
-      kind: "break",
-    });
-    busyByNameDate.set(key, list);
+    if (!shift) continue;
+    addBusy(shift.trainer_id, shift.shift_date, toMinutes(b.start_time), toMinutes(b.end_time));
   }
   for (const e of eventsResult.rows) {
     if (e.block_booking === false) continue;
-    const name = nameById[e.trainer_id];
-    const key = `${name}|${e.event_date}`;
-    const list = busyByNameDate.get(key) ?? [];
-    list.push({
-      startMin: toMinutes(e.start_local),
-      endMin: toMinutes(e.end_local),
-      kind: "event",
-    });
-    busyByNameDate.set(key, list);
+    addBusy(e.trainer_id, e.event_date, toMinutes(e.start_local), toMinutes(e.end_local));
   }
 
-  function onShift(name, ymd, start, end) {
-    return (shiftsByNameDate.get(`${name}|${ymd}`) ?? []).some((i) => covers(i.startMin, i.endMin, start, end));
+  function isPersonallyBusy(trainerId, ymd, start, end) {
+    return (personalBusy.get(`${trainerId}|${ymd}`) ?? []).some((b) => overlaps(b.startMin, b.endMin, start, end));
   }
 
-  function busyHits(ymd, start, end) {
-    const hits = [];
-    for (const name of NAMES) {
-      for (const b of busyByNameDate.get(`${name}|${ymd}`) ?? []) {
-        if (overlaps(b.startMin, b.endMin, start, end)) hits.push({ name, kind: b.kind });
-      }
+  function coveringShift(name, ymd, start, end) {
+    return (ownByNameDate.get(`${name}|${ymd}`) ?? []).find((i) => covers(i.startMin, i.endMin, start, end)) ?? null;
+  }
+
+  function canLeave(name, ymd, start, end) {
+    const shift = coveringShift(name, ymd, start, end);
+    if (!shift) return { ok: false, reason: "shift" };
+    const trainerId = idByName[name];
+    if (isPersonallyBusy(trainerId, ymd, start, end)) return { ok: false, reason: "busy" };
+    const others = (floorByStoreDate.get(`${shift.storeId}|${ymd}`) ?? []).filter(
+      (s) =>
+        s.trainerId !== trainerId &&
+        covers(s.startMin, s.endMin, start, end) &&
+        !isPersonallyBusy(s.trainerId, ymd, start, end),
+    );
+    const unassigned = (unassignedByStoreDate.get(`${shift.storeId}|${ymd}`) ?? []).filter((b) =>
+      overlaps(b.startMin, b.endMin, start, end),
+    ).length;
+    const storeName = storeNameById[shift.storeId] ?? "";
+    const cover = storeName === "新宿" ? (others.length > 0 ? 1 : 0) : others.length;
+    if (cover < unassigned) {
+      return { ok: false, reason: "store", store: storeName, unassigned };
     }
-    return hits;
+    return { ok: true, store: storeName };
   }
 
   const nowJst = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
@@ -324,18 +269,11 @@ async function main() {
       const end = start + MTG_DURATION_MIN;
       if (ymd < todayYmd) continue;
       if (ymd === todayYmd && start < nowMin) continue;
-      const missingShift = NAMES.filter((name) => !onShift(name, ymd, start, end));
-      if (missingShift.length) continue;
-      const hits = busyHits(ymd, start, end);
-      const reservationHits = hits.filter((h) => h.kind === "reservation");
-      const row = {
-        date: ymd,
-        dow: dayOfWeek(ymd),
-        time: formatRange(start, end),
-        startMin: start,
-        other: hits.filter((h) => h.kind !== "reservation"),
-      };
-      if (reservationHits.length) booked.push({ ...row, reservations: reservationHits });
+      const decisions = NAMES.map((name) => ({ name, ...canLeave(name, ymd, start, end) }));
+      if (decisions.some((d) => d.reason === "shift")) continue;
+      const held = decisions.filter((d) => !d.ok);
+      const row = { date: ymd, dow: dayOfWeek(ymd), time: formatRange(start, end), startMin: start };
+      if (held.length) booked.push({ ...row, held: held.map((d) => ({ name: d.name, reason: d.reason, store: d.store })) });
       else open.push(row);
     }
   }
@@ -351,7 +289,7 @@ async function main() {
   for (const name of NAMES) {
     shiftSummary[name] = {};
     for (const ymd of eachDate()) {
-      const intervals = shiftsByNameDate.get(`${name}|${ymd}`) ?? [];
+      const intervals = ownByNameDate.get(`${name}|${ymd}`) ?? [];
       shiftSummary[name][ymd] = intervals
         .sort((a, b) => a.startMin - b.startMin)
         .map((i) => formatRange(i.startMin, i.endMin));
@@ -368,18 +306,11 @@ async function main() {
         })),
         period: `${RANGE_START}〜${RANGE_END}`,
         duration: "30分",
-        criteria: "3人ともシフト内で、キャンセル以外の予約が重なっていない",
+        criteria: "3人ともシフト内。担当予約・休憩・予定がなく、店舗の未割当予約は残った人数で埋まる",
         searchWindow: "08:00-21:00開始",
         openCount: open.length,
         byDate,
-        bookedWhileAllOnShift: booked.map((s) => ({
-          date: s.date,
-          time: s.time,
-          reservations: s.reservations,
-        })),
-        openButBreakOrEvent: open
-          .filter((s) => s.other.length)
-          .map((s) => ({ date: s.date, time: s.time, other: s.other })),
+        blockedWhileAllOnShift: booked,
         shiftSummary,
         fetched: {
           shifts: shiftsResult.count,
