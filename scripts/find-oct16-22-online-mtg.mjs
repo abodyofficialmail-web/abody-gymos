@@ -168,24 +168,72 @@ async function main() {
       )
     : { rows: [] };
   const tenName = Object.fromEntries(tenTrainers.rows.map((t) => [t.id, t.display_name]));
+  const yutoShift = await fetchAllChecked(
+    supabase,
+    "trainer_shifts",
+    "id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break",
+    (q) => q.in("trainer_id", yutoIds).eq("shift_date", "2026-10-18").neq("status", "draft"),
+    "trainer_shifts.yuto.oct18",
+  );
+  const storeIds = [...new Set([...tenAm.rows.map((r) => r.store_id), ...yutoShift.rows.map((s) => s.store_id)].filter(Boolean))];
+  const memberIds = [...new Set(tenAm.rows.map((r) => r.member_id).filter(Boolean))];
+  const [storeRows, memberRows, storeShifts] = await Promise.all([
+    storeIds.length
+      ? fetchAllChecked(supabase, "stores", "id, name", (q) => q.in("id", storeIds), "stores.oct18")
+      : Promise.resolve({ rows: [] }),
+    memberIds.length
+      ? fetchAllChecked(supabase, "members", "id, name, member_code", (q) => q.in("id", memberIds), "members.oct18")
+      : Promise.resolve({ rows: [] }),
+    storeIds.length
+      ? fetchAllChecked(
+          supabase,
+          "trainer_shifts",
+          "trainer_id, store_id, start_local, end_local, status, is_break",
+          (q) => q.in("store_id", storeIds).eq("shift_date", "2026-10-18").neq("status", "draft").eq("is_break", false),
+          "trainer_shifts.stores.oct18",
+        )
+      : Promise.resolve({ rows: [] }),
+  ]);
+  const storeName = Object.fromEntries(storeRows.rows.map((s) => [s.id, s.name]));
+  const memberName = Object.fromEntries(memberRows.rows.map((m) => [`${m.member_code} ${m.name ?? ""}`, m.id]));
+  const memberLabel = Object.fromEntries(memberRows.rows.map((m) => [m.id, `${m.member_code} ${m.name ?? ""}`.trim()]));
+  const shiftTrainerIds = [...new Set(storeShifts.rows.map((s) => s.trainer_id))];
+  const shiftTrainers = shiftTrainerIds.length
+    ? await fetchAllChecked(
+        supabase,
+        "trainers",
+        "id, display_name",
+        (q) => q.in("id", shiftTrainerIds),
+        "trainers.stores.oct18",
+      )
+    : { rows: [] };
+  const shiftName = Object.fromEntries(shiftTrainers.rows.map((t) => [t.id, t.display_name]));
   console.log(
     JSON.stringify(
       {
         yutoTrainers: named.filter((t) => t.display_name === "ゆうと"),
         chosenYutoId: idByName["ゆうと"],
-        yutoOct18Reservations: yutoDay.rows.map((r) => ({
-          ...r,
-          jst: `${isoToJstParts(r.start_at).ymd} ${fmtHm(isoToJstParts(r.start_at).min)}-${fmtHm(isoToJstParts(r.end_at).min)}`,
+        yutoOct18Shift: yutoShift.rows.map((s) => ({
+          store: storeName[s.store_id] ?? s.store_id,
+          time: `${String(s.start_local).slice(0, 5)}-${String(s.end_local).slice(0, 5)}`,
+          is_break: s.is_break,
+          status: s.status,
         })),
+        yutoOct18AssignedReservations: yutoDay.rows.length,
         oct18_0930_1100: tenAm.rows.map((r) => ({
-          trainer: tenName[r.trainer_id] ?? r.trainer_id,
+          store: storeName[r.store_id] ?? r.store_id,
+          trainer: r.trainer_id ? (tenName[r.trainer_id] ?? r.trainer_id) : null,
+          member: r.member_id ? memberLabel[r.member_id] ?? r.member_id : null,
           status: r.status,
-          blocks_capacity: r.blocks_capacity,
           session_type: r.session_type,
-          start_at: r.start_at,
-          end_at: r.end_at,
           jst: `${fmtHm(isoToJstParts(r.start_at).min)}-${fmtHm(isoToJstParts(r.end_at).min)}`,
         })),
+        shiftsAtThoseStores: storeShifts.rows.map((s) => ({
+          store: storeName[s.store_id] ?? s.store_id,
+          trainer: shiftName[s.trainer_id] ?? s.trainer_id,
+          time: `${String(s.start_local).slice(0, 5)}-${String(s.end_local).slice(0, 5)}`,
+        })),
+        memberLookupCount: Object.keys(memberName).length,
       },
       null,
       2,
