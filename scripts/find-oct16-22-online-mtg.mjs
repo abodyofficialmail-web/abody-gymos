@@ -1,14 +1,14 @@
 /**
- * ゆうと・たけはる・ともきの30分オンライン面談
- * ゆうとは公休（シフトなしの日）。たけはる・ともきはシフト内で予約とブロックを抜けられる開始時刻
+ * ゆうと・ともき・せいやの30分オンライン面談
+ * 3人ともシフト内で、休憩・予約・ブロックを残して抜けられる開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
-const NAMES = ["ゆうと", "たけはる", "ともき"];
-/** この人は公休（その日のシフトが無い）のときだけ参加できる */
-const OFF_DAY_NAMES = new Set(["ゆうと"]);
+const NAMES = ["ゆうと", "ともき", "せいや"];
+/** 公休参加にする名前。空なら3人ともシフト内で抜けられる時間だけ */
+const OFF_DAY_NAMES = new Set();
 const RANGE_START = "2026-10-16";
 const RANGE_END = "2026-10-22";
 const RANGE_END_EXCLUSIVE = "2026-10-23T00:00:00+09:00";
@@ -327,7 +327,7 @@ async function main() {
         })),
         period: `${RANGE_START}〜${RANGE_END}`,
         duration: "30分",
-        criteria: "ゆうとは公休。たけはる・ともきはシフト内で、予約・ブロックを残して抜けられる",
+        criteria: "3人ともシフト内。休憩・担当予約・ブロックがなく、店舗の未割当予約は残った人数で埋まる",
         searchWindow: "08:00-21:00開始",
         openCount: open.length,
         byDate,
