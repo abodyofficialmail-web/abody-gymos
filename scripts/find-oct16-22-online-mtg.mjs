@@ -1,6 +1,6 @@
 /**
  * ゆうと・ともき・せいやの30分オンライン面談
- * 3人ともシフト内で、休憩・予約・ブロックを残して抜けられる開始時刻
+ * 2026-10-16〜25。3人ともシフト内で、休憩・予約・ブロックを残して抜けられる開始時刻
  * node scripts/find-oct16-22-online-mtg.mjs
  */
 import { createClient } from "@supabase/supabase-js";
@@ -10,8 +10,8 @@ const NAMES = ["ゆうと", "ともき", "せいや"];
 /** 公休参加にする名前。空なら3人ともシフト内で抜けられる時間だけ */
 const OFF_DAY_NAMES = new Set();
 const RANGE_START = "2026-10-16";
-const RANGE_END = "2026-10-22";
-const RANGE_END_EXCLUSIVE = "2026-10-23T00:00:00+09:00";
+const RANGE_END = "2026-10-25";
+const RANGE_END_EXCLUSIVE = "2026-10-26T00:00:00+09:00";
 const RANGE_START_ISO = "2026-10-16T00:00:00+09:00";
 const TZ = "Asia/Tokyo";
 const SLOT_STEP_MIN = 30;
