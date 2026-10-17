@@ -7,8 +7,8 @@ import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
 
 const NAMES = ["ゆうと", "ともき", "せいや"];
-/** 公休参加にする名前。空なら3人ともシフト内で抜けられる時間だけ */
-const OFF_DAY_NAMES = new Set();
+/** 公休でも参加できる名前。24日のゆうとはシフト外で時間を作れる前提 */
+const OFF_DAY_NAMES = new Set(["ゆうと"]);
 const RANGE_START = "2026-10-16";
 const RANGE_END = "2026-10-25";
 const RANGE_END_EXCLUSIVE = "2026-10-26T00:00:00+09:00";
@@ -327,7 +327,7 @@ async function main() {
         })),
         period: `${RANGE_START}〜${RANGE_END}`,
         duration: "30分",
-        criteria: "3人ともシフト内。休憩・担当予約・ブロックがなく、店舗の未割当予約は残った人数で埋まる",
+        criteria: "ゆうとは公休でも参加可。ともき・せいやはシフト内で休憩・予約・ブロックを残して抜けられる",
         searchWindow: "08:00-21:00開始",
         openCount: open.length,
         byDate,
