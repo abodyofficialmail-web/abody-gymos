@@ -66,9 +66,10 @@ async function main() {
 
   const byDate = new Map();
   for (const s of shiftsResult.rows) {
-    const list = byDate.get(s.shift_date) ?? [];
+    const ymd = String(s.shift_date).slice(0, 10);
+    const list = byDate.get(ymd) ?? [];
     list.push(s);
-    byDate.set(s.shift_date, list);
+    byDate.set(ymd, list);
   }
 
   const off = [];
