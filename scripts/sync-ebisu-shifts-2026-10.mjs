@@ -1,0 +1,808 @@
+import { createClient } from "@supabase/supabase-js";
+import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+import {
+  buildRows as buildUenoPlan,
+  UENO_MAX_BOOTHS,
+  UENO_STORE_NAME,
+} from "./sync-ueno-shifts-2026-10.mjs";
+import { buildRows as buildShinjukuPlan, loadCrossStoreContext } from "./sync-shinjuku-shifts-2026-10.mjs";
+
+/**
+ * 2026-10 恵比寿店シフト（ゆうとのみ・週2休）
+ *
+ * - 目標枠: 約190（--slots= で上書き可）
+ * - 土曜: 店舗休み（3連続店休にならないよう調整）
+ * - 平日: 16:00–22:00
+ * - 日曜: 10:00–15:00
+ * - ひろむ: 恵比寿勤務なし
+ * - ゆうと: 週2休。新宿平日9–13の日は同日16–22恵比寿可。
+ *   新宿をひろむに差替えた日（例:10/12）は恵比寿16–22のみ
+ *
+ * node scripts/sync-ebisu-shifts-2026-10.mjs --dry-run
+ */
+const MONTH = "2026-10";
+const MONTH_LAST_DAY = "31";
+const STORE_NAME = "恵比寿";
+const TRAINER_HIROMU = "ひろむ";
+const TRAINER_YUTO = "ゆうと";
+const TRAINER_NAMES = [TRAINER_HIROMU, TRAINER_YUTO];
+const SHIFT_STATUS = "confirmed";
+
+const DEFAULT_TARGET_SLOTS = 190;
+const YUTO_OFF_PER_WEEK = 2;
+const MAX_STORE_CLOSED_STREAK = 2;
+const WEEKDAY_SLOTS = 12;
+
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
+
+const WEEKDAY_TEMPLATE = { key: "weekday", segments: [["16:00", "22:00"]], breakMinutes: 0 };
+const SUNDAY_TEMPLATE = { key: "sunday", segments: [["10:00", "15:00"]], breakMinutes: 0 };
+
+function isActiveMember(m) {
+  const ms = String(m.membership_status ?? "").toLowerCase();
+  if (ms === "active") return true;
+  if (ms === "hiatus" || ms === "withdrawn") return false;
+  return m.is_active === true;
+}
+
+function parseActiveOverride(argv) {
+  const a = argv.find((x) => x.startsWith("--active="));
+  if (!a) return null;
+  const n = Number(a.split("=")[1]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function parseSlotsOverride(argv) {
+  const a = argv.find((x) => x.startsWith("--slots="));
+  if (!a) return null;
+  const n = Number(a.split("=")[1]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function norm(s) {
+  return String(s ?? "").replace(/\u3000/g, " ").trim();
+}
+
+function toHHMMSS(hhmm) {
+  const s = norm(hhmm);
+  if (!/^\d{2}:\d{2}$/u.test(s)) throw new Error(`時刻形式が不正です: ${hhmm}`);
+  return `${s}:00`;
+}
+
+function toMinutes(hhmm) {
+  const [hh, mm] = norm(hhmm).slice(0, 5).split(":").map(Number);
+  return hh * 60 + mm;
+}
+
+function row(date, start, end, trainer, break_minutes = 0) {
+  return {
+    shift_date: date,
+    start_local: toHHMMSS(start),
+    end_local: toHHMMSS(end),
+    trainer_name: trainer,
+    store_name: STORE_NAME,
+    break_minutes,
+  };
+}
+
+function octDate(dayNum) {
+  return `${MONTH}-${String(dayNum).padStart(2, "0")}`;
+}
+
+function allOctoberDates() {
+  const out = [];
+  for (let d = 1; d <= 31; d++) out.push(octDate(d));
+  return out;
+}
+
+function dayNum(date) {
+  return Number(date.slice(-2));
+}
+
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function mondayWeekKey(dateStr) {
+  const d = parseLocalDate(dateStr);
+  const diff = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - diff);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function groupDatesByMondayWeek(dates) {
+  const byWeek = new Map();
+  for (const date of dates) {
+    const k = mondayWeekKey(date);
+    if (!byWeek.has(k)) byWeek.set(k, []);
+    byWeek.get(k).push(date);
+  }
+  return [...byWeek.values()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function templateForDate(date) {
+  return parseLocalDate(date).getDay() === 0 ? SUNDAY_TEMPLATE : WEEKDAY_TEMPLATE;
+}
+
+/** 新宿午前勤務と同日の恵比寿は常に16–22 */
+function templateForYutoEbisu(date, yutoDualPmDays) {
+  if (yutoDualPmDays.has(date)) return WEEKDAY_TEMPLATE;
+  return templateForDate(date);
+}
+
+function rowsForTemplate(date, trainer, template) {
+  const br = template.breakMinutes ?? 0;
+  return template.segments.map(([s, e], i) => row(date, s, e, trainer, i === 0 ? br : 0));
+}
+
+function effectiveStoreSlots(rows) {
+  const byStoreDate = new Map();
+  for (const r of rows) {
+    const k = `${r.store_name}|${r.shift_date}`;
+    if (!byStoreDate.has(k)) byStoreDate.set(k, []);
+    byStoreDate.get(k).push(r);
+  }
+  let total = 0;
+  for (const [, dayRows] of byStoreDate) {
+    let daySlots = 0;
+    for (let t = 540; t < 1320; t += 30) {
+      let cap = 0;
+      for (const r of dayRows) {
+        const s = toMinutes(r.start_local);
+        const e = toMinutes(r.end_local);
+        if (s <= t && t + 30 <= e) cap++;
+      }
+      const store = dayRows[0]?.store_name;
+      if (store === UENO_STORE_NAME) cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      daySlots += cap;
+    }
+    total += daySlots;
+  }
+  return total;
+}
+
+function countSlots(rows) {
+  return effectiveStoreSlots(rows);
+}
+
+function slotsForOpenDate(date) {
+  return countSlots(rowsForTemplate(date, "x", templateForDate(date)));
+}
+
+function totalOpenSlots(yutoWorkDays) {
+  let sum = 0;
+  for (const d of yutoWorkDays) sum += slotsForOpenDate(d);
+  return sum;
+}
+
+function isEbisuClosedDate(date, candidates, yutoWorkSet) {
+  if (parseLocalDate(date).getDay() === 6) return true;
+  return candidates.includes(date) && !yutoWorkSet.has(date);
+}
+
+function maxStoreClosedStreak(candidates, yutoWorkSet) {
+  let max = 0;
+  let cur = 0;
+  for (const d of allOctoberDates()) {
+    if (isEbisuClosedDate(d, candidates, yutoWorkSet)) {
+      cur++;
+      max = Math.max(max, cur);
+    } else {
+      cur = 0;
+    }
+  }
+  return max;
+}
+
+function openCandidateDates() {
+  return allOctoberDates().filter((d) => parseLocalDate(d).getDay() !== 6);
+}
+
+function trainerDatesElsewhere(rows, trainer, excludeStore) {
+  return new Set(
+    rows.filter((r) => r.trainer_name === trainer && r.store_name !== excludeStore).map((r) => r.shift_date),
+  );
+}
+
+function loadCrossStoreBusy(uenoActive, sakuraActive) {
+  const cross = loadCrossStoreContext(uenoActive, sakuraActive);
+  const ueno = buildUenoPlan(500);
+  const shinjuku = buildShinjukuPlan(380, cross);
+  const hiromuBusy = new Set([
+    ...trainerDatesElsewhere(ueno.rows, TRAINER_HIROMU, STORE_NAME),
+    ...trainerDatesElsewhere(shinjuku.rows, TRAINER_HIROMU, STORE_NAME),
+  ]);
+  const yutoShinjukuDates = [...trainerDatesElsewhere(shinjuku.rows, TRAINER_YUTO, STORE_NAME)].sort();
+  const yutoEbisuPmOnlyDays = shinjuku.hiromuDualSwapDay ? [shinjuku.hiromuDualSwapDay] : [];
+  return { hiromuBusy, yutoShinjukuDates, yutoEbisuPmOnlyDays, cross };
+}
+
+function hiromuEbisuPickScore(date) {
+  const dow = parseLocalDate(date).getDay();
+  let s = 0;
+  if (dow >= 1 && dow <= 5) s += 10;
+  if (dow === 0) s += 2;
+  s += dayNum(date) / 100;
+  return s;
+}
+
+/** 週ごとに1日ずつ優先し、上野/新宿と被らない日から最大4日 */
+function pickHiromuEbisuDays(candidates, hiromuBusy, count = HIROMU_EBISU_DAY_COUNT) {
+  const picked = [];
+  const pickedSet = new Set();
+  for (const weekDates of groupDatesByMondayWeek(candidates)) {
+    if (picked.length >= count) break;
+    const options = weekDates
+      .filter((d) => !hiromuBusy.has(d) && !pickedSet.has(d))
+      .sort((a, b) => hiromuEbisuPickScore(b) - hiromuEbisuPickScore(a));
+    if (options.length) {
+      picked.push(options[0]);
+      pickedSet.add(options[0]);
+    }
+  }
+  if (picked.length < count) {
+    for (const d of candidates) {
+      if (picked.length >= count) break;
+      if (hiromuBusy.has(d) || pickedSet.has(d)) continue;
+      picked.push(d);
+      pickedSet.add(d);
+    }
+  }
+  if (picked.length < count) {
+    throw new Error(`ひろむ恵比寿 ${count} 日を確保できません（${picked.length} 日のみ）`);
+  }
+  return picked.sort();
+}
+
+function yutoRestPickScore(date, shinjukuSet) {
+  const dow = parseLocalDate(date).getDay();
+  let s = 0;
+  if (!shinjukuSet.has(date)) s += 20;
+  if (dow === 5) s += 8;
+  if (dow === 1) s += 6;
+  if (dow === 4) s += 4;
+  if (dow === 0) s += 1;
+  return s;
+}
+
+function weekOffRequired(pool, protectedSet = new Set()) {
+  const forcedWork = pool.filter((d) => protectedSet.has(d)).length;
+  const maxRest = Math.max(0, pool.length - 1 - forcedWork);
+  return Math.min(YUTO_OFF_PER_WEEK, maxRest);
+}
+
+function isYutoShinjukuWeekday(date, shinjukuSet) {
+  return shinjukuSet.has(date) && parseLocalDate(date).getDay() !== 6;
+}
+
+function yutoOffCountInWeek(pool, yutoWorkSet) {
+  return pool.filter((d) => !yutoWorkSet.has(d)).length;
+}
+
+/**
+ * 週2休を先に確保 → 新宿平日は同日16–22恵比寿（ひろむ恵比寿日除外）
+ */
+function combinations(arr, k) {
+  if (k <= 0) return [[]];
+  if (arr.length < k) return [];
+  const [head, ...tail] = arr;
+  const withHead = combinations(tail, k - 1).map((c) => [head, ...c]);
+  const withoutHead = combinations(tail, k);
+  return [...withHead, ...withoutHead];
+}
+
+function pickRestDaysForWeek(pool, offRequired, yutoWorkGlobal, shinjukuSet, candidates) {
+  if (offRequired <= 0) return [];
+  const workGlobal = new Set(yutoWorkGlobal);
+
+  function comboScore(restList) {
+    const tentative = new Set(workGlobal);
+    for (const r of restList) tentative.delete(r);
+    if (maxStoreClosedStreak(candidates, tentative) > MAX_STORE_CLOSED_STREAK) return -Infinity;
+    return restList.reduce((s, d) => s + yutoRestPickScore(d, shinjukuSet), 0);
+  }
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const restList of combinations(pool, offRequired)) {
+    const sc = comboScore(restList);
+    if (sc > bestScore) {
+      bestScore = sc;
+      best = restList;
+    }
+  }
+  if (best) return best;
+
+  let fallback = null;
+  let fallbackStreak = Infinity;
+  for (const restList of combinations(pool, offRequired)) {
+    const tentative = new Set(workGlobal);
+    for (const r of restList) tentative.delete(r);
+    const streak = maxStoreClosedStreak(candidates, tentative);
+    if (streak < fallbackStreak) {
+      fallbackStreak = streak;
+      fallback = restList;
+    }
+  }
+  return fallback ?? pool.slice(0, offRequired);
+}
+
+function pickYutoEbisuWorkDays(candidates, yutoShinjukuDates, yutoEbisuPmOnlyDays = []) {
+  const shinjukuSet = new Set(yutoShinjukuDates);
+  const yutoDualPmDays = new Set(
+    yutoShinjukuDates.filter((d) => isYutoShinjukuWeekday(d, shinjukuSet)),
+  );
+  const pmOnlySet = new Set(yutoEbisuPmOnlyDays);
+  const protectedSet = new Set([...yutoDualPmDays, ...pmOnlySet]);
+  const yutoWork = new Set(candidates);
+
+  for (const weekDates of groupDatesByMondayWeek(candidates)) {
+    const pool = weekDates.filter((d) => candidates.includes(d));
+    const offRequired = weekOffRequired(pool, protectedSet);
+    const restDays = pickRestDaysForWeek(pool, offRequired, yutoWork, shinjukuSet, candidates);
+    for (const d of restDays) yutoWork.delete(d);
+  }
+
+  for (const d of yutoDualPmDays) yutoWork.add(d);
+  for (const d of pmOnlySet) {
+    if (candidates.includes(d)) yutoWork.add(d);
+  }
+
+  const beforeResolve = [...yutoWork].sort();
+  const resolved = resolveStoreClosedStreaks(
+    candidates,
+    beforeResolve,
+    shinjukuSet,
+    [...protectedSet],
+  );
+  return {
+    yutoWorkDays: resolved.yutoWorkDays,
+    yutoRestDays: resolved.yutoRestDays,
+    yutoDualPmDays,
+    yutoEbisuPmOnlyDays: [...pmOnlySet].sort(),
+  };
+}
+
+function weekPoolFor(date, candidates) {
+  return groupDatesByMondayWeek(candidates)
+    .find((w) => w.includes(date))
+    ?.filter((x) => candidates.includes(x));
+}
+
+/** 3連続店休を解消（週2休・新宿ダブル勤務日は維持） */
+function resolveStoreClosedStreaks(candidates, yutoWorkDays, shinjukuSet, protectedDays) {
+  let work = new Set(yutoWorkDays);
+  const protectedSet = new Set(protectedDays);
+
+  for (let guard = 0; guard < 200; guard++) {
+    const streakNow = maxStoreClosedStreak(candidates, work);
+    if (streakNow <= MAX_STORE_CLOSED_STREAK) break;
+
+    let best = null;
+    let bestStreak = streakNow;
+
+    for (const add of candidates) {
+      if (work.has(add)) continue;
+      const bases = [new Set(work)];
+      bases[0].add(add);
+
+      for (const trial of bases) {
+        const weekPool = weekPoolFor(add, candidates);
+        if (!weekPool) continue;
+        const offRequired = weekOffRequired(weekPool, protectedSet);
+        const dropOptions = weekPool.filter(
+          (x) => trial.has(x) && x !== add && !protectedSet.has(x),
+        );
+        const dropTrials = dropOptions.length ? dropOptions : [null];
+
+        for (const drop of dropTrials) {
+          const t = new Set(trial);
+          if (drop) t.delete(drop);
+          if (yutoOffCountInWeek(weekPool, t) < offRequired) continue;
+          const st = maxStoreClosedStreak(candidates, t);
+          if (st < bestStreak) {
+            bestStreak = st;
+            best = { work: t };
+          }
+        }
+      }
+    }
+
+    if (!best) break;
+    work = best.work;
+  }
+
+  for (const d of protectedDays) work.add(d);
+
+  return {
+    yutoWorkDays: [...work].sort(),
+    yutoRestDays: candidates.filter((d) => !work.has(d)).sort(),
+  };
+}
+
+function trimYutoDaysToTarget(yutoWorkDays, candidates, targetSlots, protectedDays) {
+  /** 新宿午前+恵比寿夕方の日は従来恵比寿休だった分だけ枠を上乗せ */
+  let workDays = [...yutoWorkDays].sort();
+  let slots = totalOpenSlots(workDays);
+  const effectiveTarget = targetSlots + protectedDays.size * WEEKDAY_SLOTS;
+  if (slots <= effectiveTarget + 2) {
+    return { yutoWorkDays: workDays, storeClosedExtra: [] };
+  }
+  const removed = [];
+  const removable = () =>
+    workDays.filter((d) => !protectedDays.has(d)).sort((a, b) => {
+      const trialA = new Set(workDays);
+      trialA.delete(a);
+      const trialB = new Set(workDays);
+      trialB.delete(b);
+      const streakA = maxStoreClosedStreak(candidates, trialA);
+      const streakB = maxStoreClosedStreak(candidates, trialB);
+      if (streakA !== streakB) return streakB - streakA;
+      return dayNum(b) - dayNum(a);
+    });
+  function canDropDay(drop) {
+    const trial = workDays.filter((d) => d !== drop);
+    const weekPool = weekPoolFor(drop, candidates);
+    if (weekPool && yutoOffCountInWeek(weekPool, new Set(trial)) < weekOffRequired(weekPool)) {
+      return false;
+    }
+    return maxStoreClosedStreak(candidates, new Set(trial)) <= MAX_STORE_CLOSED_STREAK;
+  }
+
+  let guard = 0;
+  while (slots > targetSlots + 2 && removable().length && guard++ < 40) {
+    const drop = removable().find((d) => canDropDay(d));
+    if (!drop) break;
+    workDays = workDays.filter((d) => d !== drop);
+    removed.push(drop);
+    slots = totalOpenSlots(workDays);
+  }
+  return { yutoWorkDays: workDays.sort(), storeClosedExtra: removed.sort() };
+}
+
+function validateYutoWeeklyRest(candidates, yutoWorkDays, protectedDays = []) {
+  const yutoWorkSet = new Set(yutoWorkDays);
+  const protectedSet = new Set(protectedDays);
+  for (const weekDates of groupDatesByMondayWeek(candidates)) {
+    const pool = weekDates.filter((d) => candidates.includes(d));
+    if (!pool.length) continue;
+    const offRequired = weekOffRequired(pool, protectedSet);
+    const yutoOffEbisu = pool.filter((d) => !yutoWorkSet.has(d)).length;
+    if (yutoOffEbisu < offRequired) {
+      throw new Error(`ゆうと週2休未達: week ${mondayWeekKey(pool[0])}`);
+    }
+  }
+}
+
+function ensureWeeklyRest(candidates, yutoWorkDays, protectedDays) {
+  const work = new Set(yutoWorkDays);
+  const protectedSet = new Set(protectedDays);
+  for (const weekDates of groupDatesByMondayWeek(candidates)) {
+    const pool = weekDates.filter((d) => candidates.includes(d));
+    const offRequired = weekOffRequired(pool, protectedSet);
+    while (yutoOffCountInWeek(pool, work) < offRequired) {
+      const droppable = pool.filter((d) => work.has(d) && !protectedSet.has(d));
+      if (!droppable.length) break;
+      droppable.sort((a, b) => {
+        const ta = new Set(work);
+        ta.delete(a);
+        const tb = new Set(work);
+        tb.delete(b);
+        const sa = maxStoreClosedStreak(candidates, ta);
+        const sb = maxStoreClosedStreak(candidates, tb);
+        if (sa !== sb) return sa - sb;
+        return dayNum(b) - dayNum(a);
+      });
+      const drop = droppable.find((d) => {
+        const t = new Set(work);
+        t.delete(d);
+        return maxStoreClosedStreak(candidates, t) <= MAX_STORE_CLOSED_STREAK;
+      });
+      if (!drop) break;
+      work.delete(drop);
+    }
+  }
+  return [...work].sort();
+}
+
+function validateMaxStoreClosedStreak(candidates, yutoWorkDays) {
+  const work = new Set(yutoWorkDays);
+  const streak = maxStoreClosedStreak(candidates, work);
+  if (streak > MAX_STORE_CLOSED_STREAK) {
+    let cur = [];
+    let worst = [];
+    for (const d of allOctoberDates()) {
+      if (isEbisuClosedDate(d, candidates, work)) {
+        cur.push(d);
+        if (cur.length > worst.length) worst = [...cur];
+      } else {
+        cur = [];
+      }
+    }
+    throw new Error(`店休が${streak}連続（上限${MAX_STORE_CLOSED_STREAK}）: ${worst.join(", ")}`);
+  }
+}
+
+function buildRows(targetSlots, crossBusy) {
+  const candidates = openCandidateDates();
+  const hiromuDays = [];
+  let { yutoWorkDays, yutoRestDays, yutoDualPmDays, yutoEbisuPmOnlyDays } = pickYutoEbisuWorkDays(
+    candidates,
+    crossBusy.yutoShinjukuDates,
+    crossBusy.yutoEbisuPmOnlyDays ?? [],
+  );
+  const yutoProtectedDays = new Set([...yutoDualPmDays, ...yutoEbisuPmOnlyDays]);
+  const trim = trimYutoDaysToTarget(yutoWorkDays, candidates, targetSlots, yutoProtectedDays);
+  for (const d of trim.storeClosedExtra) {
+    yutoDualPmDays.delete(d);
+  }
+  yutoWorkDays = trim.yutoWorkDays;
+  const storeClosedExtra = trim.storeClosedExtra;
+  yutoRestDays = [...new Set([...yutoRestDays, ...storeClosedExtra])].sort();
+
+  const shinjukuSet = new Set(crossBusy.yutoShinjukuDates);
+  const protectedList = [...yutoProtectedDays];
+  const resolved = resolveStoreClosedStreaks(
+    candidates,
+    yutoWorkDays,
+    shinjukuSet,
+    protectedList,
+  );
+  yutoWorkDays = ensureWeeklyRest(candidates, resolved.yutoWorkDays, protectedList);
+  const resolved2 = resolveStoreClosedStreaks(
+    candidates,
+    yutoWorkDays,
+    shinjukuSet,
+    protectedList,
+  );
+  yutoWorkDays = resolved2.yutoWorkDays;
+  yutoRestDays = resolved2.yutoRestDays;
+  validateYutoWeeklyRest(candidates, yutoWorkDays, protectedList);
+  validateMaxStoreClosedStreak(candidates, yutoWorkDays);
+
+  const owners = new Map();
+  for (const d of yutoWorkDays) owners.set(d, TRAINER_YUTO);
+
+  const rows = [];
+  for (const d of yutoWorkDays) {
+    rows.push(...rowsForTemplate(d, TRAINER_YUTO, templateForYutoEbisu(d, yutoDualPmDays)));
+  }
+
+  const storeClosedDates = [
+    ...allOctoberDates().filter((d) => parseLocalDate(d).getDay() === 6),
+    ...candidates.filter((d) => !owners.has(d)),
+  ].sort();
+
+  return {
+    rows,
+    slots: countSlots(rows),
+    targetSlots,
+    candidates,
+    hiromuDays,
+    yutoWorkDays,
+    yutoRestDays,
+    yutoDualPmDays: [...yutoDualPmDays].sort(),
+    yutoEbisuPmOnlyDays,
+    storeClosedDates,
+    storeClosedExtra,
+    owners,
+  };
+}
+
+function validateNoTrainerOverlap(rows) {
+  const byTrainerDay = new Map();
+  for (const r of rows) {
+    const key = `${r.trainer_name}|${r.shift_date}`;
+    const list = byTrainerDay.get(key) ?? [];
+    list.push(r);
+    byTrainerDay.set(key, list);
+  }
+  for (const [, list] of byTrainerDay) {
+    const sorted = list.slice().sort((a, b) => toMinutes(a.start_local) - toMinutes(b.start_local));
+    for (let i = 0; i < sorted.length; i++) {
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (
+          toMinutes(sorted[i].start_local) < toMinutes(sorted[j].end_local) &&
+          toMinutes(sorted[i].end_local) > toMinutes(sorted[j].start_local)
+        ) {
+          throw new Error(`同一トレーナー重複: ${sorted[i].shift_date} ${sorted[i].trainer_name}`);
+        }
+      }
+    }
+  }
+}
+
+function validateSingleBoothPerDay(rows) {
+  const byDate = new Map();
+  for (const r of rows) {
+    const list = byDate.get(r.shift_date) ?? [];
+    list.push(r);
+    byDate.set(r.shift_date, list);
+  }
+  for (const [date, dayRows] of byDate) {
+    const trainers = new Set(dayRows.map((r) => r.trainer_name));
+    if (trainers.size > 1) {
+      throw new Error(`同日複数トレーナー: ${date} ${[...trainers].join("+")}`);
+    }
+  }
+}
+
+function validateCrossStore(rows, crossBusy, yutoDualPmDays) {
+  for (const r of rows) {
+    if (r.trainer_name === TRAINER_HIROMU && crossBusy.hiromuBusy.has(r.shift_date)) {
+      throw new Error(`ひろむ他店舗と同日: ${r.shift_date}`);
+    }
+    if (r.trainer_name === TRAINER_YUTO && crossBusy.yutoShinjukuDates.includes(r.shift_date)) {
+      if (!yutoDualPmDays.has(r.shift_date)) {
+        throw new Error(`ゆうと新宿勤務日に恵比寿未配置: ${r.shift_date}`);
+      }
+    }
+  }
+}
+
+function summarize(rows, plan, targetSlots, activeMembers) {
+  const byTrainer = new Map();
+  for (const r of rows) {
+    const t = byTrainer.get(r.trainer_name) ?? { days: new Set(), workMinutes: 0, breakMinutes: 0 };
+    t.days.add(r.shift_date);
+    t.workMinutes += toMinutes(r.end_local) - toMinutes(r.start_local);
+    t.breakMinutes += r.break_minutes ?? 0;
+    byTrainer.set(r.trainer_name, t);
+  }
+  return {
+    store: STORE_NAME,
+    activeMembers,
+    targetSlots,
+    slots: plan.slots,
+    slotPctOfTarget: targetSlots ? Math.round((plan.slots / targetSlots) * 1000) / 10 : null,
+    trainers: [...byTrainer.entries()].map(([name, v]) => ({
+      name,
+      days: v.days.size,
+      workHours: Math.round((v.workMinutes / 60) * 10) / 10,
+      breakHours: Math.round((v.breakMinutes / 60) * 10) / 10,
+    })),
+  };
+}
+
+async function loadActiveStoreCount(supabase, storeName) {
+  const [membersResult, storesResult] = await Promise.all([
+    fetchAllChecked(supabase, "members", "id, store_id, is_active, membership_status", undefined, "members"),
+    fetchAllChecked(supabase, "stores", "id, name", undefined, "stores"),
+  ]);
+  const storeId = storesResult.rows.find((s) => s.name === storeName)?.id;
+  if (!storeId) throw new Error(`${storeName} が見つかりません`);
+  return membersResult.rows.filter((m) => m.store_id === storeId && isActiveMember(m)).length;
+}
+
+async function main() {
+  const dryRun = process.argv.includes("--dry-run");
+  const activeOverride = parseActiveOverride(process.argv);
+  const slotsOverride = parseSlotsOverride(process.argv);
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabase = url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
+
+  let activeMembers = activeOverride ?? Math.round(DEFAULT_TARGET_SLOTS / 12);
+  let uenoActive = 40;
+  let sakuraActive = 35;
+  if (supabase && activeOverride == null) {
+    activeMembers = await loadActiveStoreCount(supabase, STORE_NAME);
+    uenoActive = await loadActiveStoreCount(supabase, "上野");
+    sakuraActive = await loadActiveStoreCount(supabase, "桜木町");
+  }
+
+  const crossBusy = loadCrossStoreBusy(uenoActive, sakuraActive);
+  const targetSlots = slotsOverride ?? DEFAULT_TARGET_SLOTS;
+  const plan = buildRows(targetSlots, crossBusy);
+  validateNoTrainerOverlap(plan.rows);
+  validateSingleBoothPerDay(plan.rows);
+  validateCrossStore(plan.rows, crossBusy, new Set(plan.yutoDualPmDays));
+  const summary = summarize(plan.rows, plan, targetSlots, activeMembers);
+
+  const calendar = allOctoberDates().map((date) => {
+    const dayRows = plan.rows.filter((r) => r.shift_date === date);
+    const trainer = plan.owners.get(date) ?? null;
+    const dow = parseLocalDate(date).getDay();
+    const saturday = dow === 6;
+    const closed = saturday || (!trainer && plan.candidates.includes(date));
+    return {
+      date,
+      trainer,
+      closed: closed || undefined,
+      blocks: dayRows.map((r) => `${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}`),
+    };
+  });
+
+  const output = {
+    dryRun,
+    month: MONTH,
+    status: SHIFT_STATUS,
+    crossStore: {
+      uenoActiveMembers: uenoActive,
+      sakuraActiveMembers: sakuraActive,
+      hiromuBusyDays: crossBusy.hiromuBusy.size,
+      yutoShinjukuDays: crossBusy.yutoShinjukuDates.map((d) => dayNum(d)),
+      yutoDualPmDays: plan.yutoDualPmDays.map((d) => dayNum(d)),
+    },
+    ...summary,
+    plan: {
+      targetSlots,
+      hiromuEbisuDays: plan.hiromuDays.map((d) => dayNum(d)),
+      yutoEbisuDays: plan.yutoWorkDays.map((d) => dayNum(d)),
+      yutoEbisuDualPmDays: plan.yutoDualPmDays.map((d) => dayNum(d)),
+      yutoEbisuPmOnlyDays: plan.yutoEbisuPmOnlyDays.map((d) => dayNum(d)),
+      yutoRestDays: plan.yutoRestDays.map((d) => dayNum(d)),
+      storeClosedDays: plan.storeClosedDates.map((d) => dayNum(d)),
+      trimmedForSlots: plan.storeClosedExtra.map((d) => dayNum(d)),
+    },
+    calendar,
+    rowCount: plan.rows.length,
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+
+  if (dryRun || !supabase) return;
+
+  const { data: storeRow, error: storeErr } = await supabase
+    .from("stores")
+    .select("id,name")
+    .eq("name", STORE_NAME)
+    .maybeSingle();
+  if (storeErr) throw storeErr;
+  if (!storeRow?.id) throw new Error("store_id 未取得");
+
+  const { data: trainers } = await supabase.from("trainers").select("id,display_name").in("display_name", TRAINER_NAMES);
+  const trainerIdByName = new Map((trainers ?? []).map((t) => [t.display_name, t.id]));
+  for (const n of TRAINER_NAMES) {
+    if (!trainerIdByName.get(n)) throw new Error(`トレーナー未登録: ${n}`);
+  }
+
+  const trainerIds = TRAINER_NAMES.map((n) => trainerIdByName.get(n));
+  const { data: existing } = await supabase
+    .from("trainer_shifts")
+    .select("id")
+    .eq("store_id", storeRow.id)
+    .in("trainer_id", trainerIds)
+    .gte("shift_date", `${MONTH}-01`)
+    .lte("shift_date", `${MONTH}-${MONTH_LAST_DAY}`);
+
+  const payload = plan.rows.map((r) => ({
+    trainer_id: trainerIdByName.get(r.trainer_name),
+    store_id: storeRow.id,
+    shift_date: r.shift_date,
+    start_local: r.start_local,
+    end_local: r.end_local,
+    status: SHIFT_STATUS,
+    is_break: false,
+    break_minutes: r.break_minutes ?? 0,
+  }));
+
+  const ids = (existing ?? []).map((r) => r.id);
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error } = await supabase.from("trainer_shifts").delete().in("id", ids.slice(i, i + 200));
+    if (error) throw error;
+  }
+  for (let i = 0; i < payload.length; i += 200) {
+    const { error } = await supabase.from("trainer_shifts").insert(payload.slice(i, i + 200));
+    if (error) throw error;
+  }
+
+  console.log(JSON.stringify({ done: true, deleted: ids.length, inserted: payload.length }, null, 2));
+}
+
+export { buildRows, loadCrossStoreBusy, openCandidateDates };
+
+import { pathToFileURL } from "url";
+const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCli) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
