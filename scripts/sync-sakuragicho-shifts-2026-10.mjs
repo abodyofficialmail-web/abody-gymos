@@ -1,12 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { fetchAllChecked } from "./lib/supabaseFetchAll.mjs";
+import { UENO_MAX_BOOTHS, UENO_STORE_NAME } from "./sync-ueno-shifts-2026-10.mjs";
 
 /**
  * 2026-10 桜木町店（たけはる・りょう）
  *
  * - 目標枠: アクティブ会員×12
  * - 同時1ブース
- * - たけはる 171h / 月、残り日・枠はりょう
+ * - たけはる 171h / 月、週2休（連勤抑制）、残り日・枠はりょう
  *
  * node --env-file=.env.local scripts/sync-sakuragicho-shifts-2026-10.mjs --dry-run
  */
@@ -18,19 +19,31 @@ const TRAINER_RYO = "りょう";
 const TRAINER_NAMES = [TRAINER_TAKE, TRAINER_RYO];
 const SHIFT_STATUS = "confirmed";
 const TAKE_TARGET_WORK_HOURS = 171;
+/** たけはる: 月〜日の週あたり休み日数 */
+const TAKE_OFF_PER_WEEK = 2;
+/** たけはる: 連勤上限（超えたら追加休み） */
+const TAKE_MAX_CONSECUTIVE_WORK = 5;
 
-const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "上野", "桜木町"]);
+const SINGLE_BOOTH = new Set(["恵比寿", "新宿", "桜木町"]);
 
 const RYO_OFF_DAYS = new Set([1, 7, 14, 20, 26]);
-const TAKE_OFF_DAYS = new Set([6, 8]);
+/** 10/6・10/8 休み、10/15 は研修でシフトアウト */
+const TAKE_OFF_DAYS = new Set([6, 8, 15]);
+/** たけはる不在日はりょうがフルにカバー */
+const RYO_COVER_FULL_DAYS = new Set([15]);
+/** たけはる休み（6・8）— りょうはフル不可 */
+const RYO_TAKE_OFF_COVER_DAYS = new Set([6, 8]);
 
-/** 10-13 / 16-22（15-16 休憩） */
+/** 10-13 / 15-16（中抜け1h勤務）/ 16-21（1hはりょう側へ振替） */
+const TAKE_PM_BASE = "21:00";
+const TAKE_PM_MAX = "22:00";
 const TAKE_TEMPLATE = {
   segments: [
     ["10:00", "13:00"],
-    ["16:00", "22:00"],
+    ["15:00", "16:00"],
+    ["16:00", TAKE_PM_BASE],
   ],
-  breakMinutes: 60,
+  breakMinutes: 0,
 };
 
 const RYO_TEMPLATES = [
@@ -38,6 +51,8 @@ const RYO_TEMPLATES = [
   { key: "med", segments: [["10:00", "13:00"], ["16:00", "21:00"]], breakMinutes: 60 },
   { key: "pm", segments: [["14:00", "17:00"], ["18:00", "21:30"]], breakMinutes: 60 },
   { key: "short", segments: [["14:00", "17:00"], ["18:00", "20:00"]], breakMinutes: 60 },
+  { key: "miniLong2", segments: [["16:00", "21:00"]], breakMinutes: 0 },
+  { key: "miniLong", segments: [["16:00", "20:00"]], breakMinutes: 0 },
   { key: "mini", segments: [["16:00", "19:00"]], breakMinutes: 0 },
 ];
 
@@ -122,7 +137,8 @@ function effectiveStoreSlots(rows) {
         if (s <= t && t + 30 <= e) cap++;
       }
       const store = dayRows[0]?.store_name;
-      if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
+      if (store === UENO_STORE_NAME) cap = Math.min(cap, UENO_MAX_BOOTHS);
+      else if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       daySlots += cap;
     }
     total += daySlots;
@@ -142,86 +158,291 @@ function takeStandardHours() {
   return workHoursForSegments(TAKE_TEMPLATE.segments);
 }
 
-function assignTrainerDays(dates) {
-  const takeDays = [];
-  const ryoDays = [];
-  const flex = [];
-
-  for (const d of dates) {
-    const n = dayNum(d);
-    if (RYO_OFF_DAYS.has(n)) takeDays.push(d);
-    else if (TAKE_OFF_DAYS.has(n)) ryoDays.push(d);
-    else flex.push(d);
-  }
-
-  const takeStdH = takeStandardHours();
-  const mandatoryTakeH = takeDays.length * takeStdH;
-  let needTakeFlex = Math.max(0, Math.ceil((TAKE_TARGET_WORK_HOURS - mandatoryTakeH) / takeStdH));
-  needTakeFlex = Math.min(needTakeFlex, flex.length);
-
-  const flexForTake = flex.slice(0, needTakeFlex);
-  const flexForRyo = flex.slice(needTakeFlex);
-
-  takeDays.push(...flexForTake);
-  ryoDays.push(...flexForRyo);
-
-  takeDays.sort();
-  ryoDays.sort();
-  return { takeDays, ryoDays };
+function templateWorkHours(template) {
+  return workHoursForSegments(template.segments);
 }
 
-function buildTakeRows(date, pmEnd = "22:00") {
-  const template = {
-    segments: [
-      ["10:00", "13:00"],
-      ["16:00", pmEnd],
-    ],
-    breakMinutes: TAKE_TEMPLATE.breakMinutes,
-  };
-  return rowsForTemplate(date, TRAINER_TAKE, template);
+function takeHoursForPmEnd(pmEnd) {
+  const pmMin = toMinutes(pmEnd);
+  if (pmMin <= 16 * 60) return 4;
+  return workHoursForSegments([
+    ["10:00", "13:00"],
+    ["15:00", "16:00"],
+    ["16:00", pmEnd],
+  ]);
+}
+
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function formatLocalDate(d) {
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function mondayWeekKey(dateStr) {
+  const d = parseLocalDate(dateStr);
+  const diff = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - diff);
+  return formatLocalDate(d);
+}
+
+function groupDatesByMondayWeek(dates) {
+  const byWeek = new Map();
+  for (const date of dates) {
+    const k = mondayWeekKey(date);
+    if (!byWeek.has(k)) byWeek.set(k, []);
+    byWeek.get(k).push(date);
+  }
+  return [...byWeek.values()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function takeWorksOnDay(day, takeOffDays) {
+  if (RYO_OFF_DAYS.has(day)) return true;
+  return !takeOffDays.has(day);
+}
+
+function maxTakeWorkStreak(dates, takeOffDays) {
+  let max = 0;
+  let cur = 0;
+  for (const date of dates) {
+    const n = dayNum(date);
+    if (takeWorksOnDay(n, takeOffDays)) {
+      cur++;
+      max = Math.max(max, cur);
+    } else {
+      cur = 0;
+    }
+  }
+  return max;
+}
+
+function takeOffCountInWeek(weekDates, takeOffDays) {
+  return weekDates.filter((d) => takeOffDays.has(dayNum(d))).length;
+}
+
+function weekOffTarget(weekDates) {
+  const eligible = weekDates.filter((d) => !RYO_OFF_DAYS.has(dayNum(d)));
+  if (eligible.length <= 1) return eligible.length;
+  return Math.min(TAKE_OFF_PER_WEEK, eligible.length);
+}
+
+function scoreTakeOffCandidate(date, dates, takeOffDays) {
+  const n = dayNum(date);
+  const dow = parseLocalDate(date).getDay();
+  let score = 0;
+  if (dow === 0 || dow === 6) score += 3;
+  const idx = dates.indexOf(date);
+  const prevWork = idx > 0 && takeWorksOnDay(dayNum(dates[idx - 1]), takeOffDays);
+  const nextWork = idx < dates.length - 1 && takeWorksOnDay(dayNum(dates[idx + 1]), takeOffDays);
+  if (prevWork && nextWork) score += 5;
+  return score;
+}
+
+function tryAddTakeOff(date, takeOffDays, dates) {
+  const n = dayNum(date);
+  if (RYO_OFF_DAYS.has(n) || takeOffDays.has(n)) return false;
+  takeOffDays.add(n);
+  return true;
+}
+
+function assignTrainerDays(dates) {
+  const takeOffDays = new Set(TAKE_OFF_DAYS);
+
+  for (const weekDates of groupDatesByMondayWeek(dates)) {
+    const target = weekOffTarget(weekDates);
+    let offCount = takeOffCountInWeek(weekDates, takeOffDays);
+    const candidates = weekDates.filter(
+      (d) => !RYO_OFF_DAYS.has(dayNum(d)) && !takeOffDays.has(dayNum(d)),
+    );
+    while (offCount < target && candidates.length) {
+      candidates.sort(
+        (a, b) => scoreTakeOffCandidate(b, dates, takeOffDays) - scoreTakeOffCandidate(a, dates, takeOffDays),
+      );
+      const pick = candidates.shift();
+      takeOffDays.add(dayNum(pick));
+      offCount++;
+    }
+  }
+
+  const targetTakeWorkDays = Math.max(1, Math.round(TAKE_TARGET_WORK_HOURS / takeStandardHours()));
+  let takeWorkDays = dates.filter((d) => takeWorksOnDay(dayNum(d), takeOffDays)).length;
+
+  const weeksGrouped = groupDatesByMondayWeek(dates);
+
+  while (takeWorkDays > targetTakeWorkDays) {
+    let best = null;
+    let bestScore = -1;
+    for (const date of dates) {
+      const n = dayNum(date);
+      if (!takeWorksOnDay(n, takeOffDays)) continue;
+      if (TAKE_OFF_DAYS.has(n)) continue;
+      const weekDates = weeksGrouped.find((w) => w.includes(date));
+      if (!weekDates) continue;
+      const offInWeek = takeOffCountInWeek(weekDates, takeOffDays);
+      if (offInWeek !== 2) continue;
+      const sc = scoreTakeOffCandidate(date, dates, takeOffDays);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = date;
+      }
+    }
+    if (!best || !tryAddTakeOff(best, takeOffDays, dates)) break;
+    takeWorkDays--;
+  }
+
+  let guard = 0;
+  while (maxTakeWorkStreak(dates, takeOffDays) > TAKE_MAX_CONSECUTIVE_WORK && guard++ < 31) {
+    let best = null;
+    let bestScore = -1;
+    for (const date of dates) {
+      const n = dayNum(date);
+      if (!takeWorksOnDay(n, takeOffDays)) continue;
+      if (TAKE_OFF_DAYS.has(n)) continue;
+      const weekDates = weeksGrouped.find((w) => w.includes(date));
+      if (!weekDates) continue;
+      if (takeOffCountInWeek(weekDates, takeOffDays) >= 3) continue;
+      const sc = scoreTakeOffCandidate(date, dates, takeOffDays);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = date;
+      }
+    }
+    if (!best || !tryAddTakeOff(best, takeOffDays, dates)) break;
+  }
+
+  const takeDays = dates.filter((d) => takeWorksOnDay(dayNum(d), takeOffDays));
+  const ryoDays = dates.filter((d) => !takeWorksOnDay(dayNum(d), takeOffDays));
+  return { takeDays, ryoDays, takeOffDays: [...takeOffDays].sort((a, b) => a - b) };
+}
+
+function buildTakeRows(date, pmEnd = TAKE_PM_BASE) {
+  const segments = [
+    ["10:00", "13:00"],
+    ["15:00", "16:00"],
+  ];
+  if (toMinutes(pmEnd) > 16 * 60) segments.push(["16:00", pmEnd]);
+  return rowsForTemplate(date, TRAINER_TAKE, { segments, breakMinutes: 0 });
 }
 
 function tuneTakeHours(takeDays) {
-  const rows = [];
-  let totalH = 0;
-  const stdH = takeStandardHours();
+  if (!takeDays.length) return { rows: [], totalTakeHours: 0, scheduledTakeDays: 0 };
 
-  for (let i = 0; i < takeDays.length; i++) {
-    const d = takeDays[i];
-    const remaining = TAKE_TARGET_WORK_HOURS - totalH;
-    if (remaining <= 0.01) break;
+  const pmEnds = takeDays.map(() => TAKE_PM_BASE);
+  let totalH = pmEnds.reduce((s, pm) => s + takeHoursForPmEnd(pm), 0);
 
-    if (remaining >= stdH - 0.01 || i < takeDays.length - 1) {
-      rows.push(...buildTakeRows(d, "22:00"));
-      totalH += stdH;
-      continue;
+  let guard = 0;
+  while (totalH < TAKE_TARGET_WORK_HOURS - 0.01 && guard++ < 500) {
+    let bumped = false;
+    for (let i = 0; i < pmEnds.length; i++) {
+      if (toMinutes(pmEnds[i]) >= toMinutes(TAKE_PM_MAX)) continue;
+      const nextPm = TAKE_PM_MAX;
+      const delta = takeHoursForPmEnd(nextPm) - takeHoursForPmEnd(pmEnds[i]);
+      if (totalH + delta > TAKE_TARGET_WORK_HOURS + 0.01) continue;
+      pmEnds[i] = nextPm;
+      totalH += delta;
+      bumped = true;
+      break;
     }
-
-    const needPmHours = Math.max(0, remaining - 3);
-    const pmEndMin = 16 * 60 + Math.round(needPmHours * 60);
-    const pmEnd = `${String(Math.floor(pmEndMin / 60)).padStart(2, "0")}:${String(pmEndMin % 60).padStart(2, "0")}`;
-    rows.push(...buildTakeRows(d, pmEnd));
-    totalH += workHoursForSegments([
-      ["10:00", "13:00"],
-      ["16:00", pmEnd],
-    ]);
+    if (!bumped) break;
   }
 
-  return { rows, totalTakeHours: Math.round(totalH * 10) / 10 };
+  guard = 0;
+  while (totalH > TAKE_TARGET_WORK_HOURS + 0.01 && guard++ < 500) {
+    let trimmed = false;
+    for (let i = pmEnds.length - 1; i >= 0; i--) {
+      if (toMinutes(pmEnds[i]) <= toMinutes(TAKE_PM_BASE)) continue;
+      const prevPm = TAKE_PM_BASE;
+      const delta = takeHoursForPmEnd(pmEnds[i]) - takeHoursForPmEnd(prevPm);
+      pmEnds[i] = prevPm;
+      totalH -= delta;
+      trimmed = true;
+      break;
+    }
+    if (!trimmed) break;
+  }
+
+  const rows = takeDays.flatMap((d, i) => buildTakeRows(d, pmEnds[i]));
+  return {
+    rows,
+    totalTakeHours: Math.round(totalH * 10) / 10,
+    scheduledTakeDays: takeDays.length,
+  };
 }
 
-function pickRyoTemplates(ryoDays, slotsNeeded) {
-  if (!ryoDays.length) return [];
-  const opts = RYO_TEMPLATES.map((t) => ({ template: t, slots: slotsForTemplate(t) })).sort(
-    (a, b) => a.slots - b.slots,
-  );
+function ryoWorkHoursTarget(ryoDays, scheduledTakeDays) {
+  const mini = RYO_TEMPLATES.find((t) => t.key === "mini");
+  const full = RYO_TEMPLATES.find((t) => t.key === "full");
+  const miniH = templateWorkHours(mini);
+  const fullH = templateWorkHours(full);
+  let target = 0;
+  for (const date of ryoDays) {
+    target += RYO_COVER_FULL_DAYS.has(dayNum(date)) ? fullH : miniH;
+  }
+  target += scheduledTakeDays;
+  return Math.round(target * 10) / 10;
+}
 
-  const plan = ryoDays.map((date) => ({
-    date,
-    template: opts[0].template,
-    slots: opts[0].slots,
-    key: opts[0].template.key,
-  }));
+function planRyoWorkHours(plan) {
+  return plan.reduce((s, p) => s + templateWorkHours(p.template), 0);
+}
+
+function minRyoTemplateKeyForDay(day) {
+  if (day === 6) return "short";
+  return "mini";
+}
+
+function maxRyoTemplateKeyForDay(day) {
+  if (RYO_COVER_FULL_DAYS.has(day)) return "full";
+  if (RYO_TAKE_OFF_COVER_DAYS.has(day)) return "miniLong";
+  if (day >= 21) return "short";
+  return "miniLong2";
+}
+
+function templateRank(key) {
+  const order = ["mini", "miniLong", "miniLong2", "short", "pm", "med", "full"];
+  const i = order.indexOf(key);
+  return i >= 0 ? i : order.length;
+}
+
+function ryoUpgradeDayPriority(date) {
+  const d = dayNum(date);
+  if (d >= 21) return 0;
+  if (RYO_TAKE_OFF_COVER_DAYS.has(d)) return 2;
+  return 1;
+}
+
+function pickRyoTemplates(ryoDays, slotsNeeded, scheduledTakeDays) {
+  if (!ryoDays.length) return [];
+  const opts = RYO_TEMPLATES.map((t) => ({
+    template: t,
+    slots: slotsForTemplate(t),
+    workHours: templateWorkHours(t),
+  })).sort((a, b) => a.slots - b.slots);
+  const fullOpt = opts.find((o) => o.template.key === "full") ?? opts[opts.length - 1];
+  const workHoursTarget = ryoWorkHoursTarget(ryoDays, scheduledTakeDays);
+
+  const shortOpt = opts.find((o) => o.template.key === "short") ?? opts[Math.min(2, opts.length - 1)];
+
+  const plan = ryoDays.map((date) => {
+    const day = dayNum(date);
+    if (RYO_COVER_FULL_DAYS.has(day)) {
+      return { date, template: fullOpt.template, slots: fullOpt.slots, key: fullOpt.template.key };
+    }
+    if (day === 6) {
+      return { date, template: shortOpt.template, slots: shortOpt.slots, key: shortOpt.template.key };
+    }
+    return {
+      date,
+      template: opts[0].template,
+      slots: opts[0].slots,
+      key: opts[0].template.key,
+    };
+  });
 
   let sum = plan.reduce((s, p) => s + p.slots, 0);
 
@@ -229,10 +450,11 @@ function pickRyoTemplates(ryoDays, slotsNeeded) {
   while (sum < slotsNeeded && guard++ < 500) {
     let upgraded = false;
     for (let i = 0; i < plan.length; i++) {
+      if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
       for (const opt of opts) {
         if (opt.slots <= plan[i].slots) continue;
         const next = sum - plan[i].slots + opt.slots;
-        if (next <= slotsNeeded) {
+        if (next <= slotsNeeded + 4) {
           sum = next;
           plan[i] = { date: plan[i].date, template: opt.template, slots: opt.slots, key: opt.template.key };
           upgraded = true;
@@ -248,8 +470,12 @@ function pickRyoTemplates(ryoDays, slotsNeeded) {
   while (sum > slotsNeeded && guard++ < 500) {
     let downgraded = false;
     for (let i = 0; i < plan.length; i++) {
+      const day = dayNum(plan[i].date);
+      if (RYO_COVER_FULL_DAYS.has(day)) continue;
+      const minKey = minRyoTemplateKeyForDay(day);
       for (const opt of opts) {
         if (opt.slots >= plan[i].slots) continue;
+        if (templateRank(opt.template.key) < templateRank(minKey)) continue;
         const next = sum - plan[i].slots + opt.slots;
         if (next >= slotsNeeded - 2) {
           sum = next;
@@ -263,6 +489,43 @@ function pickRyoTemplates(ryoDays, slotsNeeded) {
     if (!downgraded) break;
   }
 
+  /** 10/15フル＋短日延長分（枠はやや上振れ可） */
+  const slotCeiling = slotsNeeded + 46;
+
+  guard = 0;
+  while (planRyoWorkHours(plan) < workHoursTarget - 0.01 && guard++ < 500) {
+    const order = plan
+      .map((p, i) => i)
+      .sort((a, b) => ryoUpgradeDayPriority(plan[a].date) - ryoUpgradeDayPriority(plan[b].date));
+
+    let upgraded = false;
+    for (const i of order) {
+      if (RYO_COVER_FULL_DAYS.has(dayNum(plan[i].date))) continue;
+      const day = dayNum(plan[i].date);
+      const maxKey = maxRyoTemplateKeyForDay(day);
+      const curWh = templateWorkHours(plan[i].template);
+      const nextOpt = opts
+        .filter(
+          (o) =>
+            o.workHours > curWh + 0.01 && templateRank(o.template.key) <= templateRank(maxKey),
+        )
+        .sort((a, b) => a.workHours - b.workHours)[0];
+      if (!nextOpt) continue;
+      const nextSum = sum - plan[i].slots + nextOpt.slots;
+      if (nextSum > slotCeiling) continue;
+      sum = nextSum;
+      plan[i] = {
+        date: plan[i].date,
+        template: nextOpt.template,
+        slots: nextOpt.slots,
+        key: nextOpt.template.key,
+      };
+      upgraded = true;
+      break;
+    }
+    if (!upgraded) break;
+  }
+
   return plan;
 }
 
@@ -270,11 +533,11 @@ function buildRows(targetSlots) {
   const dates = allOctoberDates();
   const { takeDays, ryoDays } = assignTrainerDays(dates);
 
-  const { rows: takeRows, totalTakeHours } = tuneTakeHours(takeDays);
+  const { rows: takeRows, totalTakeHours, scheduledTakeDays } = tuneTakeHours(takeDays);
   const takeSlots = countSlots(takeRows);
   const needRyoSlots = Math.max(0, targetSlots - takeSlots);
 
-  const ryoPlan = pickRyoTemplates(ryoDays, needRyoSlots);
+  const ryoPlan = pickRyoTemplates(ryoDays, needRyoSlots, scheduledTakeDays);
   const ryoRows = ryoPlan.flatMap(({ date, template }) => rowsForTemplate(date, TRAINER_RYO, template));
 
   const rows = [...takeRows, ...ryoRows];
@@ -386,6 +649,12 @@ async function main() {
   const plan = buildRows(targetSlots);
   validateNoTrainerOverlap(plan.rows);
   validateSingleBoothPerDay(plan.rows);
+  const takeOffForMetrics = new Set(
+    allOctoberDates()
+      .filter((d) => !plan.takeDays.includes(d))
+      .map((d) => dayNum(d)),
+  );
+  const maxTakeStreak = maxTakeWorkStreak(allOctoberDates(), takeOffForMetrics);
   const summary = summarize(plan.rows, plan, targetSlots, activeMembers);
 
   const ownerByDate = Object.fromEntries([
@@ -396,9 +665,14 @@ async function main() {
   const calendar = allOctoberDates().map((date) => {
     const dayRows = plan.rows.filter((r) => r.shift_date === date);
     const trainer = ownerByDate[date] ?? null;
+    const note =
+      dayNum(date) === 15 && !plan.takeDays.includes(date)
+        ? "たけはる研修（シフトアウト）"
+        : undefined;
     return {
       date,
       trainer,
+      note,
       blocks: dayRows.map((r) => `${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}`),
     };
   });
@@ -411,6 +685,8 @@ async function main() {
     plan: {
       takeDays: plan.takeDays.length,
       ryoDays: plan.ryoDays.length,
+      takeOffDays: [...takeOffForMetrics].sort((a, b) => a - b),
+      maxTakeConsecutiveWork: maxTakeStreak,
       takeSlots: plan.takeSlots,
       ryoSlots: plan.ryoSlots,
       ryoTemplates: plan.ryoPlan,
@@ -467,7 +743,11 @@ async function main() {
 
 export { buildRows, TAKE_TARGET_WORK_HOURS };
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+import { pathToFileURL } from "url";
+const isCli = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCli) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
