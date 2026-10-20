@@ -18,9 +18,10 @@ import { execSync } from "child_process";
 
 const BUCKET = "line-campaign-media";
 const SIGNED_TTL_SEC = 60 * 60 * 24 * 30;
-const CAMPAIGN_PREFIX = "sep-low-booking-2026-09";
+const DEFAULT_CAMPAIGN_PREFIX = "sep-low-booking-2026-09";
 /** Supabase bucket fileSizeLimit（既存バケットは20MBのことが多い） */
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const DOWNLOAD_UA = "Mozilla/5.0 (compatible; abody-gymos-line-upload/1.0)";
 
 function loadEnvFile(name) {
   const p = path.join(process.cwd(), name);
@@ -48,12 +49,66 @@ function arg(name) {
   return hit ? hit.slice(name.length + 3) : null;
 }
 
-async function readFromUrl(url) {
-  const res = await fetch(url);
+function looksLikeHtml(buf) {
+  const head = buf.subarray(0, 400).toString("utf8").trim().toLowerCase();
+  return head.startsWith("<!doctype") || head.startsWith("<html") || head.includes("<html") || head.includes("accounts.google.com");
+}
+
+function cookieHeader(res) {
+  const raw = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  const fallback = res.headers.get("set-cookie");
+  const parts = raw.length ? raw : fallback ? [fallback] : [];
+  return parts.map((c) => String(c).split(";")[0]).filter(Boolean).join("; ");
+}
+
+function driveConfirmUrl(html, pageUrl) {
+  const formMatch = html.match(/<form\b[^>]*\baction="([^"]+)"[^>]*>/i);
+  if (!formMatch) return null;
+  const actionUrl = new URL(formMatch[1].replace(/&amp;/g, "&"), pageUrl);
+  const formEnd = html.indexOf("</form>", formMatch.index);
+  const formHtml = html.slice(formMatch.index, formEnd === -1 ? formMatch.index + 4000 : formEnd);
+  const tagRe = /<input\b[^>]*>/gi;
+  let tag;
+  while ((tag = tagRe.exec(formHtml))) {
+    const name = tag[0].match(/\bname="([^"]+)"/i);
+    const value = tag[0].match(/\bvalue="([^"]*)"/i);
+    if (!name) continue;
+    actionUrl.searchParams.set(name[1], (value?.[1] ?? "").replace(/&amp;/g, "&"));
+  }
+  if (!actionUrl.searchParams.has("confirm")) actionUrl.searchParams.set("confirm", "t");
+  return actionUrl.toString();
+}
+
+async function fetchBuffer(url, cookie) {
+  const headers = { "User-Agent": DOWNLOAD_UA };
+  if (cookie) headers.Cookie = cookie;
+  const res = await fetch(url, { redirect: "follow", headers });
   if (!res.ok) throw new Error(`download failed ${res.status}: ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const ct = res.headers.get("content-type") ?? "";
-  return { buf, contentType: ct };
+  return {
+    buf,
+    contentType: res.headers.get("content-type") ?? "",
+    cookie: cookieHeader(res) || cookie || "",
+    finalUrl: res.url || url,
+  };
+}
+
+async function readFromUrl(url) {
+  let got = await fetchBuffer(url);
+  if (!looksLikeHtml(got.buf) && !got.contentType.includes("text/html")) {
+    return { buf: got.buf, contentType: got.contentType };
+  }
+  const confirmUrl = driveConfirmUrl(got.buf.toString("utf8"), got.finalUrl || url);
+  if (!confirmUrl) {
+    throw new Error("ダウンロード結果がHTMLです。共有を「リンクを知っている全員」にしてください");
+  }
+  console.log("video: Drive virus-scan warning. following confirm form");
+  got = await fetchBuffer(confirmUrl, got.cookie);
+  if (looksLikeHtml(got.buf) || got.contentType.includes("text/html")) {
+    throw new Error("Google Drive の確認画面を越えられませんでした。共有を「リンクを知っている全員」にしてください");
+  }
+  console.log(`video: downloaded ${(got.buf.length / (1024 * 1024)).toFixed(2)} MB (${got.contentType || "unknown"})`);
+  return { buf: got.buf, contentType: got.contentType };
 }
 
 function readLocal(filePath) {
@@ -81,30 +136,35 @@ function previewFromVideo(videoPath, outPath) {
   );
 }
 
-function compressVideoForUpload(inputPath, outputPath, crf) {
+function compressVideoForUpload(inputPath, outputPath, { crf, maxWidth }) {
+  const vf = maxWidth ? `-vf scale='min(${maxWidth}\\,iw)':-2` : "";
   execSync(
-    `ffmpeg -y -i "${inputPath}" -c:v libx264 -crf ${crf} -preset medium -c:a aac -b:a 128k -movflags +faststart "${outputPath}"`,
-    { stdio: "pipe", maxBuffer: 80 * 1024 * 1024 },
+    `ffmpeg -y -i ${JSON.stringify(inputPath)} -map 0:v:0 -map '0:a:0?' ${vf} -c:v libx264 -crf ${crf} -preset veryfast -c:a aac -b:a 96k -movflags +faststart ${JSON.stringify(outputPath)}`,
+    { stdio: ["ignore", "pipe", "inherit"], maxBuffer: 20 * 1024 * 1024 },
   );
 }
 
-function ensureVideoUnderLimit(localVideoPath, tmpDir) {
+function ensureVideoUnderLimit(localVideoPath, tmpDir, { forceTranscode = false } = {}) {
   let buf = fs.readFileSync(localVideoPath);
-  if (buf.length <= MAX_UPLOAD_BYTES) return { buf, localVideoPath };
+  if (!forceTranscode && buf.length <= MAX_UPLOAD_BYTES) return { buf, localVideoPath };
 
   if (!hasFfmpeg()) {
     throw new Error(`${(buf.length / (1024 * 1024)).toFixed(2)}MB超過。ffmpegで圧縮するか20MB以下にしてください`);
   }
 
-  let input = localVideoPath;
-  for (const crf of [28, 32, 36]) {
-    const out = path.join(tmpDir, `video-crf${crf}.mp4`);
-    console.log(`video: compressing with crf=${crf}...`);
-    compressVideoForUpload(input, out, crf);
+  const passes = [
+    { crf: 28, maxWidth: 1280 },
+    { crf: 32, maxWidth: 960 },
+    { crf: 36, maxWidth: 720 },
+    { crf: 38, maxWidth: 540 },
+  ];
+  for (const pass of passes) {
+    const out = path.join(tmpDir, `video-w${pass.maxWidth}-crf${pass.crf}.mp4`);
+    console.log(`video: compressing width<=${pass.maxWidth} crf=${pass.crf}...`);
+    compressVideoForUpload(localVideoPath, out, pass);
     buf = fs.readFileSync(out);
     console.log(`video: after compress ${(buf.length / (1024 * 1024)).toFixed(2)} MB`);
-    if (buf.length <= MAX_UPLOAD_BYTES) return { buf, localVideoPath: out };
-    input = out;
+    if (buf.length <= MAX_UPLOAD_BYTES && buf.length > 100 * 1024) return { buf, localVideoPath: out };
   }
 
   throw new Error("圧縮後も20MB超過。元動画を短くするか解像度を下げてください");
@@ -141,6 +201,10 @@ async function main() {
   const previewLocal = arg("preview");
   const videoUrl = arg("video-url");
   const previewUrl = arg("preview-url");
+  const campaignPrefix = arg("prefix") || DEFAULT_CAMPAIGN_PREFIX;
+  if (!/^[a-z0-9][a-z0-9-]{2,80}$/.test(campaignPrefix)) {
+    throw new Error(`invalid prefix: ${campaignPrefix}`);
+  }
 
   if (!videoLocal && !videoUrl) {
     console.error(`usage:
@@ -167,20 +231,27 @@ async function main() {
       const tmpVideo = path.join(tmpDir, "video.mp4");
       const v = await readFromUrl(videoUrl);
       videoBuf = v.buf;
-      if (v.contentType.includes("mp4")) videoContentType = "video/mp4";
+      videoContentType = v.contentType.includes("mp4") ? "video/mp4" : v.contentType || "application/octet-stream";
+      if (looksLikeHtml(videoBuf) || videoBuf.length < 100 * 1024) {
+        throw new Error("動画ファイルを取得できませんでした（HTMLまたは小さすぎます）");
+      }
       fs.writeFileSync(tmpVideo, videoBuf);
       localVideoPath = tmpVideo;
     }
 
     const mb = (videoBuf.length / (1024 * 1024)).toFixed(2);
     console.log(`video size: ${mb} MB`);
+    const forceTranscode = !String(videoContentType).includes("mp4");
     if (localVideoPath) {
-      const fitted = ensureVideoUnderLimit(localVideoPath, tmpDir);
+      const beforePath = localVideoPath;
+      const fitted = ensureVideoUnderLimit(localVideoPath, tmpDir, { forceTranscode });
       videoBuf = fitted.buf;
       localVideoPath = fitted.localVideoPath;
+      if (forceTranscode || localVideoPath !== beforePath) videoContentType = "video/mp4";
     } else if (videoBuf.length > MAX_UPLOAD_BYTES) {
       throw new Error("20MB超過（ローカルパスなし・圧縮不可）");
     }
+    if (looksLikeHtml(videoBuf)) throw new Error("アップロード対象がHTMLです");
 
     let previewBuf;
     let previewContentType = "image/jpeg";
@@ -201,16 +272,21 @@ async function main() {
     } else {
       throw new Error("プレビュー画像が必要です。--preview= または --preview-url= を指定してください（ffmpeg未インストール）");
     }
+    if (looksLikeHtml(previewBuf)) throw new Error("プレビューがHTMLです");
+    if (previewBuf.length > 1024 * 1024) {
+      throw new Error(`プレビューが1MBを超えています (${previewBuf.length} bytes)`);
+    }
+    if (videoBuf.length > MAX_UPLOAD_BYTES) throw new Error("動画が20MBを超えています");
 
     const videoUpload = await upload(
       supabase,
-      `${CAMPAIGN_PREFIX}/video.mp4`,
+      `${campaignPrefix}/video.mp4`,
       videoBuf,
       videoContentType,
     );
     const previewUpload = await upload(
       supabase,
-      `${CAMPAIGN_PREFIX}/preview.jpg`,
+      `${campaignPrefix}/preview.jpg`,
       previewBuf,
       previewContentType,
     );

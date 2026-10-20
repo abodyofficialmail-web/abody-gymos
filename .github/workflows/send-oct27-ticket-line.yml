@@ -1,0 +1,77 @@
+name: Send Oct 27 Ticket LINE
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "true で本番送信（デフォルト dry-run）"
+        required: false
+        default: "false"
+  push:
+    branches:
+      - cursor/oct-visits-res-5-2693
+    paths:
+      - ".github/workflows/send-oct27-ticket-line.yml"
+      - "scripts/send-oct27-ticket-line.mjs"
+      - "scripts/upload-line-campaign-media.mjs"
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci --legacy-peer-deps
+      - id: media
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/upload-line-campaign-media.mjs \
+            --prefix=oct-low-visit-ticket-2026-10 \
+            --video-url="https://drive.google.com/uc?export=download&confirm=t&id=1JQgDCzeNuqV45mU1arQgiHRbJwMQQ1Vs" \
+            | tee /tmp/oct27-line-media.log
+          node --input-type=module -e '
+            import fs from "fs";
+            const text = fs.readFileSync("/tmp/oct27-line-media.log", "utf8");
+            const start = text.indexOf("{");
+            const end = text.lastIndexOf("}");
+            if (start < 0 || end < start) throw new Error("upload JSON not found");
+            const json = JSON.parse(text.slice(start, end + 1));
+            const video = String(json.video?.signedUrl ?? "").replace(/[\r\n]/g, "");
+            const preview = String(json.preview?.signedUrl ?? "").replace(/[\r\n]/g, "");
+            if (!video.includes("/oct-low-visit-ticket-2026-10/video.mp4")) throw new Error("unexpected video path");
+            if (!preview.includes("/oct-low-visit-ticket-2026-10/preview.jpg")) throw new Error("unexpected preview path");
+            if (video.includes("sep-low-booking") || preview.includes("sep-low-booking")) throw new Error("september media");
+            fs.appendFileSync(process.env.GITHUB_ENV, `OCT27_VIDEO_URL=${video}\n`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `OCT27_PREVIEW_URL=${preview}\n`);
+          '
+      - name: dry-run
+        id: dry
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+          OCT27_VIDEO_URL: ${{ env.OCT27_VIDEO_URL }}
+          OCT27_PREVIEW_URL: ${{ env.OCT27_PREVIEW_URL }}
+        run: |
+          set -euo pipefail
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-oct27-ticket-line.mjs --dry-run
+      - name: send
+        if: steps.media.outcome == 'success' && steps.dry.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct27-line-confirm]'))
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+          OCT27_VIDEO_URL: ${{ env.OCT27_VIDEO_URL }}
+          OCT27_PREVIEW_URL: ${{ env.OCT27_PREVIEW_URL }}
+        run: |
+          set -euo pipefail
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-oct27-ticket-line.mjs --confirm
