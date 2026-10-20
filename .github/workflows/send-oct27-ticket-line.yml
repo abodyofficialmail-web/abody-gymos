@@ -74,4 +74,4 @@ jobs:
         run: |
           set -euo pipefail
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
-          node scripts/send-oct27-ticket-line.mjs --confirm
+          node scripts/send-oct27-ticket-line.mjs --confirm --only=FUK012,FUK006,FUK010

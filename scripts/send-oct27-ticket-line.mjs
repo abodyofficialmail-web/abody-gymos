@@ -108,16 +108,32 @@ function summarize(results) {
   }));
 }
 
-function assertResults(json, dryRun) {
+function selectedCodes(argv) {
+  const hit = argv.find((arg) => arg.startsWith("--only="));
+  if (!hit) return TARGETS.map(([code]) => code);
+  const codes = hit
+    .slice("--only=".length)
+    .split(",")
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+  if (!codes.length || new Set(codes).size !== codes.length) throw new Error("再送対象の会員番号が空か重複しています");
+  for (const code of codes) {
+    if (!ALLOWED.has(code)) throw new Error(`対象外の会員番号です: ${code}`);
+  }
+  return codes;
+}
+
+function assertResults(json, dryRun, expectedCodes) {
   const results = Array.isArray(json.results) ? json.results : [];
-  if (json.member_count !== TARGETS.length || results.length !== TARGETS.length) {
-    throw new Error(`対象人数が27名ではありません (${json.member_count}/${results.length})`);
+  if (json.member_count !== expectedCodes.length || results.length !== expectedCodes.length) {
+    throw new Error(`対象人数が一致しません (${json.member_count}/${results.length})`);
   }
   if (Boolean(json.dry_run) !== dryRun) throw new Error("dry_run の結果が一致しません");
+  const expected = new Set(expectedCodes);
   const seen = new Set();
   for (const row of results) {
     const code = String(row.member_code ?? "").toUpperCase();
-    if (!ALLOWED.has(code) || seen.has(code)) throw new Error(`対象外の会員番号です: ${code}`);
+    if (!expected.has(code) || seen.has(code)) throw new Error(`対象外の会員番号です: ${code}`);
     seen.add(code);
     if (row.ok) {
       if (!row.has_video) throw new Error(`${code} に動画が付いていません`);
@@ -127,42 +143,19 @@ function assertResults(json, dryRun) {
       }
     }
   }
-  if (seen.size !== ALLOWED.size) throw new Error("対象の会員番号が足りません");
+  if (seen.size !== expected.size) throw new Error("対象の会員番号が足りません");
   const hard = results.filter((row) => !row.ok && !SOFT_ERRORS.has(row.error));
   return hard;
 }
 
-async function main() {
-  assertMessage();
-  const dryRun = !process.argv.includes("--confirm");
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
-  const videoUrl = process.env.OCT27_VIDEO_URL?.trim() || "";
-  const previewUrl = process.env.OCT27_PREVIEW_URL?.trim() || "";
-  if (!videoUrl || !previewUrl) throw new Error("動画URLとプレビューURLが必要です");
-
-  const codes = TARGETS.map(([code]) => code);
-  if (codes.length !== 27 || new Set(codes).size !== 27) throw new Error("会員番号リストが27名ではありません");
-
-  console.log(`mode: ${dryRun ? "DRY-RUN" : "SEND"}`);
-  console.log(`targets: ${codes.join(", ")}`);
-  console.log(`video: ${assertMediaUrl(videoUrl, "動画")}`);
-  console.log(`preview: ${assertMediaUrl(previewUrl, "プレビュー")}`);
-  console.log("--- message ---");
-  console.log(MESSAGE);
-  console.log("--- end message ---");
-
+async function postOne({ code, dryRun, videoUrl, previewUrl, serviceKey }) {
   const body = {
-    member_codes: codes,
+    member_codes: [code],
     text: MESSAGE,
     video_url: videoUrl,
     preview_image_url: previewUrl,
     dry_run: dryRun,
   };
-  if (!Array.isArray(body.member_codes) || body.member_codes.length !== 27) {
-    throw new Error("送信対象を組み立てられませんでした");
-  }
-
   const res = await fetch(`${PRODUCTION_API.replace(/\/$/, "")}/api/admin/send-sep-low-booking-motivation-line`, {
     method: "POST",
     headers: {
@@ -176,15 +169,53 @@ async function main() {
     console.error(`API error HTTP ${res.status}`, json.error ?? "");
     process.exit(1);
   }
-  const hard = assertResults(json, dryRun);
+  assertResults(json, dryRun, [code]);
+  return json.results[0];
+}
+
+async function main() {
+  assertMessage();
+  const dryRun = !process.argv.includes("--confirm");
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
+  const videoUrl = process.env.OCT27_VIDEO_URL?.trim() || "";
+  const previewUrl = process.env.OCT27_PREVIEW_URL?.trim() || "";
+  if (!videoUrl || !previewUrl) throw new Error("動画URLとプレビューURLが必要です");
+
+  const codes = selectedCodes(process.argv);
+  if (new Set(TARGETS.map(([code]) => code)).size !== 27) throw new Error("会員番号リストが27名ではありません");
+
+  console.log(`mode: ${dryRun ? "DRY-RUN" : "SEND"}`);
+  console.log(`targets: ${codes.join(", ")}`);
+  console.log(`video: ${assertMediaUrl(videoUrl, "動画")}`);
+  console.log(`preview: ${assertMediaUrl(previewUrl, "プレビュー")}`);
+  console.log("--- message ---");
+  console.log(MESSAGE);
+  console.log("--- end message ---");
+
+  const results = [];
+  for (let index = 0; index < codes.length; index += 1) {
+    const code = codes[index];
+    let row = null;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      row = await postOne({ code, dryRun, videoUrl, previewUrl, serviceKey });
+      if (dryRun || row.ok || row.error !== "line_push_failed" || row.status !== 429) break;
+      console.log(`${code}: LINEの送信制限。${attempt}回目のあと20秒待って再送します`);
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+    }
+    results.push(row);
+    if (!dryRun && index < codes.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+    }
+  }
+  const hard = results.filter((row) => !row.ok && !SOFT_ERRORS.has(row.error));
   console.log(JSON.stringify({
-    ok: json.ok,
-    dry_run: json.dry_run,
-    member_count: json.member_count,
-    sent: json.sent,
-    ready: json.ready,
-    failed: json.failed,
-    results: summarize(json.results),
+    dry_run: dryRun,
+    member_count: results.length,
+    sent: results.filter((row) => row.ok && !dryRun).length,
+    ready: results.filter((row) => row.ok && dryRun).length,
+    failed: results.filter((row) => !row.ok).length,
+    results: summarize(results),
   }, null, 2));
   if (hard.length) {
     console.error(`送信できない会員がいます: ${hard.map((row) => `${row.member_code}:${row.error}`).join(", ")}`);
