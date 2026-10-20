@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
-          node scripts/send-oct27-ticket-line.mjs --dry-run
+          node scripts/send-oct27-ticket-line.mjs --dry-run --only=FUK012,FUK006,FUK010
       - name: send
         if: steps.media.outcome == 'success' && steps.dry.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct27-line-confirm]'))
         env:

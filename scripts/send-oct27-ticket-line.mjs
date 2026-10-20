@@ -97,6 +97,12 @@ function assertMediaUrl(url, label) {
   return `${parsed.origin}${parsed.pathname}`;
 }
 
+function lineDetail(row) {
+  return String(row?.detail ?? "")
+    .replace(/https?:\/\/\S+/g, "[url]")
+    .slice(0, 300);
+}
+
 function summarize(results) {
   return results.map((row) => ({
     member_code: row.member_code,
@@ -105,6 +111,7 @@ function summarize(results) {
     error: row.error ?? null,
     has_video: row.has_video ?? false,
     status: row.status ?? null,
+    detail: lineDetail(row) || null,
   }));
 }
 
@@ -197,11 +204,14 @@ async function main() {
   for (let index = 0; index < codes.length; index += 1) {
     const code = codes[index];
     let row = null;
-    for (let attempt = 1; attempt <= 4; attempt += 1) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
       row = await postOne({ code, dryRun, videoUrl, previewUrl, serviceKey });
-      if (dryRun || row.ok || row.error !== "line_push_failed" || row.status !== 429) break;
-      console.log(`${code}: LINEの送信制限。${attempt}回目のあと20秒待って再送します`);
-      await new Promise((resolve) => setTimeout(resolve, 20000));
+      const detail = lineDetail(row);
+      if (detail) console.log(`${code} detail: ${detail}`);
+      const monthly = /monthly limit/i.test(detail);
+      if (dryRun || row.ok || row.error !== "line_push_failed" || row.status !== 429 || monthly) break;
+      console.log(`${code}: LINEの送信制限。${attempt}回目のあと60秒待って再送します`);
+      await new Promise((resolve) => setTimeout(resolve, 60000));
     }
     results.push(row);
     if (!dryRun && index < codes.length - 1) {
