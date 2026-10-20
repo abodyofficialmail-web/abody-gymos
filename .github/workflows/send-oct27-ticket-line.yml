@@ -17,6 +17,7 @@ on:
 
 jobs:
   send:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[send-oct27-line-confirm]')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -63,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
-          node scripts/send-oct27-ticket-line.mjs --dry-run --only=FUK012,FUK006,FUK010
+          node scripts/send-oct27-ticket-line.mjs --dry-run
       - name: send
         if: steps.media.outcome == 'success' && steps.dry.outcome == 'success' && (github.event.inputs.confirm == 'true' || contains(github.event.head_commit.message, '[send-oct27-line-confirm]'))
         env:
@@ -74,4 +75,4 @@ jobs:
         run: |
           set -euo pipefail
           export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
-          node scripts/send-oct27-ticket-line.mjs --confirm --only=FUK012,FUK006,FUK010
+          node scripts/send-oct27-ticket-line.mjs --confirm
