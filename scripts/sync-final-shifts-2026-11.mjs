@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1578;
+const EXPECT_SLOTS = 1572;
 const EXPECT_PAY_YEN = 1_352_098;
 
 /** [date, start, end, trainer, store] 分割は別行 */
@@ -47,14 +47,12 @@ const SHIFTS = [
   ["2026-11-04", "16:00", "21:30", "たけはる", "桜木町"],
   ["2026-11-05", "09:00", "14:00", "ひろむ", "上野"],
   ["2026-11-05", "17:00", "22:00", "ひろむ", "上野"],
-  ["2026-11-05", "16:00", "22:00", "ゆうと", "恵比寿"],
   ["2026-11-05", "10:00", "13:00", "りょう", "新宿"],
   ["2026-11-05", "16:00", "22:00", "りょう", "新宿"],
   ["2026-11-05", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-05", "16:00", "21:30", "たけはる", "桜木町"],
   ["2026-11-06", "09:00", "14:00", "ひろむ", "上野"],
   ["2026-11-06", "17:00", "22:00", "ひろむ", "上野"],
-  ["2026-11-06", "10:00", "13:00", "ゆうと", "新宿"],
   ["2026-11-06", "16:00", "22:00", "ゆうと", "新宿"],
   ["2026-11-06", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-06", "16:00", "21:00", "たけはる", "桜木町"],
@@ -80,6 +78,7 @@ const SHIFTS = [
   ["2026-11-10", "16:00", "21:00", "たけはる", "桜木町"],
   ["2026-11-10", "09:00", "11:00", "りょう", "桜木町"],
   ["2026-11-10", "16:00", "21:30", "りょう", "桜木町"],
+  ["2026-11-11", "16:00", "22:00", "ゆうと", "恵比寿"],
   ["2026-11-11", "16:00", "22:00", "りょう", "新宿"],
   ["2026-11-11", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-11", "16:00", "21:30", "たけはる", "桜木町"],
@@ -409,11 +408,14 @@ function validate(rows) {
   for (const day of [2, 8, 24, 30]) {
     if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "りょう")) errors.push(`りょうの希望休です: ${ymd(day)}`);
   }
-  for (const day of [7, 14, 21, 28]) {
-    if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの土曜休です: ${ymd(day)}`);
+  for (const day of [4, 5]) {
+    if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの勤務不可です: ${ymd(day)}`);
   }
-  for (const day of [4, 11, 18, 25]) {
-    if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの水曜休です: ${ymd(day)}`);
+  for (const day of [7, 14, 21, 28, 18, 25]) {
+    if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの休みです: ${ymd(day)}`);
+  }
+  if (rows.some((r) => r.shift_date === ymd(6) && r.trainer_name === "ゆうと" && mins(r.start_local) < 16 * 60)) {
+    errors.push("ゆうとの11/6は16:00開始ではありません");
   }
   const yutoDays = new Set(rows.filter((r) => r.trainer_name === "ゆうと").map((r) => r.shift_date));
   if (yutoDays.size !== 22) errors.push(`ゆうとの出勤日数が22ではありません: ${yutoDays.size}`);
