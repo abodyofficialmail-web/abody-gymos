@@ -17,8 +17,8 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1550;
-const EXPECT_PAY_YEN = 1_325_298;
+const EXPECT_SLOTS = 1560;
+const EXPECT_PAY_YEN = 1_334_298;
 
 /** [date, start, end, trainer, store] 分割は別行 */
 const SHIFTS = [
@@ -133,6 +133,7 @@ const SHIFTS = [
   ["2026-11-23", "09:00", "17:00", "たけはる", "桜木町"],
   ["2026-11-24", "10:00", "14:00", "せいや", "上野"],
   ["2026-11-24", "17:00", "22:00", "せいや", "上野"],
+  ["2026-11-24", "16:00", "22:00", "ひろむ", "上野"],
   ["2026-11-24", "09:00", "13:00", "ゆうと", "新宿"],
   ["2026-11-24", "16:00", "22:00", "ゆうと", "新宿"],
   ["2026-11-24", "09:00", "13:00", "たけはる", "桜木町"],
@@ -312,7 +313,7 @@ function validate(rows) {
     }
   }
   for (const [date, names] of namesByDate) {
-    if (names.has("せいや") && names.has("ひろむ") && ![ymd(2), ymd(10), ymd(14), ymd(16)].includes(date)) errors.push(`せいやとひろむが同日です: ${date}`);
+    if (names.has("せいや") && names.has("ひろむ") && ![ymd(2), ymd(10), ymd(14), ymd(16), ymd(24)].includes(date)) errors.push(`せいやとひろむが同日です: ${date}`);
   }
   const shinjuku = new Map();
   for (const r of rows) {
