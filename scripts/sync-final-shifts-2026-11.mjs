@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1556;
+const EXPECT_SLOTS = 1558;
 const EXPECT_PAY_YEN = 1_354_498;
 
 /** [date, start, end, trainer, store] 分割は別行 */
@@ -36,7 +36,7 @@ const SHIFTS = [
   ["2026-11-02", "15:30", "17:00", "たけはる", "桜木町"],
   ["2026-11-03", "10:00", "14:00", "せいや", "上野"],
   ["2026-11-03", "17:00", "22:00", "せいや", "上野"],
-  ["2026-11-03", "17:00", "22:00", "ゆうと", "恵比寿"],
+  ["2026-11-03", "10:00", "16:00", "ゆうと", "恵比寿"],
   ["2026-11-03", "09:00", "17:00", "たけはる", "桜木町"],
   ["2026-11-03", "10:00", "18:00", "りょう", "桜木町"],
   ["2026-11-04", "09:00", "14:00", "ひろむ", "上野"],
@@ -472,7 +472,7 @@ async function main() {
   if (pay.trainers["たけはる"].hours < 171 || pay.trainers["たけはる"].hours > 176) {
     throw new Error(`たけはるが171時間以上176時間以下ではありません: ${pay.trainers["たけはる"].hours}`);
   }
-  if (pay.trainers["ゆうと"].hours !== 147) throw new Error(`ゆうとが147時間ではありません: ${pay.trainers["ゆうと"].hours}`);
+  if (pay.trainers["ゆうと"].hours !== 148) throw new Error(`ゆうとが148時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 329_400) throw new Error(`りょうの人件費が329400ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
