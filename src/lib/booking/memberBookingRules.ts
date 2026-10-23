@@ -35,6 +35,11 @@ export type RuleReservation = {
   session_type?: string | null;
   status?: string | null;
   quota_consumed?: boolean | null;
+  notes?: string | null;
+  /** 当日の有料枠。月の回数と保持上限には含めない */
+  same_day_fee_yen?: number | null;
+  /** 来店なしの取り直し元。月の回数と保持上限には含めない */
+  same_day_swap_of?: string | null;
 };
 
 export type BookingCandidate = {
@@ -57,6 +62,8 @@ export type BookingRuleInput = {
   joinedAtYmd?: string | null;
   /** 会員が「チケットを使う」と答えたあとだけ消化する */
   confirmTicketUse?: boolean;
+  /** 当日の有料枠・来店なしの取り直し。月の回数・保持上限・チケットは見ない */
+  sameDayExtra?: boolean;
 };
 
 export type PlanConversionOffer = "monthly_10" | "monthly_20";
@@ -144,6 +151,13 @@ function isConfirmed(row: RuleReservation): boolean {
 function isQuotaConsumedCancel(row: RuleReservation): boolean {
   const status = String(row.status ?? "").trim().toLowerCase();
   return status === "cancelled" && Boolean(row.quota_consumed);
+}
+
+/** お金を払った当日枠と、来店なしの取り直しはプランの回数に足さない。 */
+export function countsTowardPlanQuota(row: RuleReservation): boolean {
+  if (Number(row.same_day_fee_yen ?? 0) > 0) return false;
+  if (String(row.same_day_swap_of ?? "").trim()) return false;
+  return true;
 }
 
 export function visibleReservations(
@@ -238,6 +252,7 @@ function komaInCycle(
   for (const row of rows) {
     const counts = isConfirmed(row) || (includeConsumedCancels && isQuotaConsumedCancel(row));
     if (!counts) continue;
+    if (isConfirmed(row) && !countsTowardPlanQuota(row)) continue;
     const at = toDt(row.start_at, zone);
     if (at < start || at >= end) continue;
     total += komaForRange(row.start_at, row.end_at, zone);
@@ -250,6 +265,7 @@ function holdKoma(rows: RuleReservation[], nowIso: string, zone: string): number
   let total = 0;
   for (const row of rows) {
     if (!isConfirmed(row)) continue;
+    if (!countsTowardPlanQuota(row)) continue;
     if (toDt(row.start_at, zone).toMillis() <= now.toMillis()) continue;
     total += komaForRange(row.start_at, row.end_at, zone);
   }
@@ -305,19 +321,26 @@ export function summarizeMemberBookingState(params: {
   };
 }
 
-/** いま追加で取れるコマ数。月10/20はチケットでも上限を超えない。未設定は制限なし。 */
+/** 上限を超えている分。すでに超えていても、今回のコマ数より多くは請求しない。 */
+function ticketsForOverflow(used: number, adding: number, cap: number): number {
+  const over = used + adding - cap;
+  if (over <= 0) return 0;
+  return Math.min(adding, over);
+}
+
+/** いま追加で取れるコマ数。月4/8/20・今月10はチケットでも上限を超えない。未設定は制限なし。 */
 export function remainingBookableKoma(snap: MemberBookingSnapshot): number | null {
   if (!snap.plan || snap.maxHoldKoma == null) return null;
   const holdLeft = Math.max(0, snap.maxHoldKoma - snap.holdKoma);
   const tickets = Math.max(0, snap.ticketKoma);
-  const hardMonth = snap.plan ? isHardMonthlyCapPlan(snap.plan) : false;
-  if (hardMonth) {
-    const monthLeft =
-      snap.monthlyMaxKoma == null ? holdLeft : Math.max(0, snap.monthlyMaxKoma - snap.monthKoma);
-    return Math.min(holdLeft, monthLeft);
-  }
   if (snap.plan === "ticket") return Math.min(holdLeft, tickets);
-  return holdLeft + tickets;
+  const monthLeft =
+    snap.monthlyMaxKoma == null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, snap.monthlyMaxKoma - snap.monthKoma);
+  const planLeft = Math.min(holdLeft, monthLeft);
+  if (isHardMonthlyCapPlan(snap.plan)) return planLeft;
+  return planLeft + tickets;
 }
 
 export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResult {
@@ -349,6 +372,8 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
     }
   }
 
+  if (input.sameDayExtra) return allowed(0);
+
   const nextRows = [...rows, { ...input.candidate, status: "confirmed" }];
   const weekStart = weekStartYmd(input.candidate.start_at, zone);
   const weekRows = nextRows.filter(
@@ -379,11 +404,14 @@ export function evaluateMemberBooking(input: BookingRuleInput): BookingRuleResul
   }
 
   if (holdOverflow) {
-    ticketsNeeded = Math.max(ticketsNeeded, currentHold + newKoma - limits.maxHoldKoma);
+    ticketsNeeded = Math.max(ticketsNeeded, ticketsForOverflow(currentHold, newKoma, limits.maxHoldKoma));
   }
 
   if (monthlyOverflow && limits.monthlyMaxKoma != null) {
-    ticketsNeeded = Math.max(ticketsNeeded, monthly + newKoma - limits.monthlyMaxKoma);
+    ticketsNeeded = Math.max(
+      ticketsNeeded,
+      ticketsForOverflow(monthly, newKoma, limits.monthlyMaxKoma)
+    );
   }
 
   if (mix) {

@@ -24,7 +24,7 @@ export const ENROLLMENT_COURSE_PLANS = [
 export const MEMBERSHIP_PLAN_OPTIONS: Array<{ id: MembershipPlan; label: string; hint: string }> = [
   { id: "unlimited_30", label: "30分受け放題", hint: "常に2コマまで。1日2コマは不可" },
   { id: "session_60", label: "60分受け放題", hint: "回数の上限なし。常に4コマ先まで。同じ日は2コマまで（60分=2コマ）" },
-  { id: "monthly_10", label: "月10回プラン", hint: "1ヶ月10コマまで。11コマ目から×。同じ日は2コマまで（30分=1コマ、60分=2コマ）" },
+  { id: "monthly_10", label: "月10回プラン", hint: "1ヶ月10コマまで。11コマ目からはチケットが必要。同じ日は2コマまで（30分=1コマ、60分=2コマ）" },
   { id: "monthly_20", label: "月20回プラン", hint: "1ヶ月20コマまで。21コマ目から×。同じ日は2コマまで（30分=1コマ、60分=2コマ）" },
   { id: "monthly_4", label: "月4回プラン", hint: "1ヶ月4コマまで。5コマ目から×。同じ日は2コマまで（30分=1コマ、60分=2コマ）" },
   { id: "monthly_8", label: "月8回プラン", hint: "1ヶ月8コマまで。9コマ目から×。同じ日は2コマまで（30分=1コマ、60分=2コマ）" },
@@ -58,15 +58,9 @@ export function membershipPlanShortLabel(plan: MembershipPlan | null | undefined
   return plan;
 }
 
-/** 月のコマ数を超えた予約はチケットでも通せないプラン。 */
+/** 月のコマ数を超えた予約はチケットでも通せないプラン。月10回はチケットで超えられる。 */
 export function isHardMonthlyCapPlan(plan: MembershipPlan): boolean {
-  return (
-    plan === "monthly_4" ||
-    plan === "monthly_8" ||
-    plan === "monthly_10" ||
-    plan === "monthly_20" ||
-    plan === "this_month_10"
-  );
+  return plan === "monthly_4" || plan === "monthly_8" || plan === "monthly_20" || plan === "this_month_10";
 }
 
 export type MemberPlanLimits = {
