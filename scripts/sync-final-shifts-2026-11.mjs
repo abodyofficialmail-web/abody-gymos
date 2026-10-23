@@ -18,7 +18,7 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
 const EXPECT_SLOTS = 1525;
-const EXPECT_PAY_YEN = 1_340_098;
+const EXPECT_PAY_YEN = 1_353_598;
 
 /** [date, start, end, trainer, store] 分割は別行 */
 const SHIFTS = [
@@ -280,10 +280,13 @@ function estimatePayroll(rows) {
   const seiya = stats("せいや");
   const yuto = stats("ゆうと");
   const take = stats("たけはる");
+  const ryoShinjukuDays = new Set(
+    (by.get("りょう") ?? []).filter((r) => r.store_name === "新宿").map((r) => r.shift_date),
+  ).size;
   const money = {
     ゆうと: 260_000 + 13_120,
     たけはる: 260_000 + 15_388,
-    りょう: Math.round(ryo.hours * 1500) + ryo.bonusDays * 1500,
+    りょう: Math.round(ryo.hours * 1500) + ryo.bonusDays * 1500 + ryoShinjukuDays * 900,
     ひろむ: Math.round(hiromu.hours * 1500) + hiromu.bonusDays * 1500 + 18_030,
     せいや: Math.round(seiya.hours * 1400) + seiya.bonusDays * 1400 + seiya.days * 880,
   };
@@ -479,7 +482,7 @@ async function main() {
     throw new Error(`たけはるが171時間以上176時間以下ではありません: ${pay.trainers["たけはる"].hours}`);
   }
   if (pay.trainers["ゆうと"].hours !== 144) throw new Error(`ゆうとが144時間ではありません: ${pay.trainers["ゆうと"].hours}`);
-  if (pay.money["りょう"] !== 313_500) throw new Error(`りょうの人件費が313500ではありません: ${pay.money["りょう"]}`);
+  if (pay.money["りょう"] !== 327_000) throw new Error(`りょうの人件費が327000ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
     month: MONTH,
@@ -497,7 +500,7 @@ async function main() {
     assumptions: {
       ゆうと: "固定260000+定期13120",
       たけはる: "固定260000+定期15388（6ヶ月92330の月割）",
-      りょう: "時給1500+分割ボーナス。交通費0",
+      りょう: "時給1500+分割ボーナス+新宿往復900円/日",
       ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
       せいや: "時給1400+分割ボーナス+上野交通費880/日",
       note: "時給・定期・交通費は2026年8月の給与集計。上野20:00–21:00はシフト内だが予約不可。",
