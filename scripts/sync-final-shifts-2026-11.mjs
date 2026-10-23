@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1536;
+const EXPECT_SLOTS = 1518;
 const EXPECT_PAY_YEN = 1_339_348;
 
 /** [date, start, end, trainer, store] 分割は別行 */
@@ -44,12 +44,12 @@ const SHIFTS = [
   ["2026-11-04", "17:00", "22:00", "ひろむ", "上野"],
   ["2026-11-04", "10:00", "13:00", "りょう", "新宿"],
   ["2026-11-04", "16:00", "21:30", "りょう", "新宿"],
+  ["2026-11-04", "10:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-04", "16:00", "22:00", "たけはる", "桜木町"],
   ["2026-11-05", "09:00", "14:00", "ひろむ", "上野"],
   ["2026-11-05", "17:00", "22:00", "ひろむ", "上野"],
   ["2026-11-05", "10:00", "13:00", "りょう", "新宿"],
   ["2026-11-05", "16:00", "21:30", "りょう", "新宿"],
-  ["2026-11-05", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-05", "16:00", "22:00", "たけはる", "桜木町"],
   ["2026-11-06", "10:00", "14:00", "ひろむ", "上野"],
   ["2026-11-06", "17:00", "22:00", "ひろむ", "上野"],
@@ -87,7 +87,6 @@ const SHIFTS = [
   ["2026-11-12", "17:00", "22:00", "ゆうと", "恵比寿"],
   ["2026-11-12", "10:00", "13:00", "りょう", "新宿"],
   ["2026-11-12", "16:00", "21:30", "りょう", "新宿"],
-  ["2026-11-12", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-12", "16:00", "22:00", "たけはる", "桜木町"],
   ["2026-11-13", "10:00", "14:00", "ひろむ", "上野"],
   ["2026-11-13", "17:00", "22:00", "ひろむ", "上野"],
@@ -159,7 +158,6 @@ const SHIFTS = [
   ["2026-11-25", "17:00", "22:00", "ひろむ", "上野"],
   ["2026-11-25", "09:00", "13:00", "りょう", "新宿"],
   ["2026-11-25", "16:00", "21:30", "りょう", "新宿"],
-  ["2026-11-25", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-11-25", "16:00", "22:00", "たけはる", "桜木町"],
   ["2026-11-26", "09:00", "14:00", "ひろむ", "上野"],
   ["2026-11-26", "17:00", "22:00", "ひろむ", "上野"],
@@ -404,6 +402,17 @@ function validate(rows) {
   for (const day of [8, 18, 19]) {
     if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "たけはる")) errors.push(`たけはるの必須休です: ${ymd(day)}`);
   }
+  const takeharuEveningOnly = [];
+  for (let day = 1; day <= 30; day++) {
+    const date = ymd(day);
+    const segs = rows.filter((r) => r.shift_date === date && r.trainer_name === "たけはる");
+    if (segs.length && segs.every((r) => mins(r.start_local) >= 16 * 60)) takeharuEveningOnly.push(day);
+  }
+  for (let i = 1; i < takeharuEveningOnly.length; i++) {
+    if (takeharuEveningOnly[i] - takeharuEveningOnly[i - 1] === 1) {
+      errors.push(`たけはるの16時開始が連続しています: ${ymd(takeharuEveningOnly[i - 1])} ${ymd(takeharuEveningOnly[i])}`);
+    }
+  }
   if (rows.some((r) => r.shift_date === ymd(11) && r.trainer_name === "ひろむ")) errors.push("ひろむの11日が休みではありません");
   for (const day of [2, 8, 24, 30]) {
     if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "りょう")) errors.push(`りょうの希望休です: ${ymd(day)}`);
@@ -466,7 +475,9 @@ async function main() {
   if ((slots.per["恵比寿"] ?? 0) > 172) throw new Error(`恵比寿が172枠を超えています: ${slots.per["恵比寿"]}`);
   if (pay.total !== EXPECT_PAY_YEN) throw new Error(`人件費見積がずれています: ${pay.total}`);
   if (pay.total > LABOR_CAP_YEN) throw new Error(`人件費が35%を超えています: ${pay.total}`);
-  if (pay.trainers["たけはる"].hours < 171) throw new Error(`たけはるが171時間未満です: ${pay.trainers["たけはる"].hours}`);
+  if (pay.trainers["たけはる"].hours < 171 || pay.trainers["たけはる"].hours > 176) {
+    throw new Error(`たけはるが171時間以上176時間以下ではありません: ${pay.trainers["たけはる"].hours}`);
+  }
   if (pay.trainers["ゆうと"].hours !== 144) throw new Error(`ゆうとが144時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 321_750) throw new Error(`りょうの人件費が321750ではありません: ${pay.money["りょう"]}`);
 
