@@ -18,7 +18,7 @@ const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
 const EXPECT_SLOTS = 1520;
-const EXPECT_PAY_YEN = 1_335_198;
+const EXPECT_PAY_YEN = 1_334_298;
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
 const TRAINING_CLOSED = [
@@ -43,7 +43,7 @@ const SHIFTS = [
   ["2026-11-02", "10:00", "18:00", "たけはる", "桜木町"],
   ["2026-11-03", "10:00", "19:00", "せいや", "上野"],
   ["2026-11-03", "10:00", "16:00", "ゆうと", "恵比寿"],
-  ["2026-11-03", "10:00", "18:00", "りょう", "新宿"],
+  ["2026-11-03", "10:00", "18:00", "りょう", "桜木町"],
   ["2026-11-04", "09:00", "14:00", "ひろむ", "上野"],
   ["2026-11-04", "17:00", "22:00", "ひろむ", "上野"],
   ["2026-11-04", "10:00", "13:00", "りょう", "新宿"],
@@ -370,7 +370,7 @@ function validate(rows) {
       if (late) errors.push(`桜木町の月曜の夜が開いています: ${date}`);
     }
     if (dow === 2 || dow === 5) {
-      // 11/3 は祝日でたけはる休み、桜木町は店休。11/20 は2人目を新宿へ移した。11/17 はたけはる1人（朝あり）。11/24 はりょうの希望休。11/10 は14:00開始のたけはると16:00–21:30のりょう。
+      // 11/3 は祝日。たけはる休み、りょうは10:00–18:00で21時まで届かない。11/20 は2人目を新宿へ移した。11/17 はたけはる1人（朝あり）。11/24 はりょうの希望休。11/10 は14:00開始のたけはると16:00–21:30のりょう。
       if (![3, 17, 20, 24].includes(day)) {
         for (const [a, b] of [[16 * 60, 21 * 60]]) {
           const names = new Set(
@@ -386,8 +386,8 @@ function validate(rows) {
           .filter((r) => r.shift_date === date && r.store_name === "桜木町" && mins(r.start_local) <= 11 * 60 && mins(r.end_local) >= 13 * 60)
           .map((r) => r.trainer_name),
       );
-      // 11/3 は祝日でたけはる休み。11/20 は朝なし。11/10 は14:00開始で朝なし。
-      const expectMid = [3, 10, 20].includes(day) ? 0 : 1;
+      // 11/3 は祝日でりょう1人（10:00–18:00）。11/20 は朝なし。11/10 は14:00開始で朝なし。
+      const expectMid = [10, 20].includes(day) ? 0 : 1;
       if (mid.size !== expectMid) errors.push(`桜木町の11–13時が1人ではありません: ${date}`);
     }
   }
@@ -472,7 +472,7 @@ async function main() {
     throw new Error(`たけはるが174時間ではありません: ${pay.trainers["たけはる"].hours}`);
   }
   if (pay.trainers["ゆうと"].hours !== 146) throw new Error(`ゆうとが146時間ではありません: ${pay.trainers["ゆうと"].hours}`);
-  if (pay.money["りょう"] !== 335_700) throw new Error(`りょうの人件費が335700ではありません: ${pay.money["りょう"]}`);
+  if (pay.money["りょう"] !== 334_800) throw new Error(`りょうの人件費が334800ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
     month: MONTH,
