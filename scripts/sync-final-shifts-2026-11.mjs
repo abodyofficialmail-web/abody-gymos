@@ -17,8 +17,18 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1560;
+const EXPECT_SLOTS = 1528;
 const EXPECT_PAY_YEN = 1_334_298;
+
+/** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
+const TRAINING_CLOSED = [
+  ["2026-11-02", "新宿"],
+  ["2026-11-02", "桜木町"],
+];
+
+function isTrainingClosed(date, store) {
+  return TRAINING_CLOSED.some(([d, s]) => d === date && s === store);
+}
 
 /** [date, start, end, trainer, store] 分割は別行 */
 const SHIFTS = [
@@ -29,9 +39,8 @@ const SHIFTS = [
   ["2026-11-02", "16:00", "22:00", "ひろむ", "上野"],
   ["2026-11-02", "10:00", "14:00", "せいや", "上野"],
   ["2026-11-02", "17:00", "22:00", "せいや", "上野"],
-  ["2026-11-02", "09:00", "13:00", "ゆうと", "新宿"],
-  ["2026-11-02", "16:00", "22:00", "ゆうと", "新宿"],
-  ["2026-11-02", "16:00", "22:00", "たけはる", "桜木町"],
+  ["2026-11-02", "10:00", "18:00", "ゆうと", "新宿"],
+  ["2026-11-02", "10:00", "18:00", "たけはる", "桜木町"],
   ["2026-11-03", "10:00", "19:00", "せいや", "上野"],
   ["2026-11-03", "10:00", "16:00", "ゆうと", "恵比寿"],
   ["2026-11-03", "09:00", "17:00", "たけはる", "桜木町"],
@@ -194,6 +203,7 @@ function rowsFromShifts() {
     trainer_name,
     store_name,
     break_minutes: store_name === "上野" && mins(start) <= 20 * 60 && mins(end) >= 21 * 60 ? 60 : 0,
+    training: isTrainingClosed(shift_date, store_name),
   }));
 }
 
@@ -213,6 +223,7 @@ function countSlots(rows) {
       if (store === "上野" && t >= 20 * 60 && t < 21 * 60) continue;
       let cap = 0;
       for (const r of dayRows) {
+        if (r.training) continue;
         const s = mins(r.start_local);
         const e = mins(r.end_local);
         if (s <= t && t + 30 <= e) cap += 1;
@@ -308,7 +319,7 @@ function validate(rows) {
     if (!namesByDate.has(r.shift_date)) namesByDate.set(r.shift_date, new Set());
     namesByDate.get(r.shift_date).add(r.trainer_name);
     const sakuraBreakClosed = ![1, 3, 7, 8, 14, 15, 21, 22, 23, 28, 29].includes(Number(r.shift_date.slice(-2)));
-    if (sakuraBreakClosed && r.store_name === "桜木町" && mins(r.start_local) < 15 * 60 + 30 && mins(r.end_local) > 14 * 60 + 30) {
+    if (!r.training && sakuraBreakClosed && r.store_name === "桜木町" && mins(r.start_local) < 15 * 60 + 30 && mins(r.end_local) > 14 * 60 + 30) {
       errors.push(`桜木町の14:30–15:30が開いています: ${r.shift_date}`);
     }
   }
@@ -334,7 +345,7 @@ function validate(rows) {
   for (let day = 1; day <= 30; day++) {
     const date = ymd(day);
     const dow = weekday(date);
-    if (dow === 0 || dow === 6 || [3, 23, 25].includes(day)) continue;
+    if (dow === 0 || dow === 6 || [2, 3, 23, 25].includes(day)) continue;
     const night = rows.some(
       (r) => r.shift_date === date && r.store_name === "新宿" && mins(r.start_local) <= 16 * 60 && mins(r.end_local) >= 21 * 60 + 30,
     );
@@ -418,7 +429,8 @@ function calendar(rows) {
   const by = new Map();
   for (const r of rows) {
     if (!by.has(r.shift_date)) by.set(r.shift_date, []);
-    by.get(r.shift_date).push(`${r.store_name} ${r.trainer_name} ${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}`);
+    const tag = r.training ? "（ピラティス研修・店休）" : "";
+    by.get(r.shift_date).push(`${r.store_name} ${r.trainer_name} ${r.start_local.slice(0, 5)}-${r.end_local.slice(0, 5)}${tag}`);
   }
   const lines = [];
   for (let day = 1; day <= 30; day++) {
@@ -457,10 +469,10 @@ async function main() {
   if ((slots.per["恵比寿"] ?? 0) > 172) throw new Error(`恵比寿が172枠を超えています: ${slots.per["恵比寿"]}`);
   if (pay.total !== EXPECT_PAY_YEN) throw new Error(`人件費見積がずれています: ${pay.total}`);
   if (pay.total > LABOR_CAP_YEN) throw new Error(`人件費が35%を超えています: ${pay.total}`);
-  if (pay.trainers["たけはる"].hours < 171 || pay.trainers["たけはる"].hours > 176) {
-    throw new Error(`たけはるが171時間以上176時間以下ではありません: ${pay.trainers["たけはる"].hours}`);
+  if (pay.trainers["たけはる"].hours !== 178) {
+    throw new Error(`たけはるが178時間ではありません: ${pay.trainers["たけはる"].hours}`);
   }
-  if (pay.trainers["ゆうと"].hours !== 148) throw new Error(`ゆうとが148時間ではありません: ${pay.trainers["ゆうと"].hours}`);
+  if (pay.trainers["ゆうと"].hours !== 146) throw new Error(`ゆうとが146時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 334_800) throw new Error(`りょうの人件費が334800ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
@@ -566,11 +578,38 @@ async function main() {
     if (error) throw error;
   }
 
+  const trainingRows = rows.filter((r) => r.training);
+  const trainingStoreIds = [...new Set(trainingRows.map((r) => storeIdByName.get(r.store_name)))];
+  const trainingDates = [...new Set(trainingRows.map((r) => r.shift_date))];
+  if (trainingRows.length) {
+    const { error: deleteEventsError } = await supabase
+      .from("trainer_events")
+      .delete()
+      .in("store_id", trainingStoreIds)
+      .in("event_date", trainingDates)
+      .eq("title", "ピラティス研修");
+    if (deleteEventsError) throw deleteEventsError;
+    const { error: insertEventsError } = await supabase.from("trainer_events").insert(
+      trainingRows.map((r) => ({
+        trainer_id: trainerIdByName.get(r.trainer_name),
+        store_id: storeIdByName.get(r.store_name),
+        event_date: r.shift_date,
+        start_local: r.start_local,
+        end_local: r.end_local,
+        title: "ピラティス研修",
+        notes: "店舗は休み。勤務は10:00–18:00として登録。",
+        block_booking: true,
+      })),
+    );
+    if (insertEventsError) throw insertEventsError;
+  }
+
   console.log(JSON.stringify({
     applied: true,
     deleted: ids.length,
     inserted: inserted.length,
     uenoBreaks: breakRows.length,
+    trainingEvents: trainingRows.length,
     novemberReservations: reservations.count,
   }, null, 2));
 }
