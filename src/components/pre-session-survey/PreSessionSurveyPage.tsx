@@ -4,6 +4,10 @@ import Script from "next/script";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   PRE_SESSION_ACCENT_COLOR,
+  PRE_SESSION_FOCUS_OPTIONS,
+  PRE_SESSION_FORMAT_OPTIONS,
+  type PreSessionFocusId,
+  type PreSessionFormatId,
   type PreSessionIntensityId,
   type PreSessionMealId,
 } from "@/lib/preSessionSurvey";
@@ -19,6 +23,8 @@ type SurveyPayload = {
   };
   meal_options: Array<{ id: PreSessionMealId; label: string }>;
   intensity_options: Array<{ id: PreSessionIntensityId; label: string }>;
+  format_options?: Array<{ id: PreSessionFormatId; label: string }>;
+  focus_options?: Array<{ id: PreSessionFocusId; label: string }>;
   submit: { s: string; sig: string };
 };
 
@@ -42,7 +48,8 @@ export default function PreSessionSurveyPage() {
   const [conditionScore, setConditionScore] = useState<number | null>(null);
   const [mealStatus, setMealStatus] = useState<PreSessionMealId | null>(null);
   const [intensity, setIntensity] = useState<PreSessionIntensityId | null>(null);
-  const [requestFocus, setRequestFocus] = useState("");
+  const [sessionFormat, setSessionFormat] = useState<PreSessionFormatId | null>(null);
+  const [focusParts, setFocusParts] = useState<PreSessionFocusId[]>([]);
   const [concern, setConcern] = useState("");
   const [freeComment, setFreeComment] = useState("");
 
@@ -91,7 +98,8 @@ export default function PreSessionSurveyPage() {
           condition_score: conditionScore,
           meal_status: mealStatus,
           intensity_preference: intensity,
-          request_focus: requestFocus.trim() || undefined,
+          session_format: sessionFormat,
+          focus_parts: focusParts,
           concern: concern.trim() || undefined,
           free_comment: freeComment.trim() || undefined,
         }),
@@ -230,16 +238,59 @@ export default function PreSessionSurveyPage() {
           </div>
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-bold text-slate-900">
+            今日の希望
+            <span className="ml-2 text-xs font-normal text-slate-500">任意</span>
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">トレーニング・ストレッチのどちらを希望するか選んでください。未選択でも送信できます。</p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {(payload?.format_options?.length ? payload.format_options : PRE_SESSION_FORMAT_OPTIONS).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setSessionFormat((current) => (current === opt.id ? null : opt.id))}
+                className={`rounded-xl border px-2 py-3 text-sm font-bold transition ${
+                  sessionFormat === opt.id
+                    ? "border-blue-600 bg-blue-600 text-white shadow-md"
+                    : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-300"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
           <div>
-            <label className="text-sm font-bold text-slate-900">今日重点的にやりたい部位・種目</label>
-            <textarea
-              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-              rows={2}
-              value={requestFocus}
-              onChange={(e) => setRequestFocus(e.target.value)}
-              placeholder="任意"
-            />
+            <div className="text-sm font-bold text-slate-900">
+              希望部位
+              <span className="ml-2 text-xs font-normal text-slate-500">任意・複数可</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(payload?.focus_options?.length ? payload.focus_options : PRE_SESSION_FOCUS_OPTIONS).map((opt) => {
+                const active = focusParts.includes(opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() =>
+                      setFocusParts((current) =>
+                        current.includes(opt.id) ? current.filter((id) => id !== opt.id) : [...current, opt.id]
+                      )
+                    }
+                    className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                      active
+                        ? "border-blue-600 bg-blue-600 text-white shadow-md"
+                        : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-300"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div>
             <label className="text-sm font-bold text-slate-900">痛み・違和感・避けたいこと</label>

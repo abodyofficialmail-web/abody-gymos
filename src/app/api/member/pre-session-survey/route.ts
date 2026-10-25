@@ -2,11 +2,18 @@ import { z } from "zod";
 import { DateTime } from "luxon";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import {
+  PRE_SESSION_FOCUS_OPTIONS,
+  PRE_SESSION_FORMAT_OPTIONS,
   PRE_SESSION_INTENSITY_OPTIONS,
   PRE_SESSION_MEAL_OPTIONS,
+  formatPreSessionFocusParts,
+  type PreSessionFocusId,
+  type PreSessionFormatId,
   type PreSessionIntensityId,
   type PreSessionMealId,
 } from "@/lib/preSessionSurvey";
+import { isMissingSessionFormatColumn } from "@/lib/preSessionSurveyForKarte";
+import { encodeRequestFocus } from "@/lib/preSessionSurveyDisplay";
 import { verifyPreSessionSurveySigned } from "@/lib/preSessionSurveySigned";
 
 const TZ = "Asia/Tokyo";
@@ -20,6 +27,8 @@ function json(body: unknown, status = 200) {
 
 const mealIds = PRE_SESSION_MEAL_OPTIONS.map((m) => m.id);
 const intensityIds = PRE_SESSION_INTENSITY_OPTIONS.map((i) => i.id);
+const formatIds = PRE_SESSION_FORMAT_OPTIONS.map((f) => f.id);
+const focusIds = PRE_SESSION_FOCUS_OPTIONS.map((f) => f.id);
 
 const postSchema = z.object({
   s: z.string(),
@@ -27,6 +36,8 @@ const postSchema = z.object({
   condition_score: z.number().int().min(1).max(5),
   meal_status: z.enum(mealIds as [PreSessionMealId, ...PreSessionMealId[]]),
   intensity_preference: z.enum(intensityIds as [PreSessionIntensityId, ...PreSessionIntensityId[]]),
+  session_format: z.enum(formatIds as [PreSessionFormatId, ...PreSessionFormatId[]]).nullable().optional(),
+  focus_parts: z.array(z.enum(focusIds as [PreSessionFocusId, ...PreSessionFocusId[]])).max(8).optional(),
   request_focus: z.string().max(2000).optional(),
   concern: z.string().max(2000).optional(),
   free_comment: z.string().max(4000).optional(),
@@ -117,6 +128,8 @@ export async function GET(req: Request) {
       },
       meal_options: PRE_SESSION_MEAL_OPTIONS,
       intensity_options: PRE_SESSION_INTENSITY_OPTIONS,
+      format_options: PRE_SESSION_FORMAT_OPTIONS,
+      focus_options: PRE_SESSION_FOCUS_OPTIONS,
       submit: { s, sig },
     });
   } catch (e) {
@@ -145,12 +158,24 @@ export async function POST(req: Request) {
       condition_score: parsed.data.condition_score,
       meal_status: parsed.data.meal_status,
       intensity_preference: parsed.data.intensity_preference,
-      request_focus: parsed.data.request_focus?.trim() || null,
+      session_format: parsed.data.session_format ?? null,
+      request_focus:
+        parsed.data.focus_parts !== undefined
+          ? formatPreSessionFocusParts(parsed.data.focus_parts)
+          : parsed.data.request_focus?.trim() || null,
       concern: parsed.data.concern?.trim() || null,
       free_comment: parsed.data.free_comment?.trim() || null,
     };
 
-    const { error: insErr } = await supabase.from("pre_session_survey_responses").insert(row);
+    let { error: insErr } = await supabase.from("pre_session_survey_responses").insert(row);
+    if (insErr && isMissingSessionFormatColumn(insErr)) {
+      const { session_format: format, ...legacyRow } = row;
+      const retry = await supabase.from("pre_session_survey_responses").insert({
+        ...legacyRow,
+        request_focus: encodeRequestFocus(format, legacyRow.request_focus),
+      });
+      insErr = retry.error;
+    }
     if (insErr) {
       if (isTableMissing(insErr)) {
         return json({ error: "ヒアリングの保存準備ができていません。しばらくしてからお試しください。" }, 503);

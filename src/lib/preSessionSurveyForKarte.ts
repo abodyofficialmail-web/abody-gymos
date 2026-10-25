@@ -1,7 +1,11 @@
 import { DateTime } from "luxon";
 import { currentSurveyMonthKey, isIsoInSurveyMonth } from "@/lib/surveyMonth";
 import { calcSurveyResponseRate } from "@/lib/surveyRateDisplay";
-import type { PreSessionSurveyForKarte } from "@/lib/preSessionSurveyDisplay";
+import {
+  resolvePreSessionHearing,
+  type PreSessionSurveyForKarte,
+  type ReservationPreSessionHearing,
+} from "./preSessionSurveyDisplay";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const TZ = "Asia/Tokyo";
@@ -29,6 +33,7 @@ type ResponseRow = {
   condition_score: number;
   meal_status: string;
   intensity_preference: string;
+  session_format?: string | null;
   request_focus: string | null;
   concern: string | null;
   free_comment: string | null;
@@ -62,6 +67,11 @@ function isTableMissing(error: { code?: string; message?: string } | null): bool
   return msg.includes("pre_session_survey") || error?.code === "PGRST205";
 }
 
+export function isMissingSessionFormatColumn(error: { code?: string; message?: string } | null): boolean {
+  const msg = String(error?.message ?? "");
+  return /session_format/i.test(msg) && /does not exist|schema cache|Could not find|column/i.test(msg);
+}
+
 function emptyMemberPreSessionSurveyData(): MemberPreSessionSurveyData {
   return {
     pre_session_by_date: {},
@@ -77,38 +87,46 @@ export async function fetchPreSessionSurveysForMember(
 ): Promise<MemberPreSessionSurveyData> {
   const inviteThreshold = DateTime.now().setZone(TZ).plus({ minutes: INVITE_LEAD_MINUTES }).toISO()!;
 
-  const [responsesResult, reservationsResult] = await Promise.all([
-    supabase
-      .from("pre_session_survey_responses")
-      .select(
-        `
+  const responseSelect = `
         id,
         reservation_id,
         session_start_at,
         condition_score,
         meal_status,
         intensity_preference,
+        session_format,
         request_focus,
         concern,
         free_comment,
         created_at,
         trainers ( display_name ),
         stores ( name )
-      `
-      )
+      `;
+  const responseSelectLegacy = responseSelect.replace(/\n\s*session_format,/, "");
+
+  const loadResponses = (select: string) =>
+    supabase
+      .from("pre_session_survey_responses")
+      .select(select)
       .eq("member_id", memberId)
       .order("session_start_at", { ascending: false })
       .order("created_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("reservations")
-      .select("id, start_at")
-      .eq("member_id", memberId)
-      .eq("status", "confirmed")
-      .lte("start_at", inviteThreshold),
-  ]);
+      .limit(100);
 
-  const { data, error } = responsesResult;
+  let responsesQuery = await loadResponses(responseSelect);
+  if (responsesQuery.error && isMissingSessionFormatColumn(responsesQuery.error)) {
+    responsesQuery = await loadResponses(responseSelectLegacy);
+  }
+
+  const reservationsResult = await supabase
+    .from("reservations")
+    .select("id, start_at")
+    .eq("member_id", memberId)
+    .eq("status", "confirmed")
+    .lte("start_at", inviteThreshold);
+
+  const { data, error } = responsesQuery;
+  const responseRows = (data ?? []) as unknown as ResponseRow[];
   if (error) {
     if (isTableMissing(error)) {
       return emptyMemberPreSessionSurveyData();
@@ -131,7 +149,7 @@ export async function fetchPreSessionSurveysForMember(
   }
 
   const pre_session_by_date: Record<string, PreSessionSurveyForKarte> = {};
-  for (const row of (data ?? []) as unknown as ResponseRow[]) {
+  for (const row of responseRows) {
     invitedReservationIds.add(row.reservation_id);
     const date = sessionDateFromStartAt(row.session_start_at);
     if (date) pre_session_invite_by_date[date] = true;
@@ -150,14 +168,14 @@ export async function fetchPreSessionSurveysForMember(
     if (!isIsoInSurveyMonth(reservation.start_at, statsMonth)) continue;
     monthlyInvitedIds.add(reservation.id);
   }
-  for (const row of (data ?? []) as unknown as ResponseRow[]) {
+  for (const row of responseRows) {
     if (!isIsoInSurveyMonth(row.session_start_at, statsMonth)) continue;
     monthlyInvitedIds.add(row.reservation_id);
   }
 
   const invite_count = monthlyInvitedIds.size;
-  const response_count = (data ?? []).filter((row) =>
-    isIsoInSurveyMonth((row as ResponseRow).session_start_at, statsMonth)
+  const response_count = responseRows.filter((row) =>
+    isIsoInSurveyMonth(row.session_start_at, statsMonth)
   ).length;
   const response_rate = calcSurveyResponseRate(invite_count, response_count);
 
@@ -170,6 +188,7 @@ export async function fetchPreSessionSurveysForMember(
 }
 
 function mapRow(row: ResponseRow, session_date: string): PreSessionSurveyForKarte {
+  const hearing = resolvePreSessionHearing(row);
   return {
     id: row.id,
     reservation_id: row.reservation_id,
@@ -178,11 +197,64 @@ function mapRow(row: ResponseRow, session_date: string): PreSessionSurveyForKart
     condition_score: row.condition_score,
     meal_status: row.meal_status,
     intensity_preference: row.intensity_preference,
-    request_focus: row.request_focus,
+    session_format: hearing.session_format,
+    request_focus: hearing.request_focus,
     concern: row.concern,
     free_comment: row.free_comment,
     trainer_name: pickName(row.trainers, "display_name"),
     store_name: pickName(row.stores, "name"),
     created_at: row.created_at,
   };
+}
+
+/** 予約一覧カード用。列未適用や取得失敗でも予約一覧自体は落とさない */
+export async function fetchPreSessionHearingByReservationIds(
+  supabase: SupabaseClient,
+  reservationIds: string[]
+): Promise<Map<string, ReservationPreSessionHearing>> {
+  const map = new Map<string, ReservationPreSessionHearing>();
+  const ids = Array.from(new Set(reservationIds.filter(Boolean)));
+  if (ids.length === 0) return map;
+
+  const chunkSize = 150;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const full = await supabase
+      .from("pre_session_survey_responses")
+      .select("reservation_id, request_focus, session_format")
+      .in("reservation_id", chunk);
+
+    if (full.error && isMissingSessionFormatColumn(full.error)) {
+      const legacy = await supabase
+        .from("pre_session_survey_responses")
+        .select("reservation_id, request_focus")
+        .in("reservation_id", chunk);
+      if (legacy.error) {
+        if (!isTableMissing(legacy.error)) {
+          console.error("pre session hearing for reservations failed", legacy.error);
+        }
+        return map;
+      }
+      for (const row of legacy.data ?? []) {
+        const hearing = resolvePreSessionHearing({ request_focus: row.request_focus });
+        if (!hearing.session_format && !hearing.request_focus) continue;
+        map.set(row.reservation_id, hearing);
+      }
+      continue;
+    }
+
+    if (full.error) {
+      if (!isTableMissing(full.error)) {
+        console.error("pre session hearing for reservations failed", full.error);
+      }
+      return map;
+    }
+
+    for (const row of full.data ?? []) {
+      const hearing = resolvePreSessionHearing(row);
+      if (!hearing.session_format && !hearing.request_focus) continue;
+      map.set(row.reservation_id, hearing);
+    }
+  }
+  return map;
 }

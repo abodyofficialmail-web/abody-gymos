@@ -7,6 +7,7 @@ import {
   lowBookingMotivationBadgeClass,
   lowBookingMotivationBadgeLabel,
 } from "@/lib/lowBookingMotivation";
+import { formatPreSessionFormatBadge, type ReservationPreSessionHearing } from "@/lib/preSessionSurveyDisplay";
 
 const TZ = "Asia/Tokyo";
 
@@ -48,6 +49,7 @@ type ReservationRow = {
   end_at: string;
   status: string;
   created_at: string;
+  pre_session?: ReservationPreSessionHearing | null;
 };
 
 /** 予約一覧に混ぜて表示するシフト休憩（APIと同一ソース） */
@@ -1145,6 +1147,11 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                             {lowBookingMotivationBadgeLabel(monthBookingByMember.get(r.member_id) ?? 0)}
                           </span>
                         ) : null}
+                        {formatPreSessionFormatBadge(r.pre_session?.session_format) ? (
+                          <span className="ml-2 rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-950">
+                            {formatPreSessionFormatBadge(r.pre_session?.session_format)}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
                         トレーナー: {trainerText} / 店舗: {r.store_name || r.store_id}
@@ -1159,6 +1166,11 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                           <>体験: {String(r.guest_name ?? "").trim() || "（名前なし）"}</>
                         )}
                       </div>
+                      {r.pre_session?.request_focus?.trim() ? (
+                        <div className="mt-1 text-xs font-semibold text-slate-800">
+                          希望部位: {r.pre_session.request_focus.trim()}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
