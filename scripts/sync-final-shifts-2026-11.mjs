@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1530;
+const EXPECT_SLOTS = 1520;
 const EXPECT_PAY_YEN = 1_332_798;
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
@@ -77,7 +77,6 @@ const SHIFTS = [
   ["2026-11-10", "14:00", "14:30", "たけはる", "桜木町"],
   ["2026-11-10", "15:30", "22:00", "たけはる", "桜木町"],
   ["2026-11-10", "16:00", "21:30", "りょう", "桜木町"],
-  ["2026-11-11", "17:00", "22:00", "ゆうと", "恵比寿"],
   ["2026-11-11", "10:00", "13:00", "りょう", "新宿"],
   ["2026-11-11", "16:00", "21:30", "りょう", "新宿"],
   ["2026-11-11", "09:00", "13:00", "たけはる", "桜木町"],
@@ -413,14 +412,14 @@ function validate(rows) {
   for (const day of [4, 5]) {
     if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの勤務不可です: ${ymd(day)}`);
   }
-  for (const day of [14, 21, 28, 18, 25]) {
+  for (const day of [11, 14, 21, 28, 18, 25]) {
     if (rows.some((r) => r.shift_date === ymd(day) && r.trainer_name === "ゆうと")) errors.push(`ゆうとの休みです: ${ymd(day)}`);
   }
   if (rows.some((r) => r.shift_date === ymd(6) && r.trainer_name === "ゆうと" && mins(r.start_local) !== 14 * 60)) {
     errors.push("ゆうとの11/6は14:00開始ではありません");
   }
   const yutoDays = new Set(rows.filter((r) => r.trainer_name === "ゆうと").map((r) => r.shift_date));
-  if (yutoDays.size !== 23) errors.push(`ゆうとの出勤日数が23ではありません: ${yutoDays.size}`);
+  if (yutoDays.size !== 22) errors.push(`ゆうとの出勤日数が22ではありません: ${yutoDays.size}`);
   if (errors.length) throw new Error(errors.join("\n"));
 }
 
@@ -472,7 +471,7 @@ async function main() {
   if (pay.trainers["たけはる"].hours !== 174) {
     throw new Error(`たけはるが174時間ではありません: ${pay.trainers["たけはる"].hours}`);
   }
-  if (pay.trainers["ゆうと"].hours !== 151) throw new Error(`ゆうとが151時間ではありません: ${pay.trainers["ゆうと"].hours}`);
+  if (pay.trainers["ゆうと"].hours !== 146) throw new Error(`ゆうとが146時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 334_800) throw new Error(`りょうの人件費が334800ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
