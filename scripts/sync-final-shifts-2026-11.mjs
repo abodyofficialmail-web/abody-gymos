@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1516;
+const EXPECT_SLOTS = 1512;
 const EXPECT_PAY_YEN = 1_325_298;
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
@@ -193,16 +193,38 @@ function weekday(date) {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 
+function breakCovers(start, end, breakStart, breakEnd) {
+  return mins(start) <= mins(breakStart) && mins(end) >= mins(breakEnd);
+}
+
+/** ひろむは勤務の中だけ。中抜けの空きには置かない。上野の他の人は20:00–21:00。 */
+function breaksForShift(trainerName, storeName, start, end) {
+  if (trainerName === "ひろむ") {
+    const breaks = [];
+    if (breakCovers(start, end, "12:30", "13:00")) breaks.push({ start: "12:30:00", end: "13:00:00" });
+    if (breakCovers(start, end, "20:00", "20:30")) breaks.push({ start: "20:00:00", end: "20:30:00" });
+    return breaks;
+  }
+  if (storeName === "上野" && mins(start) <= 20 * 60 && mins(end) >= 21 * 60) {
+    return [{ start: "20:00:00", end: "21:00:00" }];
+  }
+  return [];
+}
+
 function rowsFromShifts() {
-  return SHIFTS.map(([shift_date, start, end, trainer_name, store_name]) => ({
-    shift_date,
-    start_local: `${start}:00`,
-    end_local: `${end}:00`,
-    trainer_name,
-    store_name,
-    break_minutes: store_name === "上野" && mins(start) <= 20 * 60 && mins(end) >= 21 * 60 ? 60 : 0,
-    training: isTrainingClosed(shift_date, store_name),
-  }));
+  return SHIFTS.map(([shift_date, start, end, trainer_name, store_name]) => {
+    const breaks = breaksForShift(trainer_name, store_name, start, end);
+    return {
+      shift_date,
+      start_local: `${start}:00`,
+      end_local: `${end}:00`,
+      trainer_name,
+      store_name,
+      breaks,
+      break_minutes: breaks.reduce((sum, b) => sum + (mins(b.end) - mins(b.start)), 0),
+      training: isTrainingClosed(shift_date, store_name),
+    };
+  });
 }
 
 function countSlots(rows) {
@@ -218,13 +240,13 @@ function countSlots(rows) {
     const store = k.split("|")[0];
     let day = 0;
     for (let t = 9 * 60; t < 22 * 60; t += 30) {
-      if (store === "上野" && t >= 20 * 60 && t < 21 * 60) continue;
       let cap = 0;
       for (const r of dayRows) {
         if (r.training) continue;
         const s = mins(r.start_local);
         const e = mins(r.end_local);
-        if (s <= t && t + 30 <= e) cap += 1;
+        const onBreak = (r.breaks ?? []).some((b) => t < mins(b.end) && t + 30 > mins(b.start));
+        if (s <= t && t + 30 <= e && !onBreak) cap += 1;
       }
       if (SINGLE_BOOTH.has(store)) cap = cap > 0 ? 1 : 0;
       day += cap;
@@ -492,7 +514,7 @@ async function main() {
       りょう: "時給1500+分割ボーナス+新宿往復900円/日",
       ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
       せいや: "時給1400+分割ボーナス+上野交通費880/日",
-      note: "時給・定期・交通費は2026年8月の給与集計。上野20:00–21:00はシフト内だが予約不可。",
+      note: "時給・定期・交通費は2026年8月の給与集計。休憩は予約不可で、給与の時間からは引かない。ひろむは12:30と20:00から各30分。上野の他の人は20:00–21:00。",
     },
     rowCount: rows.length,
     calendar: calendar(rows),
@@ -562,15 +584,25 @@ async function main() {
     const { data, error } = await supabase
       .from("trainer_shifts")
       .insert(payload.slice(i, i + 200))
-      .select("id, store_id, start_local, end_local");
+      .select("id, trainer_id, store_id, shift_date, start_local, end_local");
     if (error) throw error;
     inserted.push(...(data ?? []));
   }
 
-  const uenoId = storeIdByName.get("上野");
-  const breakRows = inserted
-    .filter((r) => r.store_id === uenoId && mins(r.start_local) <= 20 * 60 && mins(r.end_local) >= 21 * 60)
-    .map((r) => ({ shift_id: r.id, start_time: "20:00:00", end_time: "21:00:00" }));
+  const breakRows = [];
+  for (const insertedRow of inserted) {
+    const src = rows.find(
+      (r) =>
+        trainerIdByName.get(r.trainer_name) === insertedRow.trainer_id &&
+        storeIdByName.get(r.store_name) === insertedRow.store_id &&
+        r.shift_date === insertedRow.shift_date &&
+        mins(r.start_local) === mins(insertedRow.start_local) &&
+        mins(r.end_local) === mins(insertedRow.end_local),
+    );
+    for (const b of src?.breaks ?? []) {
+      breakRows.push({ shift_id: insertedRow.id, start_time: b.start, end_time: b.end });
+    }
+  }
   for (let i = 0; i < breakRows.length; i += 200) {
     const { error } = await supabase.from("trainer_shift_breaks").insert(breakRows.slice(i, i + 200));
     if (error) throw error;
