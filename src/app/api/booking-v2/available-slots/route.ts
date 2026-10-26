@@ -18,6 +18,7 @@ import {
   isOctoberEarlyAccessDate,
   memberHasOctoberEarlyAccess,
 } from "@/lib/booking/octoberEarlyAccess";
+import { shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 export async function OPTIONS() {
@@ -285,6 +286,47 @@ export async function GET(request: Request) {
         const seen = new Set(shifts.map((s) => s.id));
         shifts = shifts.concat(drafts.filter((s) => !seen.has(s.id)));
       }
+    }
+    const earlyMemberId = (() => {
+      try {
+        return getMemberIdFromCookie();
+      } catch {
+        return null;
+      }
+    })();
+    if (
+      await shouldIncludeNovemberDrafts({
+        supabase,
+        storeName: storeRow.name,
+        ymdOrMonth: date,
+        memberId: earlyMemberId,
+      })
+    ) {
+      let draftQuery = supabase
+        .from("trainer_shifts")
+        .select("id, trainer_id, store_id, shift_date, start_local, end_local, status, is_break")
+        .eq("store_id", store_id)
+        .eq("shift_date", date)
+        .eq("status", "draft");
+      if (filterTrainerId) draftQuery = draftQuery.eq("trainer_id", filterTrainerId);
+      const { data: draftRows, error: draftErr } = await draftQuery;
+      if (draftErr) {
+        return jsonResponse({ error: "シフトの取得に失敗しました", detail: draftErr.message }, 500);
+      }
+      const drafts = ((draftRows ?? []) as any[])
+        .filter((s) => s.is_break !== true)
+        .map((s) => ({
+          id: String(s.id),
+          trainer_id: String(s.trainer_id),
+          store_id: String(s.store_id),
+          shift_date: String(s.shift_date),
+          start_local: String(s.start_local),
+          end_local: String(s.end_local),
+          status: String(s.status ?? "draft"),
+          is_break: s.is_break ?? null,
+        })) as ShiftRow[];
+      const seen = new Set(shifts.map((s) => s.id));
+      shifts = shifts.concat(drafts.filter((s) => !seen.has(s.id)));
     }
     console.log("shifts found", shifts);
     if (shifts.length === 0) {

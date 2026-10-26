@@ -20,6 +20,7 @@ import { insertReservationChangeLog, requestUserAgent } from "@/lib/reservationC
 import { memberBookingBlockedMessage } from "@/lib/booking/memberBookingRules";
 import { evaluateLoadedMemberBooking, loadMemberBookingRuleContext } from "@/lib/booking/memberBookingRulesDb";
 import { isOctoberEarlyAccessDate, memberHasOctoberEarlyAccess } from "@/lib/booking/octoberEarlyAccess";
+import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -75,8 +76,9 @@ async function fetchShiftsForCapacityCheck(params: {
   store_id: string;
   dateYmd: string;
   includeOctoberDraft?: boolean;
+  includeNovemberDraft?: boolean;
 }): Promise<Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>> {
-  const { supabase, store_id, dateYmd, includeOctoberDraft } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft } = params;
   const dayStartTs = `${dateYmd}T00:00:00`;
   const dayEndTs = `${dateYmd}T23:59:59`;
 
@@ -138,7 +140,7 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
-  if (includeOctoberDraft) {
+  if (includeOctoberDraft || includeNovemberDraft) {
     const draftQ = await (supabase as any)
       .from("trainer_shifts")
       .select("trainer_id, start_local, end_local, is_break, status")
@@ -242,12 +244,27 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         .maybeSingle();
       if (storeErr) return json({ error: "店舗の取得に失敗しました", detail: storeErr.message }, 500);
 
+      const novemberOpen = await novemberBookingOpenForMember({
+        supabase,
+        storeId: cur.store_id,
+        storeName: storeRow?.name,
+        ymd: dateYmd,
+        memberId: cur.member_id,
+      });
+      if (!novemberOpen) return json({ error: "11月のご予約はまだ公開前です" }, 400);
+
       const shifts = await fetchShiftsForCapacityCheck({
         supabase,
         store_id: cur.store_id,
         dateYmd,
         includeOctoberDraft:
           isOctoberEarlyAccessDate(dateYmd) && (await memberHasOctoberEarlyAccess(supabase, cur.member_id)),
+        includeNovemberDraft: await shouldIncludeNovemberDrafts({
+          supabase,
+          storeName: storeRow?.name,
+          ymdOrMonth: dateYmd,
+          memberId: cur.member_id,
+        }),
       });
       const availableTrainerSet = new Set<string>();
       for (const s of shifts) {

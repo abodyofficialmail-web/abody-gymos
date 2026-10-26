@@ -39,6 +39,18 @@
     {
       "path": "/api/cron/october-booking-release",
       "schedule": "0 9 26 9 *"
+    },
+    {
+      "path": "/api/cron/november-booking-release",
+      "schedule": "0 9-15 26,27 10 *"
+    },
+    {
+      "path": "/api/cron/november-booking-release",
+      "schedule": "0 9 28-31 10 *"
+    },
+    {
+      "path": "/api/cron/november-booking-release",
+      "schedule": "0 9 1-3 11 *"
     }
   ]
 }

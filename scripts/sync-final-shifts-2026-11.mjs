@@ -1,8 +1,11 @@
 /**
  * 2026-11 東京4店舗のシフト（恵比寿・上野・新宿・桜木町）
  *
- * 福岡は触らない。カレンダーの確認が終わるまで --apply しない。
- * 反映順: このファイルの確認 → --dry-run → 11月予約0件 → --apply
+ * 福岡は触らない。
+ * 10月27日18:00（日本時間）より前の --apply は status=draft。
+ * 本番の現行画面は下書きを出さないので、公開コードが載る前に11月が全員へ開かない。
+ * 10月27日18:00以降の --apply は status=confirmed。
+ * 下書きを確定へ変えるのは /api/cron/november-booking-release（デプロイ後）。
  *
  *   node scripts/sync-final-shifts-2026-11.mjs
  *   node --env-file=.env.local scripts/sync-final-shifts-2026-11.mjs --dry-run
@@ -19,6 +22,12 @@ const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
 const EXPECT_SLOTS = 1438;
 const EXPECT_PAY_YEN = 1_325_298;
+/** この時刻以降は確定で入れる。前は下書き。 */
+const NOVEMBER_PUBLIC_AT_MS = Date.parse("2026-10-27T18:00:00+09:00");
+
+function shiftStatusForApply(nowMs = Date.now()) {
+  return nowMs >= NOVEMBER_PUBLIC_AT_MS ? "confirmed" : "draft";
+}
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
 const TRAINING_CLOSED = [
@@ -602,9 +611,11 @@ async function main() {
   if (pay.trainers["ゆうと"].hours !== 147) throw new Error(`ゆうとが147時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 330_300) throw new Error(`りょうの人件費が330300ではありません: ${pay.money["りょう"]}`);
 
+  const shiftStatus = shiftStatusForApply();
   const summary = {
     month: MONTH,
     willApply: !dryRun,
+    shiftStatus,
     stores: STORE_NAMES,
     fukuoka: "変更なし",
     slots: slots.total,
@@ -676,7 +687,7 @@ async function main() {
     start_local: r.start_local,
     end_local: r.end_local,
     break_minutes: r.break_minutes,
-    status: "confirmed",
+    status: shiftStatus,
     is_break: false,
   }));
 
@@ -743,6 +754,7 @@ async function main() {
 
   console.log(JSON.stringify({
     applied: true,
+    shiftStatus,
     deleted: ids.length,
     inserted: inserted.length,
     uenoBreaks: breakRows.length,
