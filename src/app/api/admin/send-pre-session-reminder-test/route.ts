@@ -20,6 +20,7 @@ function resolveAppUrl() {
 
 const bodySchema = z.object({
   member_codes: z.array(z.string()).min(1).optional(),
+  reservation_id: z.string().uuid().optional(),
 });
 
 export async function POST(req: Request) {
@@ -36,7 +37,13 @@ export async function POST(req: Request) {
     const results: Array<Record<string, unknown>> = [];
 
     for (const memberCode of memberCodes) {
-      results.push(await sendPreSessionReminderTest(supabase, { memberCode, appUrl }));
+      results.push(
+        await sendPreSessionReminderTest(supabase, {
+          memberCode,
+          appUrl,
+          reservationId: parsed.data.reservation_id,
+        })
+      );
     }
 
     return json({ ok: true, results }, 200);
