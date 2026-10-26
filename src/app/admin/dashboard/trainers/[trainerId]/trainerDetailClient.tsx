@@ -8,21 +8,12 @@ import { computeTrainerDayPayroll, computeTrainerPayrollV2 } from "@/lib/trainer
 
 const TZ = "Asia/Tokyo";
 
-function timeToMinutes(t: string): number {
-  const m = String(t).trim().match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return NaN;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-function calcTotalBreakMinutes(breaks: { start_time: string; end_time: string }[] | null | undefined): number {
-  let sum = 0;
-  for (const b of breaks ?? []) {
-    const a = timeToMinutes(b.start_time);
-    const c = timeToMinutes(b.end_time);
-    if (!Number.isFinite(a) || !Number.isFinite(c) || c <= a) continue;
-    sum += c - a;
-  }
-  return sum;
+function breakClockText(breaks: { start_time: string; end_time: string }[] | null | undefined): string {
+  const parts = (breaks ?? [])
+    .slice()
+    .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
+    .map((b) => `${String(b.start_time).slice(0, 5)}〜${String(b.end_time).slice(0, 5)}`);
+  return parts.length === 0 ? "なし" : parts.join("、");
 }
 
 type ShiftRow = {
@@ -767,7 +758,7 @@ export function TrainerDetailClient({ trainerId }: { trainerId: string }) {
                 {s.shift_date} {s.start_local.slice(0, 5)}〜{s.end_local.slice(0, 5)}
               </div>
               <div className="text-xs text-slate-500">
-                {storeById.get(s.store_id)?.name ?? s.store_id} / 休憩: {calcTotalBreakMinutes(s.breaks)}分
+                {storeById.get(s.store_id)?.name ?? s.store_id} / 休憩: {breakClockText(breaksByShiftId.get(s.id) ?? s.breaks)}
               </div>
               {s.is_break ? <div className="text-xs font-semibold text-amber-800">休憩</div> : null}
             </button>

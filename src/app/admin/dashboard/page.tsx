@@ -10,6 +10,7 @@ type ShiftRow = {
   trainer_name: string;
   start_local: string;
   end_local: string;
+  breaks?: { start_time: string; end_time: string }[];
 };
 
 type StoreOverview = {
@@ -111,6 +112,12 @@ export default function AdminDashboardTopPage() {
                             {" "}
                             {sh.start_local}〜{sh.end_local}
                           </span>
+                          {(sh.breaks ?? []).length > 0 ? (
+                            <span className="text-amber-800">
+                              {" "}
+                              休憩 {(sh.breaks ?? []).map((b) => `${b.start_time}〜${b.end_time}`).join("、")}
+                            </span>
+                          ) : null}
                         </li>
                       ))}
                     </ul>

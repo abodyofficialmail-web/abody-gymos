@@ -17,7 +17,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1512;
+const EXPECT_SLOTS = 1500;
 const EXPECT_PAY_YEN = 1_325_298;
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
@@ -197,6 +197,46 @@ function breakCovers(start, end, breakStart, breakEnd) {
   return mins(start) <= mins(breakStart) && mins(end) >= mins(breakEnd);
 }
 
+function hhmmss(total) {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
+}
+
+function bookableSlotStarts(start, end) {
+  const slots = [];
+  const first = Math.ceil(mins(start) / 30) * 30;
+  for (let t = first; t + 30 <= mins(end); t += 30) slots.push(t);
+  return slots;
+}
+
+/** 予約枠の中央。9枠なら5枠目（前後4枠）。偶数は中央の時刻から始まる枠。 */
+function centerBreak(slots) {
+  if (slots.length === 0) return null;
+  const t = slots[Math.floor(slots.length / 2)];
+  return { start: hhmmss(t), end: hhmmss(t + 30) };
+}
+
+/**
+ * せいや。中抜けの空きには置かない。
+ * 日中から夕方まで続く1本は枠を前後に分け、それぞれ中間に30分。
+ * 夕方からだけの区間は中間に30分が1回。朝だけの区間も中間に1回。
+ */
+function seiyaBreaks(start, end) {
+  const slots = bookableSlotStarts(start, end);
+  if (slots.length === 0) return [];
+  if (mins(start) >= 16 * 60) {
+    const one = centerBreak(slots);
+    return one ? [one] : [];
+  }
+  if (mins(end) > 16 * 60 && slots.length >= 2) {
+    const mid = Math.floor(slots.length / 2);
+    return [centerBreak(slots.slice(0, mid)), centerBreak(slots.slice(mid))].filter(Boolean);
+  }
+  const one = centerBreak(slots);
+  return one ? [one] : [];
+}
+
 /** ひろむは勤務の中だけ。中抜けの空きには置かない。上野の他の人は20:00–21:00。 */
 function breaksForShift(trainerName, storeName, start, end) {
   if (trainerName === "ひろむ") {
@@ -205,6 +245,7 @@ function breaksForShift(trainerName, storeName, start, end) {
     if (breakCovers(start, end, "20:00", "20:30")) breaks.push({ start: "20:00:00", end: "20:30:00" });
     return breaks;
   }
+  if (trainerName === "せいや") return seiyaBreaks(start, end);
   if (storeName === "上野" && mins(start) <= 20 * 60 && mins(end) >= 21 * 60) {
     return [{ start: "20:00:00", end: "21:00:00" }];
   }
@@ -361,6 +402,20 @@ function validate(rows) {
   }
   for (const [date, names] of namesByDate) {
     if (names.has("せいや") && names.has("ひろむ") && ![ymd(2), ymd(10), ymd(14), ymd(16), ymd(24)].includes(date)) errors.push(`せいやとひろむが同日です: ${date}`);
+  }
+  for (const r of rows) {
+    if (r.trainer_name !== "せいや") continue;
+    const startMin = mins(r.start_local);
+    const endMin = mins(r.end_local);
+    const spansDayAndEvening = startMin < 16 * 60 && endMin > 16 * 60;
+    const expected = spansDayAndEvening ? 2 : 1;
+    if ((r.breaks ?? []).length !== expected) {
+      errors.push(`せいやの休憩回数が${expected}ではありません: ${r.shift_date} ${r.start_local} ${(r.breaks ?? []).length}`);
+    }
+    for (const b of r.breaks ?? []) {
+      if (mins(b.end) - mins(b.start) !== 30) errors.push(`せいやの休憩が30分ではありません: ${r.shift_date} ${b.start}`);
+      if (mins(b.start) < startMin || mins(b.end) > endMin) errors.push(`せいやの休憩が勤務の外です: ${r.shift_date} ${b.start}`);
+    }
   }
   const shinjuku = new Map();
   for (const r of rows) {
@@ -530,7 +585,7 @@ async function main() {
       りょう: "時給1500+分割ボーナス+新宿往復900円/日",
       ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
       せいや: "時給1400+分割ボーナス+上野交通費880/日",
-      note: "時給・定期・交通費は2026年8月の給与集計。休憩は予約不可で、給与の時間からは引かない。ひろむは12:30と20:00から各30分。上野の他の人は20:00–21:00。",
+      note: "時給・定期・交通費は2026年8月の給与集計。休憩は予約不可で、給与の時間からは引かない。ひろむは12:30と20:00から各30分。せいやは勤務区間の中間に30分。日中から夕方まで続く1本は前後に1回ずつ。夕方からだけは1回。中抜けには置かない。",
     },
     rowCount: rows.length,
     calendar: calendar(rows),
