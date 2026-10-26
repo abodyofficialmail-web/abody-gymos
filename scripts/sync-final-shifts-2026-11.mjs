@@ -257,6 +257,18 @@ function countSlots(rows) {
   return { total, per };
 }
 
+/** ゆうと・たけはる。その日の登録勤務が7時間以上なら休憩1時間。中抜け1回ごとに1時間を足す。 */
+function accountedDayHours(segs) {
+  const sorted = segs.slice().sort((a, b) => mins(a.start_local) - mins(b.start_local));
+  let raw = 0;
+  let gaps = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    raw += hours(sorted[i].start_local, sorted[i].end_local);
+    if (i + 1 < sorted.length && mins(sorted[i + 1].start_local) > mins(sorted[i].end_local)) gaps += 1;
+  }
+  return raw - (raw >= 7 ? 1 : 0) + gaps;
+}
+
 function estimatePayroll(rows) {
   const by = new Map();
   for (const r of rows) {
@@ -266,15 +278,19 @@ function estimatePayroll(rows) {
   function stats(name) {
     const list = by.get(name) ?? [];
     const days = new Set(list.map((r) => r.shift_date));
-    const totalH = list.reduce((h, r) => h + hours(r.start_local, r.end_local), 0);
     const byDay = new Map();
     for (const r of list) {
       if (!byDay.has(r.shift_date)) byDay.set(r.shift_date, []);
       byDay.get(r.shift_date).push(r);
     }
+    const useAccounted = name === "ゆうと" || name === "たけはる";
+    let totalH = 0;
     let bonusDays = 0;
     for (const segs of byDay.values()) {
       const sorted = segs.slice().sort((a, b) => mins(a.start_local) - mins(b.start_local));
+      totalH += useAccounted
+        ? accountedDayHours(sorted)
+        : sorted.reduce((h, r) => h + hours(r.start_local, r.end_local), 0);
       for (let i = 0; i + 1 < sorted.length; i++) {
         if (mins(sorted[i + 1].start_local) - mins(sorted[i].end_local) >= 180) {
           bonusDays += 1;
@@ -489,10 +505,10 @@ async function main() {
   if ((slots.per["恵比寿"] ?? 0) > 172) throw new Error(`恵比寿が172枠を超えています: ${slots.per["恵比寿"]}`);
   if (pay.total !== EXPECT_PAY_YEN) throw new Error(`人件費見積がずれています: ${pay.total}`);
   if (pay.total > LABOR_CAP_YEN) throw new Error(`人件費が35%を超えています: ${pay.total}`);
-  if (pay.trainers["たけはる"].hours !== 174) {
-    throw new Error(`たけはるが174時間ではありません: ${pay.trainers["たけはる"].hours}`);
+  if (pay.trainers["たけはる"].hours !== 167) {
+    throw new Error(`たけはるが167時間ではありません: ${pay.trainers["たけはる"].hours}`);
   }
-  if (pay.trainers["ゆうと"].hours !== 146) throw new Error(`ゆうとが146時間ではありません: ${pay.trainers["ゆうと"].hours}`);
+  if (pay.trainers["ゆうと"].hours !== 143) throw new Error(`ゆうとが143時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 330_300) throw new Error(`りょうの人件費が330300ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
@@ -509,8 +525,8 @@ async function main() {
     trainers: pay.trainers,
     money: pay.money,
     assumptions: {
-      ゆうと: "固定260000+定期13120",
-      たけはる: "固定260000+定期15388（6ヶ月92330の月割）",
+      ゆうと: "固定260000+定期13120。時間は7時間以上の日に休憩1時間、中抜け1回につき1時間を足す",
+      たけはる: "固定260000+定期15388（6ヶ月92330の月割）。時間は7時間以上の日に休憩1時間、中抜け1回につき1時間を足す",
       りょう: "時給1500+分割ボーナス+新宿往復900円/日",
       ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
       せいや: "時給1400+分割ボーナス+上野交通費880/日",
