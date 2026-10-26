@@ -6,6 +6,7 @@ import {
   novemberBookingPhase,
 } from "@/lib/booking/novemberEarlyAccess";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
+import { applyNovemberTokyoShifts } from "../../../../../scripts/sync-final-shifts-2026-11.mjs";
 
 export const maxDuration = 300;
 
@@ -32,15 +33,19 @@ export async function GET(req: Request) {
     }
 
     const supabase = createSupabaseServiceClient();
+    const shifts = await applyNovemberTokyoShifts(supabase, {
+      nowMs: now.getTime(),
+      allowExistingReservations: true,
+    });
     const tickets = await grantNovemberLowUsageTickets(supabase);
 
     let released = 0;
     if (phase === "public") {
       const { data: stores, error: storeErr } = await supabase.from("stores").select("id,name").in("name", [...TOKYO_NOVEMBER_STORES]);
-      if (storeErr) return jsonResponse({ error: storeErr.message, tickets }, 500);
+      if (storeErr) return jsonResponse({ error: storeErr.message, shifts, tickets }, 500);
       const storeIds = (stores ?? []).map((s) => s.id);
       if (storeIds.length !== TOKYO_NOVEMBER_STORES.length) {
-        return jsonResponse({ error: "store_missing", found: (stores ?? []).map((s) => s.name), tickets }, 500);
+        return jsonResponse({ error: "store_missing", found: (stores ?? []).map((s) => s.name), shifts, tickets }, 500);
       }
       const { data: updated, error: shiftErr } = await supabase
         .from("trainer_shifts")
@@ -51,7 +56,7 @@ export async function GET(req: Request) {
         .eq("status", "draft")
         .or("is_break.is.null,is_break.eq.false")
         .select("id");
-      if (shiftErr) return jsonResponse({ error: shiftErr.message, tickets }, 500);
+      if (shiftErr) return jsonResponse({ error: shiftErr.message, shifts, tickets }, 500);
       released = (updated ?? []).length;
     }
 
@@ -59,6 +64,7 @@ export async function GET(req: Request) {
       ok: tickets.failed.length === 0,
       phase,
       month: NOVEMBER_BOOKING_MONTH,
+      shifts,
       eligible: tickets.eligible,
       granted: tickets.granted,
       skipped: tickets.skipped,

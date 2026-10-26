@@ -1,3 +1,6 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 /**
  * 2026-11 東京4店舗のシフト（恵比寿・上野・新宿・桜木町）
  *
@@ -594,11 +597,7 @@ async function countNovemberReservations(supabase, storeIds, fetchAllChecked) {
   return { count, fetched };
 }
 
-async function main() {
-  const apply = process.argv.includes("--apply");
-  const dryRun = !apply || process.argv.includes("--dry-run");
-  const rows = rowsFromShifts();
-  validate(rows);
+function assertPlan(rows) {
   const slots = countSlots(rows);
   const pay = estimatePayroll(rows);
   if (slots.total !== EXPECT_SLOTS) throw new Error(`公開枠が${EXPECT_SLOTS}ではありません: ${slots.total}`);
@@ -610,42 +609,17 @@ async function main() {
   }
   if (pay.trainers["ゆうと"].hours !== 147) throw new Error(`ゆうとが147時間ではありません: ${pay.trainers["ゆうと"].hours}`);
   if (pay.money["りょう"] !== 330_300) throw new Error(`りょうの人件費が330300ではありません: ${pay.money["りょう"]}`);
+  return { slots, pay };
+}
 
-  const shiftStatus = shiftStatusForApply();
-  const summary = {
-    month: MONTH,
-    willApply: !dryRun,
-    shiftStatus,
-    stores: STORE_NAMES,
-    fukuoka: "変更なし",
-    slots: slots.total,
-    slotsByStore: slots.per,
-    payrollYen: pay.total,
-    payrollPct: pay.pct,
-    payrollCapYen: LABOR_CAP_YEN,
-    revenueYen: REVENUE_YEN,
-    trainers: pay.trainers,
-    money: pay.money,
-    assumptions: {
-      ゆうと: "固定260000+定期13120。中抜けなしの7時間以上は休憩1時間。中抜け3時間は1時間勤務・2時間休憩",
-      たけはる: "固定260000+定期15388（6ヶ月92330の月割）。中抜けなしの7時間以上は休憩1時間。中抜け3時間は1時間勤務・2時間休憩",
-      りょう: "時給1500+分割ボーナス+新宿往復900円/日",
-      ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
-      せいや: "時給1400+分割ボーナス+上野交通費880/日",
-      note: "時給・定期・交通費は2026年8月の給与集計。休憩は予約不可で、給与の時間からは引かない。ひろむは12:30と20:00から各30分。せいやとりょうは勤務区間の中間に30分。日中から夕方まで続く1本は前後に1回ずつ。夕方からだけは1回。中抜けには置かない。",
-    },
-    rowCount: rows.length,
-    calendar: calendar(rows),
-  };
-  console.log(JSON.stringify(summary, null, 2));
-  if (dryRun) return;
-
-  const { createClient } = await import("@supabase/supabase-js");
+/** 本番の cron からも呼ぶ。予約が1件でもあれば書き換えない。 */
+export async function applyNovemberTokyoShifts(supabase, options = {}) {
+  const nowMs = options.nowMs ?? Date.now();
+  const rows = rowsFromShifts();
+  validate(rows);
+  assertPlan(rows);
+  const shiftStatus = shiftStatusForApply(nowMs);
   const { fetchAllChecked } = await import("./lib/supabaseFetchAll.mjs");
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が未設定です。");
-  const supabase = createClient(url, key, { auth: { persistSession: false } });
 
   const storesResult = await fetchAllChecked(supabase, "stores", "id, name", (q) => q.in("name", STORE_NAMES), "stores.tokyo");
   const storeIdByName = new Map(storesResult.rows.map((s) => [s.name, s.id]));
@@ -656,6 +630,9 @@ async function main() {
 
   const reservations = await countNovemberReservations(supabase, storeIds, fetchAllChecked);
   if (reservations.count !== 0) {
+    if (options.allowExistingReservations) {
+      return { applied: false, reason: "reservations_exist", novemberReservations: reservations.count, shiftStatus };
+    }
     throw new Error(`11月の東京4店舗に予約が${reservations.count}件あります。--apply を中止しました。`);
   }
 
@@ -752,18 +729,67 @@ async function main() {
     if (insertEventsError) throw insertEventsError;
   }
 
-  console.log(JSON.stringify({
+  return {
     applied: true,
     shiftStatus,
     deleted: ids.length,
     inserted: inserted.length,
-    uenoBreaks: breakRows.length,
+    breaks: breakRows.length,
     trainingEvents: trainingRows.length,
     novemberReservations: reservations.count,
-  }, null, 2));
+  };
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+async function main() {
+  const apply = process.argv.includes("--apply");
+  const dryRun = !apply || process.argv.includes("--dry-run");
+  const rows = rowsFromShifts();
+  validate(rows);
+  const { slots, pay } = assertPlan(rows);
+
+  const shiftStatus = shiftStatusForApply();
+  const summary = {
+    month: MONTH,
+    willApply: !dryRun,
+    shiftStatus,
+    stores: STORE_NAMES,
+    fukuoka: "変更なし",
+    slots: slots.total,
+    slotsByStore: slots.per,
+    payrollYen: pay.total,
+    payrollPct: pay.pct,
+    payrollCapYen: LABOR_CAP_YEN,
+    revenueYen: REVENUE_YEN,
+    trainers: pay.trainers,
+    money: pay.money,
+    assumptions: {
+      ゆうと: "固定260000+定期13120。中抜けなしの7時間以上は休憩1時間。中抜け3時間は1時間勤務・2時間休憩",
+      たけはる: "固定260000+定期15388（6ヶ月92330の月割）。中抜けなしの7時間以上は休憩1時間。中抜け3時間は1時間勤務・2時間休憩",
+      りょう: "時給1500+分割ボーナス+新宿往復900円/日",
+      ひろむ: "時給1500+分割ボーナス+定期18030。上野交通費0",
+      せいや: "時給1400+分割ボーナス+上野交通費880/日",
+      note: "時給・定期・交通費は2026年8月の給与集計。休憩は予約不可で、給与の時間からは引かない。ひろむは12:30と20:00から各30分。せいやとりょうは勤務区間の中間に30分。日中から夕方まで続く1本は前後に1回ずつ。夕方からだけは1回。中抜けには置かない。",
+    },
+    rowCount: rows.length,
+    calendar: calendar(rows),
+  };
+  console.log(JSON.stringify(summary, null, 2));
+  if (dryRun) return;
+
+  const { createClient } = await import("@supabase/supabase-js");
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が未設定です。");
+  const supabase = createClient(url, key, { auth: { persistSession: false } });
+  const result = await applyNovemberTokyoShifts(supabase);
+  console.log(JSON.stringify(result, null, 2));
+}
+
+const invokedDirectly =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (invokedDirectly) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
