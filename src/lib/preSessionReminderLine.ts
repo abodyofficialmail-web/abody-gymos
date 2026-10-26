@@ -18,16 +18,20 @@ export function buildPreSessionReminderText(params: {
   storeName: string;
   trainerName: string;
   sessionType: string | null;
+  onShiftTrainerNames?: string | null;
 }): string {
   const start = DateTime.fromISO(params.startAtUtcIso).setZone(TZ);
   const formattedDate = start.setLocale("ja").toFormat("M月d日（ccc）");
   const formattedTime = start.toFormat("HH:mm");
   const sessionLabel = params.sessionType === "online" ? "オンライン" : "店舗";
+  const trainerLine = params.onShiftTrainerNames
+    ? `出勤トレーナー：${params.onShiftTrainerNames}`
+    : `担当：${params.trainerName}`;
   return `【ご予約リマインド】
 本日 ${formattedDate} ${formattedTime} からセッション予定です。
 
 店舗：${params.storeName}
-担当：${params.trainerName}
+${trainerLine}
 セッション種別：${sessionLabel}
 
 お気をつけてお越しください！`.trim();
@@ -86,7 +90,7 @@ export async function pushPreSessionReminderMessages(params: {
 
 export async function sendPreSessionReminderTest(
   supabase: SupabaseClient,
-  params: { memberCode: string; appUrl: string }
+  params: { memberCode: string; appUrl: string; reservationId?: string }
 ): Promise<Record<string, unknown>> {
   const memberCode = params.memberCode.trim().toUpperCase();
   const { data: member, error: mErr } = await supabase
@@ -101,23 +105,60 @@ export async function sendPreSessionReminderTest(
   }
 
   const now = DateTime.now().setZone(TZ);
-  const { data: reservation } = await supabase
-    .from("reservations")
-    .select(
-      `
-      id,
-      start_at,
-      session_type,
-      stores ( name ),
-      trainers ( display_name )
-    `
-    )
-    .eq("member_id", member.id)
-    .eq("status", "confirmed")
-    .gte("start_at", now.toISO())
-    .order("start_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const reservationSelect = "id, start_at, session_type, stores(name), trainers(display_name)";
+  type ReservationPick = {
+    id: string;
+    start_at: string;
+    session_type: string | null;
+    stores?: { name?: string } | { name?: string }[] | null;
+    trainers?: { display_name?: string } | { display_name?: string }[] | null;
+  };
+  let lookup = "upcoming";
+  let lookupError: string | null = null;
+  let reservation: ReservationPick | null = null;
+
+  if (params.reservationId) {
+    lookup = "specified";
+    const specified = await supabase
+      .from("reservations")
+      .select(reservationSelect)
+      .eq("id", params.reservationId)
+      .eq("member_id", member.id)
+      .maybeSingle();
+    if (specified.error) lookupError = specified.error.message;
+    reservation = (specified.data as ReservationPick | null) ?? null;
+  }
+
+  if (!reservation?.id) {
+    lookup = "upcoming";
+    const upcoming = await supabase
+      .from("reservations")
+      .select(reservationSelect)
+      .eq("member_id", member.id)
+      .eq("status", "confirmed")
+      .gte("start_at", now.toISO())
+      .order("start_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (upcoming.error) lookupError = upcoming.error.message;
+    reservation = (upcoming.data as ReservationPick | null) ?? null;
+  }
+
+  if (!reservation?.id) {
+    lookup = "recent";
+    const recentStart = now.minus({ hours: 36 }).toUTC().toISO();
+    const recent = await supabase
+      .from("reservations")
+      .select(reservationSelect)
+      .eq("member_id", member.id)
+      .eq("status", "confirmed")
+      .gte("start_at", recentStart)
+      .order("start_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recent.error) lookupError = recent.error.message;
+    reservation = (recent.data as ReservationPick | null) ?? null;
+  }
 
   let reservationId: string;
   let startAt: string;
@@ -128,15 +169,19 @@ export async function sendPreSessionReminderTest(
   if (reservation?.id) {
     reservationId = reservation.id;
     startAt = reservation.start_at;
-    storeName = (reservation as { stores?: { name?: string } }).stores?.name ?? "恵比寿";
-    trainerName = (reservation as { trainers?: { display_name?: string } }).trainers?.display_name ?? "担当トレーナー";
+    const storeRel = Array.isArray(reservation.stores) ? reservation.stores[0] : reservation.stores;
+    const trainerRel = Array.isArray(reservation.trainers) ? reservation.trainers[0] : reservation.trainers;
+    storeName = storeRel?.name ?? "恵比寿";
+    trainerName = trainerRel?.display_name ?? "担当トレーナー";
     sessionType = reservation.session_type;
   } else {
-    reservationId = "00000000-0000-4000-8000-000000000099";
-    startAt = now.plus({ hours: 1 }).toISO()!;
-    storeName = "恵比寿";
-    trainerName = "テストトレーナー";
-    sessionType = "store";
+    return {
+      member_code: memberCode,
+      sent: false,
+      error: "reservation_not_found",
+      lookup,
+      lookup_error: lookupError,
+    };
   }
 
   const line = linePushTokenForMemberRow(member, storeName);
@@ -181,5 +226,7 @@ export async function sendPreSessionReminderTest(
     start_at: startAt,
     survey_url: surveyUrl,
     line_source: line.source,
+    lookup,
+    lookup_error: lookupError,
   };
 }

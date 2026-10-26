@@ -28,6 +28,7 @@ import {
 } from "@/lib/booking/memberBookingRulesDb";
 import { isOctoberEarlyAccessCode, isOctoberEarlyAccessDate } from "@/lib/booking/octoberEarlyAccess";
 import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
+import { fetchPreSessionHearingByReservationIds } from "@/lib/preSessionSurveyForKarte";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -451,14 +452,22 @@ export async function GET(request: Request) {
       created_at: string;
     }>;
     const enrichedBase = await enrichReservationRowsFromScalars(supabase, rows);
+    const hearingByReservation = await fetchPreSessionHearingByReservationIds(
+      supabase,
+      enrichedBase.map((r) => r.id)
+    );
+    const withHearing = enrichedBase.map((r) => {
+      const hearing = hearingByReservation.get(r.id);
+      return hearing ? { ...r, pre_session: hearing } : r;
+    });
 
     // カレンダー月次などでは候補計算をスキップ（未割当1件ごとのシフト N+1 を避ける）
     if (!includeCandidates) {
-      return jsonResponse({ reservations: enrichedBase }, 200);
+      return jsonResponse({ reservations: withHearing }, 200);
     }
 
     const enriched = await Promise.all(
-      enrichedBase.map(async (r) => {
+      withHearing.map(async (r) => {
         if (r.trainer_id) return r;
         const candidates = await trainerCandidatesForSlot({
           supabase,

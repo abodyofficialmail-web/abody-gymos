@@ -1487,8 +1487,9 @@ export default function BookingPage() {
                   : "変更すると、3コマ目・4コマ目も予約できます。"}
               </p>
               <p>
-                月に{planConvertOffer === "monthly_20" ? "20" : "10"}
-                コマを超える予約はできません。
+                {planConvertOffer === "monthly_20"
+                  ? "月に20コマを超える予約はできません。"
+                  : "月10コマを超える分は、チケットがあれば予約できます。"}
               </p>
             </div>
             <div className="flex gap-3">

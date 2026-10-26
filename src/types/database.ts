@@ -794,6 +794,7 @@ export interface Database {
           condition_score: number;
           meal_status: "eaten" | "not_eaten" | "light_only";
           intensity_preference: "light" | "moderate" | "hard";
+          session_format: "training" | "stretch" | "both" | null;
           request_focus: string | null;
           concern: string | null;
           free_comment: string | null;
@@ -809,6 +810,7 @@ export interface Database {
           condition_score: number;
           meal_status: "eaten" | "not_eaten" | "light_only";
           intensity_preference: "light" | "moderate" | "hard";
+          session_format?: "training" | "stretch" | "both" | null;
           request_focus?: string | null;
           concern?: string | null;
           free_comment?: string | null;
@@ -824,6 +826,7 @@ export interface Database {
           condition_score?: number;
           meal_status?: "eaten" | "not_eaten" | "light_only";
           intensity_preference?: "light" | "moderate" | "hard";
+          session_format?: "training" | "stretch" | "both" | null;
           request_focus?: string | null;
           concern?: string | null;
           free_comment?: string | null;

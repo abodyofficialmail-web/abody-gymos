@@ -8,6 +8,7 @@ import {
   lowBookingMotivationBadgeClass,
   lowBookingMotivationBadgeLabel,
 } from "@/lib/lowBookingMotivation";
+import { formatPreSessionFormatBadge, type ReservationPreSessionHearing } from "@/lib/preSessionSurveyDisplay";
 
 const TZ = "Asia/Tokyo";
 
@@ -25,6 +26,7 @@ type ReservationRow = {
   end_at: string;
   status: string;
   created_at: string;
+  pre_session?: ReservationPreSessionHearing | null;
 };
 
 type BodyPhotoStatusRow = {
@@ -151,7 +153,17 @@ export default function AdminDashboardTodayPage() {
                     {lowBookingMotivationBadgeLabel(monthBookingByMember.get(r.member_id) ?? 0)}
                   </span>
                 ) : null}
+                {formatPreSessionFormatBadge(r.pre_session?.session_format) ? (
+                  <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-950">
+                    {formatPreSessionFormatBadge(r.pre_session?.session_format)}
+                  </span>
+                ) : null}
               </div>
+              {r.pre_session?.request_focus?.trim() ? (
+                <div className="mt-1 text-xs font-semibold text-slate-800">
+                  希望部位: {r.pre_session.request_focus.trim()}
+                </div>
+              ) : null}
               <div className="mt-1 text-xs text-slate-500">
                 トレーナー: {r.trainer_name || (r.trainer_id ?? "-")} / 会員:{" "}
                 {r.member_code || r.member_id}

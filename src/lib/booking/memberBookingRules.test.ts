@@ -213,34 +213,72 @@ describe("evaluateMemberBooking", () => {
     assert.equal(atCap.ok, true);
   });
 
-  it("lets monthly 10 book 10 koma at once and blocks the 11th", () => {
+  it("lets monthly 10 book 10 koma, then more with tickets", () => {
     const existing: RuleReservation[] = [];
     for (let d = 1; d <= 9; d += 1) {
       const day = String(d + 20).padStart(2, "0");
       existing.push(res({ start_at: iso(`2026-10-${day}`, "10:00"), end_at: iso(`2026-10-${day}`, "10:30") }));
     }
+    const nowIso = iso("2026-09-20", "12:00");
     const tenth = evaluateMemberBooking({
       plan: "monthly_10",
       ticketKoma: 0,
       reservations: existing,
       blockedDates: [],
       candidate: { start_at: iso("2026-10-31", "10:00"), end_at: iso("2026-10-31", "10:30"), store_id: STORE_A },
-      nowIso: iso("2026-09-20", "12:00"),
+      nowIso,
     });
     assert.equal(tenth.ok, true);
-    const eleventh = evaluateMemberBooking({
+    const atCap = [
+      ...existing,
+      res({ start_at: iso("2026-10-31", "10:00"), end_at: iso("2026-10-31", "10:30") }),
+    ];
+    const eleventhNoTicket = evaluateMemberBooking({
       plan: "monthly_10",
-      ticketKoma: 5,
-      reservations: [
-        ...existing,
-        res({ start_at: iso("2026-10-31", "10:00"), end_at: iso("2026-10-31", "10:30") }),
-      ],
+      ticketKoma: 0,
+      reservations: atCap,
       blockedDates: [],
       candidate: { start_at: iso("2026-10-30", "18:00"), end_at: iso("2026-10-30", "18:30"), store_id: STORE_A },
-      nowIso: iso("2026-09-20", "12:00"),
+      nowIso,
+    });
+    assert.equal(eleventhNoTicket.ok, false);
+    assert.equal(eleventhNoTicket.reason, "quota");
+    const eleventh = evaluateMemberBooking({
+      plan: "monthly_10",
+      ticketKoma: 1,
+      reservations: atCap,
+      blockedDates: [],
+      candidate: { start_at: iso("2026-10-30", "18:00"), end_at: iso("2026-10-30", "18:30"), store_id: STORE_A },
+      nowIso,
     });
     assert.equal(eleventh.ok, false);
-    assert.equal(eleventh.reason, "quota");
+    assert.equal(eleventh.reason, "confirm_ticket");
+    assert.equal(eleventh.ticketsToConsume, 1);
+    const confirmed = evaluateMemberBooking({
+      plan: "monthly_10",
+      ticketKoma: 1,
+      confirmTicketUse: true,
+      reservations: atCap,
+      blockedDates: [],
+      candidate: { start_at: iso("2026-10-30", "18:00"), end_at: iso("2026-10-30", "18:30"), store_id: STORE_A },
+      nowIso,
+    });
+    assert.equal(confirmed.ok, true);
+    assert.equal(confirmed.ticketsToConsume, 1);
+    const twelfth = evaluateMemberBooking({
+      plan: "monthly_10",
+      ticketKoma: 1,
+      confirmTicketUse: true,
+      reservations: [
+        ...atCap,
+        res({ start_at: iso("2026-10-30", "18:00"), end_at: iso("2026-10-30", "18:30") }),
+      ],
+      blockedDates: [],
+      candidate: { start_at: iso("2026-10-19", "10:00"), end_at: iso("2026-10-19", "10:30"), store_id: STORE_A },
+      nowIso,
+    });
+    assert.equal(twelfth.ok, true);
+    assert.equal(twelfth.ticketsToConsume, 1);
   });
 
   it("blocks monthly 4 after 4 koma even with tickets", () => {
@@ -594,7 +632,7 @@ describe("remainingBookableKoma", () => {
     assert.equal(remainingBookableKoma(atCapWithTickets), 2);
   });
 
-  it("does not let tickets raise monthly-10 over the hard cap", () => {
+  it("adds tickets on top of the monthly-10 allowance", () => {
     const holds = Array.from({ length: 8 }, (_, i) => {
       const ymd = DateTime.fromISO("2026-09-02", { zone: ZONE }).plus({ days: i }).toISODate()!;
       return res({ start_at: iso(ymd, "10:00"), end_at: iso(ymd, "10:30") });
@@ -607,7 +645,20 @@ describe("remainingBookableKoma", () => {
       nowIso,
     });
     assert.equal(snap.monthKoma, 8);
-    assert.equal(remainingBookableKoma(snap), 2);
+    assert.equal(remainingBookableKoma(snap), 7);
+    const atCap = summarizeMemberBookingState({
+      plan: "monthly_10",
+      ticketKoma: 3,
+      reservations: Array.from({ length: 10 }, (_, i) => {
+        const ymd = DateTime.fromISO("2026-09-21", { zone: ZONE }).plus({ days: i }).toISODate()!;
+        return res({ start_at: iso(ymd, "10:00"), end_at: iso(ymd, "10:30") });
+      }),
+      blockedDates: [],
+      nowIso,
+    });
+    assert.equal(atCap.monthKoma, 10);
+    assert.equal(atCap.holdKoma, 10);
+    assert.equal(remainingBookableKoma(atCap), 3);
   });
 
   it("returns null when plan is unset", () => {
