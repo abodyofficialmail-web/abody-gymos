@@ -17,8 +17,8 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1522;
-const EXPECT_PAY_YEN = 1_329_798;
+const EXPECT_SLOTS = 1516;
+const EXPECT_PAY_YEN = 1_325_298;
 
 /** ピラティス研修で店休。勤務時間は人件費に入れ、公開枠には入れない。 */
 const TRAINING_CLOSED = [
@@ -35,7 +35,7 @@ const SHIFTS = [
   ["2026-11-01", "10:00", "18:00", "ひろむ", "上野"],
   ["2026-11-01", "10:00", "16:00", "ゆうと", "恵比寿"],
   ["2026-11-01", "09:00", "17:00", "たけはる", "桜木町"],
-  ["2026-11-01", "10:00", "18:00", "りょう", "新宿"],
+  ["2026-11-01", "10:00", "15:00", "りょう", "新宿"],
   ["2026-11-02", "16:00", "22:00", "ひろむ", "上野"],
   ["2026-11-02", "10:00", "14:00", "せいや", "上野"],
   ["2026-11-02", "17:00", "22:00", "せいや", "上野"],
@@ -471,7 +471,7 @@ async function main() {
     throw new Error(`たけはるが174時間ではありません: ${pay.trainers["たけはる"].hours}`);
   }
   if (pay.trainers["ゆうと"].hours !== 146) throw new Error(`ゆうとが146時間ではありません: ${pay.trainers["ゆうと"].hours}`);
-  if (pay.money["りょう"] !== 334_800) throw new Error(`りょうの人件費が334800ではありません: ${pay.money["りょう"]}`);
+  if (pay.money["りょう"] !== 330_300) throw new Error(`りょうの人件費が330300ではありません: ${pay.money["りょう"]}`);
 
   const summary = {
     month: MONTH,
