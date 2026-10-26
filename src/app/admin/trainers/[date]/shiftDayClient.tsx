@@ -15,9 +15,18 @@ type ShiftRow = {
   start_local: string;
   end_local: string;
   break_minutes?: number | null;
+  breaks?: { id: string; start_time: string; end_time: string }[];
   status: string;
   is_break?: boolean | null;
 };
+
+function breakClockText(breaks: { start_time: string; end_time: string }[] | null | undefined): string {
+  return (breaks ?? [])
+    .slice()
+    .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
+    .map((b) => `${String(b.start_time).slice(0, 5)}〜${String(b.end_time).slice(0, 5)}`)
+    .join("、");
+}
 type TrainerEventRow = {
   id: string;
   trainer_id: string;
@@ -524,6 +533,7 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
           const color = trainerColor(t?.display_name ?? "");
           const start = s.start_local.slice(0, 5);
           const end = s.end_local.slice(0, 5);
+          const breakText = breakClockText(s.breaks);
           return (
             <div key={s.id} className="relative rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
               <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: color }} />
@@ -535,6 +545,9 @@ export function ShiftDayClient({ date, stores, trainers }: { date: string; store
                     </div>
                     <div className="text-sm text-slate-700">{t?.display_name ?? s.trainer_id}</div>
                     <div className="text-xs text-slate-500">{st?.name ?? s.store_id}</div>
+                    {breakText ? (
+                      <div className="text-xs font-semibold text-amber-800">休憩 {breakText}</div>
+                    ) : null}
                     {!s.is_break ? (
                       <div className="flex items-center gap-2 text-xs text-slate-600">
                         <span>休憩</span>

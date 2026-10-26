@@ -27,6 +27,7 @@ import {
   loadMemberBookingRuleContext,
 } from "@/lib/booking/memberBookingRulesDb";
 import { isOctoberEarlyAccessCode, isOctoberEarlyAccessDate } from "@/lib/booking/octoberEarlyAccess";
+import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
 import { fetchPreSessionHearingByReservationIds } from "@/lib/preSessionSurveyForKarte";
 
 dayjs.extend(utc);
@@ -131,10 +132,12 @@ async function fetchShiftsForCapacityCheck(params: {
   dateYmd: string;
   /** 10月先行会員だけ、下書きシフトも容量に含める */
   includeOctoberDraft?: boolean;
+  /** 11月の公開ルールを満たす会員だけ、東京4店舗の下書きも容量に含める */
+  includeNovemberDraft?: boolean;
 }): Promise<
   Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>
 > {
-  const { supabase, store_id, dateYmd, includeOctoberDraft } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft } = params;
   // shift_date が date 型 or timestamp 系どちらでも動くように
   // まず date 文字列で一致（date型に強い）→ 0件なら timestamp 範囲（timestamp型に強い）へフォールバック
   const dayStartTs = `${dateYmd}T00:00:00`;
@@ -215,7 +218,7 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
-  if (includeOctoberDraft) {
+  if (includeOctoberDraft || includeNovemberDraft) {
     let draftQ = await (supabase as any)
       .from("trainer_shifts")
       .select("trainer_id, start_local, end_local, is_break, status, booking_visibility")
@@ -587,6 +590,15 @@ export async function POST(request: Request) {
       if (isBookingClosedDate(bookingYmd)) {
         return jsonResponse({ error: "この日付の予約は現在受け付けていません" }, 400);
       }
+      const novemberOpen = await novemberBookingOpenForMember({
+        supabase,
+        storeId: store_id,
+        ymd: bookingYmd,
+        memberId,
+      });
+      if (!novemberOpen) {
+        return jsonResponse({ error: "11月のご予約はまだ公開前です" }, 400);
+      }
     }
     // trainer_id は未指定でも予約を成立させる（将来的に管理画面で後から割当）
     // - trainer_id 指定がある場合のみ、そのトレーナーに対してバリデーション/重複チェックを行う
@@ -670,6 +682,12 @@ export async function POST(request: Request) {
           includeOctoberDraft:
             isOctoberEarlyAccessDate(targetDate) &&
             isOctoberEarlyAccessCode(String((member as { member_code?: string } | null)?.member_code ?? "")),
+          includeNovemberDraft: await shouldIncludeNovemberDrafts({
+            supabase,
+            storeName: storeRow.name,
+            ymdOrMonth: targetDate,
+            memberId,
+          }),
         });
       } catch (e: any) {
         return jsonResponse(

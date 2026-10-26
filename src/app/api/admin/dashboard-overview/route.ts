@@ -13,11 +13,14 @@ const querySchema = z.object({
     .optional(),
 });
 
+type ShiftBreakDto = { start_time: string; end_time: string };
+
 type ShiftDto = {
   trainer_id: string;
   trainer_name: string;
   start_local: string;
   end_local: string;
+  breaks: ShiftBreakDto[];
 };
 
 type StoreOverviewDto = {
@@ -93,6 +96,34 @@ export async function GET(req: Request) {
       : ({ data: [], error: null } as any);
     if (trainersQ.error) return jsonResponse({ error: "トレーナーの取得に失敗しました", detail: trainersQ.error.message }, 500);
 
+    const shiftIds = (shiftsQ.data ?? []).map((s: { id?: string }) => String(s.id ?? "")).filter(Boolean);
+    const breaksByShiftId = new Map<string, ShiftBreakDto[]>();
+    if (shiftIds.length > 0) {
+      const breaksQ = await supabase
+        .from("trainer_shift_breaks")
+        .select("shift_id,start_time,end_time")
+        .in("shift_id", shiftIds);
+      if (breaksQ.error) {
+        const msg = String(breaksQ.error.message ?? "");
+        const missing =
+          msg.includes("trainer_shift_breaks") &&
+          (msg.includes("does not exist") || msg.includes("relationship") || msg.includes("column"));
+        if (!missing) return jsonResponse({ error: "休憩の取得に失敗しました", detail: msg }, 500);
+      } else {
+        for (const b of breaksQ.data ?? []) {
+          const id = String((b as { shift_id?: string }).shift_id ?? "");
+          if (!id) continue;
+          const arr = breaksByShiftId.get(id) ?? [];
+          arr.push({
+            start_time: formatTimeHhMm((b as { start_time?: string }).start_time),
+            end_time: formatTimeHhMm((b as { end_time?: string }).end_time),
+          });
+          breaksByShiftId.set(id, arr);
+        }
+        for (const arr of breaksByShiftId.values()) arr.sort((a, b) => a.start_time.localeCompare(b.start_time));
+      }
+    }
+
     const trainerNameById = new Map<string, string>();
     for (const t of trainersQ.data ?? []) {
       trainerNameById.set(String((t as any).id), String((t as any).display_name ?? ""));
@@ -111,12 +142,14 @@ export async function GET(req: Request) {
       const sid = String((s as any).store_id ?? "");
       if (!sid) continue;
       const trainerId = String((s as any).trainer_id ?? "");
+      const shiftId = String((s as any).id ?? "");
       const arr = shiftsByStore.get(sid) ?? [];
       arr.push({
         trainer_id: trainerId,
         trainer_name: trainerNameById.get(trainerId) || trainerId,
         start_local: formatTimeHhMm((s as any).start_local),
         end_local: formatTimeHhMm((s as any).end_local),
+        breaks: breaksByShiftId.get(shiftId) ?? [],
       });
       shiftsByStore.set(sid, arr);
     }
