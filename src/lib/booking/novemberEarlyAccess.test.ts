@@ -5,6 +5,7 @@ import {
   NOVEMBER_EARLY_AT_ISO,
   NOVEMBER_LOW_USAGE_MAX,
   NOVEMBER_PUBLIC_AT_ISO,
+  NOVEMBER_PUBLIC_LINE_REASON,
   NOVEMBER_TICKET_KOMA,
   isActiveForNovemberGrant,
   isExcludedNovemberGrantName,
@@ -12,7 +13,9 @@ import {
   isNovemberLowUsageCount,
   isTokyoNovemberStore,
   novemberBookingPhase,
+  novemberPublicLineWindow,
   selectNovemberLowUsageMembers,
+  selectNovemberPublicLineMembers,
 } from "./novemberEarlyAccess.ts";
 
 describe("november booking release", () => {
@@ -92,5 +95,33 @@ describe("november booking release", () => {
     assert.match(script, /TICKET_KOMA = 2/);
     assert.match(shifts, /2026-10-27T18:00:00\+09:00/);
     assert.match(shifts, /shiftStatusForApply/);
+  });
+
+  it("sends the public line only from 2026-10-27 18:00 JST until midnight", () => {
+    assert.equal(NOVEMBER_PUBLIC_LINE_REASON, "november_2026_public_release_line");
+    assert.equal(novemberPublicLineWindow(new Date("2026-10-27T17:59:59+09:00")), "before");
+    assert.equal(novemberPublicLineWindow(new Date("2026-10-27T18:00:00+09:00")), "open");
+    assert.equal(novemberPublicLineWindow(new Date("2026-10-27T21:00:00+09:00")), "open");
+    assert.equal(novemberPublicLineWindow(new Date("2026-10-28T00:00:00+09:00")), "after");
+  });
+
+  it("keeps ticket recipients and the early line audience out of the public announcement", () => {
+    const selected = selectNovemberPublicLineMembers(
+      [
+        { id: "low", member_code: "EBI001", name: "低利用", membership_status: "active" },
+        { id: "early-line", member_code: "EBI002", name: "先行", membership_status: "active" },
+        { id: "sent", member_code: "UEN001", name: "送信済", membership_status: "active" },
+        { id: "public", member_code: "SHI001", name: "一般", membership_status: "active" },
+        { id: "pause", member_code: "SAK001", name: "休会", membership_status: "hiatus" },
+        { id: "test", member_code: "SAK002", name: "テスト会員", membership_status: "active" },
+        { id: "meal", member_code: "MPS001", name: "食事", membership_status: "active" },
+        { id: "blank", member_code: "FUK001", name: "在籍", membership_status: "", is_active: true },
+      ],
+      new Set(["low", "early-line", "sent"])
+    );
+    assert.deepEqual(
+      selected.map((m) => m.member_code),
+      ["FUK001", "SHI001"]
+    );
   });
 });

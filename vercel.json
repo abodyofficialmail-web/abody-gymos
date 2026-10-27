@@ -45,6 +45,10 @@
       "schedule": "0 5-8 27 10 *"
     },
     {
+      "path": "/api/cron/november-public-line",
+      "schedule": "0 9-12 27 10 *"
+    },
+    {
       "path": "/api/cron/november-booking-release",
       "schedule": "0 9-15 26,27 10 *"
     },
