@@ -165,3 +165,52 @@ export async function novemberBookingOpenForMember(params: {
   if (phase === "public") return true;
   return memberHasNovemberLowUsageGrant(params.supabase, params.memberId);
 }
+
+/** 低利用者以外への一斉LINE。18:00ちょうどに始まり、同日24:00前の再実行で送り残しだけ届ける。 */
+export const NOVEMBER_PUBLIC_LINE_REASON = "november_2026_public_release_line";
+export const NOVEMBER_PUBLIC_LINE_AT_ISO = "2026-10-27T18:00:00+09:00";
+export const NOVEMBER_PUBLIC_LINE_UNTIL_ISO = "2026-10-28T00:00:00+09:00";
+const NOVEMBER_PUBLIC_LINE_AT_MS = Date.parse(NOVEMBER_PUBLIC_LINE_AT_ISO);
+const NOVEMBER_PUBLIC_LINE_UNTIL_MS = Date.parse(NOVEMBER_PUBLIC_LINE_UNTIL_ISO);
+
+export type NovemberPublicLineWindow = "before" | "open" | "after";
+
+export function novemberPublicLineWindow(now: Date): NovemberPublicLineWindow {
+  const ms = now.getTime();
+  if (!Number.isFinite(ms) || !Number.isFinite(NOVEMBER_PUBLIC_LINE_AT_MS) || !Number.isFinite(NOVEMBER_PUBLIC_LINE_UNTIL_MS)) {
+    return "before";
+  }
+  if (ms < NOVEMBER_PUBLIC_LINE_AT_MS) return "before";
+  if (ms >= NOVEMBER_PUBLIC_LINE_UNTIL_MS) return "after";
+  return "open";
+}
+
+export type NovemberPublicLineCandidate = {
+  id: string;
+  member_code?: string | null;
+  name?: string | null;
+  display_name?: string | null;
+  membership_status?: string | null;
+  is_active?: boolean | null;
+};
+
+/** 在籍会員から、チケット付与・先行LINEの対象者と食事専用アカウントを除く。 */
+export function selectNovemberPublicLineMembers<T extends NovemberPublicLineCandidate>(
+  members: T[],
+  excludeMemberIds: ReadonlySet<string>
+): T[] {
+  const selected: T[] = [];
+  for (const member of members) {
+    if (!member.id || excludeMemberIds.has(member.id)) continue;
+    if (!isActiveForNovemberGrant(member)) continue;
+    if (isExcludedNovemberGrantName(member.name) || isExcludedNovemberGrantName(member.display_name)) continue;
+    const code = String(member.member_code ?? "")
+      .trim()
+      .toUpperCase()
+      .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+    if (/^MPS\d{3}$/.test(code)) continue;
+    selected.push(member);
+  }
+  selected.sort((a, b) => String(a.member_code ?? "").localeCompare(String(b.member_code ?? ""), "ja"));
+  return selected;
+}
