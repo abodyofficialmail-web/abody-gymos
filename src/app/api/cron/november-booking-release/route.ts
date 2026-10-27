@@ -1,5 +1,6 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { grantNovemberLowUsageTickets } from "@/lib/booking/novemberLowUsageGrant";
+import { sendNovemberLowUsageTicketLine } from "@/lib/booking/novemberLowUsageLine";
 import {
   NOVEMBER_BOOKING_MONTH,
   TOKYO_NOVEMBER_STORES,
@@ -60,8 +61,11 @@ export async function GET(req: Request) {
       released = (updated ?? []).length;
     }
 
+    const line = await sendNovemberLowUsageTicketLine(supabase);
+
     return jsonResponse({
-      ok: tickets.failed.length === 0,
+      ok: tickets.failed.length === 0 && line.failed.length === 0,
+      line,
       phase,
       month: NOVEMBER_BOOKING_MONTH,
       shifts,
