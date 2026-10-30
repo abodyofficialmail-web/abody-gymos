@@ -209,7 +209,11 @@ export function buildKarteSessionContent(
   lines.push("");
   lines.push("【トレーナーからのフィードバック】");
   if (state.goodPoint.trim()) lines.push(state.goodPoint.trim());
-  if (state.improvePoint.trim()) lines.push(state.improvePoint.trim());
+  if (state.improvePoint.trim()) {
+    lines.push("");
+    lines.push("【改善点】");
+    lines.push(state.improvePoint.trim());
+  }
   lines.push("");
   lines.push("【痛みや違和感】");
   lines.push(state.painLevel);

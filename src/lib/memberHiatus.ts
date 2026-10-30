@@ -5,8 +5,6 @@ const TZ = "Asia/Tokyo";
 export const HIATUS_REACTIVATE_UPDATES = {
   membership_status: "active",
   is_active: true,
-  hiatus_start_at: null,
-  hiatus_end_at: null,
 } as const;
 
 export function tokyoTodayYmd(now = DateTime.now().setZone(TZ)): string {

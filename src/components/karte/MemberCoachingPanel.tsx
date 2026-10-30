@@ -2,10 +2,10 @@
 
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MONTHLY_SESSION_TARGET } from "@/lib/lowBookingMotivation";
 import {
-  coachingActionsForCount,
-  collectCoachingSessions,
+  collectImprovePoints,
+  resolveCoachingFollowup,
+  summarizeImprovePoints,
   type CoachingActionKey,
   type CoachingNote,
 } from "@/lib/sessionCoaching";
@@ -36,13 +36,23 @@ function formatDoneAt(iso: string) {
 export function MemberCoachingPanel({
   memberId,
   month,
-  bookingCount,
+  todayYmd,
+  thisMonthCount,
+  lastMonthCount,
+  joinedAt,
+  membershipStatus,
+  hiatusEndAt,
   notes,
   defaultTrainerId,
 }: {
   memberId: string;
   month: string;
-  bookingCount: number | null;
+  todayYmd: string;
+  thisMonthCount: number | null;
+  lastMonthCount: number | null;
+  joinedAt?: string | null;
+  membershipStatus?: string | null;
+  hiatusEndAt?: string | null;
   notes: CoachingNote[] | null;
   defaultTrainerId?: string;
 }) {
@@ -53,8 +63,22 @@ export function MemberCoachingPanel({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const sessions = useMemo(() => (notes ? collectCoachingSessions(notes) : []), [notes]);
-  const actions = bookingCount == null ? [] : coachingActionsForCount(bookingCount);
+  const improveSummary = useMemo(
+    () => (notes ? summarizeImprovePoints(collectImprovePoints(notes)) : null),
+    [notes]
+  );
+  const followup = useMemo(() => {
+    if (thisMonthCount == null || lastMonthCount == null) return null;
+    return resolveCoachingFollowup({
+      todayYmd,
+      thisMonthCount,
+      lastMonthCount,
+      joinedAt,
+      membershipStatus,
+      hiatusEndAt,
+    });
+  }, [todayYmd, thisMonthCount, lastMonthCount, joinedAt, membershipStatus, hiatusEndAt]);
+  const actions = followup?.actions ?? [];
 
   const loadChecks = useCallback(async () => {
     const res = await fetch(
@@ -117,40 +141,40 @@ export function MemberCoachingPanel({
       <div>
         <div className="text-sm font-bold text-slate-900">提案と注意点</div>
         <p className="mt-1 text-xs leading-relaxed text-slate-600">
-          過去のセッションとトレーナー記録から、次に気をつけることをまとめています。誰が、どの記録から注意になったかが分かります。
+          これまでの改善点をまとめています。誰が、いつのセッションで残したかが分かります。
         </p>
       </div>
 
       <div className="space-y-2">
         <div className="text-xs font-semibold text-slate-700">注意点</div>
         {notes === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
-        {notes !== null && sessions.length === 0 ? (
-          <div className="text-sm text-slate-600">過去の記録から、まだ注意点は出ていません。</div>
+        {improveSummary && improveSummary.items.length === 0 ? (
+          <div className="text-sm text-slate-600">これまでのカルテに、改善点はまだありません。</div>
         ) : null}
-        {sessions.map((session) => (
-          <article key={session.noteId} className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-3">
-            <div className="text-sm font-bold text-amber-950">
-              {session.trainerName}が {formatSessionDate(session.date)} のセッションで残した注意
-            </div>
-            {session.storeName ? <div className="mt-0.5 text-[11px] text-amber-900">{session.storeName}</div> : null}
-            <ul className="mt-2 space-y-2">
-              {session.cautions.map((caution) => (
-                <li key={`${session.noteId}-${caution.source}`} className="text-sm text-slate-800">
-                  <div className="text-[11px] font-semibold text-slate-500">経緯: {caution.source}</div>
-                  <div className="whitespace-pre-wrap leading-relaxed">{caution.body}</div>
+        {improveSummary && improveSummary.items.length > 0 ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-3">
+            <p className="text-sm leading-relaxed text-amber-950">{improveSummary.summary}</p>
+            <ul className="mt-3 space-y-3">
+              {improveSummary.items.map((item) => (
+                <li key={item.noteId} className="text-sm text-slate-800">
+                  <div className="whitespace-pre-wrap leading-relaxed">{item.body}</div>
+                  <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                    {item.trainerName}が {formatSessionDate(item.date)} のセッションで残した改善点
+                    {item.storeName ? `（${item.storeName}）` : ""}
+                    {item.times > 1 ? `。同じ内容が${item.times}回` : ""}
+                  </div>
                 </li>
               ))}
             </ul>
-          </article>
-        ))}
+          </div>
+        ) : null}
       </div>
 
-      {bookingCount != null && actions.length > 0 ? (
+      {followup && actions.length > 0 ? (
         <div className="space-y-2 border-t border-slate-100 pt-3">
-          <div className="text-xs font-semibold text-slate-700">来店が少ない人への提案</div>
-          <p className="text-xs leading-relaxed text-slate-600">
-            今月の予約は{bookingCount}回です。目標は{MONTHLY_SESSION_TARGET}回です。実施したらチェックすると、誰がいつやったかが残ります。
-          </p>
+          <div className="text-xs font-semibold text-slate-700">提案</div>
+          <div className="text-sm font-semibold text-slate-900">{followup.title}</div>
+          <p className="text-xs leading-relaxed text-slate-600">{followup.detail}</p>
           <label className="block text-xs text-slate-600">
             実施したトレーナー
             <select
@@ -201,10 +225,11 @@ export function MemberCoachingPanel({
         </div>
       ) : null}
 
-      {bookingCount != null && actions.length === 0 ? (
-        <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
-          今月の予約は{bookingCount}回です。チケット付与や次の予約などの実施チェックは、今月4回以下のときに出ます。
-        </p>
+      {followup && actions.length === 0 ? (
+        <div className="space-y-1 border-t border-slate-100 pt-3">
+          <div className="text-xs font-semibold text-slate-700">提案</div>
+          <p className="text-xs text-slate-500">{followup.detail}</p>
+        </div>
       ) : null}
 
       {err ? <div className="text-xs text-red-700">{err}</div> : null}

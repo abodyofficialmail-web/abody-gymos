@@ -27,6 +27,7 @@ export function karteLineMessageFromNote(params: {
   const menu = sectionBody(content, "本日のメニュー");
   const stretch = sectionBody(content, "ストレッチ");
   const feedback = sectionBody(content, "トレーナーからのフィードバック");
+  const improve = sectionBody(content, "改善点");
 
   const lines: string[] = [
     honor,
@@ -47,6 +48,9 @@ export function karteLineMessageFromNote(params: {
   }
   if (feedback) {
     lines.push("", "【トレーナーからのフィードバック】", feedback);
+  }
+  if (improve) {
+    lines.push("", "【改善点】", improve);
   }
   lines.push("", "※ご不明点があれば、いつでも気軽にLINEでご連絡ください！");
   if (storeName) lines.push("", `Abody ${storeName}店`);

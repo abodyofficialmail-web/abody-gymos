@@ -312,6 +312,10 @@ export function MemberDetailClient({
 }) {
   const router = useRouter();
   const month = useMemo(() => DateTime.now().setZone(TZ).toFormat("yyyy-MM"), []);
+  const lastMonth = useMemo(
+    () => DateTime.fromISO(`${month}-01`, { zone: TZ }).minus({ months: 1 }).toFormat("yyyy-MM"),
+    [month]
+  );
   const monthLabel = useMemo(() => DateTime.now().setZone(TZ).setLocale("ja").toFormat("M月"), []);
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
   const [stopGlance, setStopGlance] = useState<BookingStopGlance>({
@@ -385,6 +389,7 @@ export function MemberDetailClient({
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [rows, setRows] = useState<ReservationRow[] | null>(null);
+  const [lastRows, setLastRows] = useState<ReservationRow[] | null>(null);
   const [changeLogs, setChangeLogs] = useState<ChangeLogRow[]>([]);
   const [notes, setNotes] = useState<ClientNoteRow[] | null>(null);
   const [kartePartFilter, setKartePartFilter] = useState<string | null>(null);
@@ -591,6 +596,7 @@ export function MemberDetailClient({
 
   useEffect(() => {
     setErr(null);
+    setLastRows(null);
     apiGet<{ reservations: ReservationRow[] }>(
       `/api/booking-v2/reservations?member_id=${encodeURIComponent(memberId)}&month=${encodeURIComponent(month)}`
     )
@@ -599,12 +605,20 @@ export function MemberDetailClient({
         setErr(String(e?.message ?? "取得に失敗しました"));
         setRows([]);
       });
+    apiGet<{ reservations: ReservationRow[] }>(
+      `/api/booking-v2/reservations?member_id=${encodeURIComponent(memberId)}&month=${encodeURIComponent(lastMonth)}`
+    )
+      .then((d) => setLastRows(d.reservations ?? []))
+      .catch((e: any) => {
+        setErr(String(e?.message ?? "取得に失敗しました"));
+        setLastRows(null);
+      });
     apiGet<{ logs: ChangeLogRow[] }>(
       `/api/admin/reservation-change-logs?member_id=${encodeURIComponent(memberId)}`
     )
       .then((d) => setChangeLogs(d.logs ?? []))
       .catch(() => setChangeLogs([]));
-  }, [memberId, month]);
+  }, [memberId, month, lastMonth]);
 
   const refreshNotes = async () => {
     const d = await apiGet<{
@@ -687,6 +701,10 @@ export function MemberDetailClient({
     const list = (rows ?? []).filter((r) => String(r.status ?? "") !== "cancelled");
     return list.length;
   }, [rows]);
+  const lastMonthSessionCount = useMemo(() => {
+    if (lastRows === null) return null;
+    return lastRows.filter((r) => String(r.status ?? "") !== "cancelled").length;
+  }, [lastRows]);
 
   const { hearingNotes, sessionNotes } = useMemo(() => splitGoalHearingNotes(notes), [notes]);
   const filteredSessionNotes = useMemo(() => {
@@ -830,7 +848,11 @@ export function MemberDetailClient({
     lines.push("");
     lines.push("【トレーナーからのフィードバック】");
     if (goodPoint.trim()) lines.push(goodPoint.trim());
-    if (improvePoint.trim()) lines.push(improvePoint.trim());
+    if (improvePoint.trim()) {
+      lines.push("");
+      lines.push("【改善点】");
+      lines.push(improvePoint.trim());
+    }
     lines.push("");
     lines.push("【痛みや違和感】");
     lines.push(painLevel);
@@ -2177,7 +2199,12 @@ export function MemberDetailClient({
       <MemberCoachingPanel
         memberId={memberId}
         month={month}
-        bookingCount={rows === null ? null : monthSessionCount}
+        todayYmd={todayYmd}
+        thisMonthCount={rows === null ? null : monthSessionCount}
+        lastMonthCount={lastMonthSessionCount}
+        joinedAt={member.joined_at || member.created_at || null}
+        membershipStatus={membershipStatus}
+        hiatusEndAt={membershipStatus === "hiatus" ? hiatusEndAt || null : member.hiatus_end_at ?? null}
         defaultTrainerId={trainerId}
         notes={
           notes === null

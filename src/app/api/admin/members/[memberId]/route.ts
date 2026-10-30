@@ -228,8 +228,6 @@ export async function PATCH(request: Request, ctx: { params: { memberId: string 
       } else {
         updates.withdrawn_at = null;
         updates.withdrawn_trainer_id = null;
-        updates.hiatus_start_at = null;
-        updates.hiatus_end_at = null;
       }
     } else if (parsed.data.withdrawn_at !== undefined || parsed.data.withdrawn_trainer_id !== undefined) {
       updates.withdrawn_at = parsed.data.withdrawn_at ?? null;

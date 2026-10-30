@@ -160,8 +160,6 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
       .eq("id", params.memberId);
     if (!reactivateErr) {
       membershipStatusRaw = "active";
-      hiatusStartAt = null;
-      hiatusEndAt = null;
       if (memberBase) (memberBase as { is_active: boolean }).is_active = true;
     }
   }
