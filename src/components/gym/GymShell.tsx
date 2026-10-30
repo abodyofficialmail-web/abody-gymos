@@ -7,16 +7,19 @@ export function GymShell({
   nav,
   children,
   mainClassName = "",
+  wide = false,
 }: {
   title: string;
   nav: NavItem[];
   children: React.ReactNode;
   mainClassName?: string;
+  wide?: boolean;
 }) {
+  const frame = wide ? "max-w-5xl" : "max-w-3xl";
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className={`mx-auto flex ${frame} flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between`}>
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">ABODY Gym OS</p>
             <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
@@ -34,7 +37,7 @@ export function GymShell({
           </nav>
         </div>
       </header>
-      <main className={`mx-auto max-w-3xl px-4 py-6 ${mainClassName}`}>{children}</main>
+      <main className={`mx-auto ${frame} px-4 py-6 ${mainClassName}`}>{children}</main>
     </div>
   );
 }

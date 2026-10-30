@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GYMOS 使い方 — シフト・休憩・予約止め・チケット</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --bg: #eef2f6;
+      --paper: #ffffff;
+      --pin: #e11d48;
+      --amber: #b45309;
+      --amber-bg: #fffbeb;
+      --ok: #047857;
+      --ok-bg: #ecfdf5;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 400px at 10% -10%, #ffffff 0%, transparent 60%),
+        var(--bg);
+      line-height: 1.6;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
+    header.top {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-end;
+      margin-bottom: 22px;
+    }
+    .eyebrow {
+      margin: 0;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    h1 {
+      margin: 6px 0 0;
+      font-size: 34px;
+      line-height: 1.25;
+      letter-spacing: -0.03em;
+    }
+    .lead { margin: 8px 0 0; color: #334155; font-size: 15px; }
+    nav.jump {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 22px 0 28px;
+    }
+    nav.jump a {
+      text-decoration: none;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    nav.jump a span {
+      display: inline-grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      margin-right: 6px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: white;
+      font-size: 11px;
+    }
+    table.pick {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+      margin-bottom: 28px;
+    }
+    table.pick th, table.pick td {
+      text-align: left;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      vertical-align: top;
+    }
+    table.pick th {
+      font-size: 12px;
+      color: var(--muted);
+      background: #f8fafc;
+    }
+    table.pick tr:last-child td { border-bottom: 0; }
+    table.pick td:first-child { font-weight: 700; width: 34%; }
+    section.lesson {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 22px;
+      background: var(--paper);
+      border-radius: 24px;
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+    }
+    .kicker {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .num {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: var(--ink);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+    h2 { margin: 0; font-size: 22px; letter-spacing: -0.02em; line-height: 1.35; }
+    .why { margin: 0 0 14px; color: #334155; font-size: 14px; }
+    ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+    ol.steps li {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 15px;
+    }
+    ol.steps b {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--pin);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+    }
+    .note {
+      margin-top: 14px;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 13px;
+      background: var(--amber-bg);
+      color: #78350f;
+    }
+    .note.ok { background: var(--ok-bg); color: #064e3b; }
+    .note strong { display: block; margin-bottom: 2px; }
+    .stage {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      min-height: 100%;
+    }
+    .chrome {
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e8f0;
+      background: rgba(255,255,255,0.92);
+    }
+    .brand { font-size: 10px; letter-spacing: 0.08em; color: #64748b; font-weight: 700; }
+    .title { font-size: 14px; font-weight: 700; margin-top: 1px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+    .pill {
+      border: 1px solid #e2e8f0;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 10px;
+      color: #334155;
+      background: white;
+    }
+    .pill.on { background: #0f172a; color: white; border-color: #0f172a; }
+    .body { padding: 12px; display: grid; gap: 8px; }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .date { font-size: 16px; font-weight: 800; }
+    .btn {
+      border: 0;
+      border-radius: 12px;
+      background: #0f172a;
+      color: white;
+      font-weight: 800;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+    .btn.ghost {
+      background: white;
+      color: #0f172a;
+      border: 1px solid #e2e8f0;
+      font-weight: 700;
+    }
+    .btn.amber { background: #fffbeb; color: #78350f; border: 1px solid #fcd34d; }
+    .card {
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 10px;
+      background: white;
+    }
+    .label { font-size: 11px; font-weight: 700; color: #334155; margin-bottom: 4px; }
+    .field {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: white;
+      color: #0f172a;
+    }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .slot {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      text-align: center;
+      padding: 8px 4px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .slot.on { background: #0f172a; color: white; border-color: #0f172a; }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 800;
+      background: #fff1f2;
+      border: 1px solid #fecdd3;
+      border-radius: 10px;
+      padding: 8px;
+    }
+    .box {
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .break {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-left: 6px solid #f59e0b;
+      border-radius: 14px;
+      padding: 10px;
+    }
+    .tiny { font-size: 11px; color: #64748b; }
+    .pin {
+      display: inline-grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--pin);
+      color: white;
+      font-size: 11px;
+      font-weight: 800;
+      box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.15);
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .tabs { display: flex; gap: 6px; }
+    .tab {
+      flex: 1;
+      text-align: center;
+      border-radius: 10px;
+      padding: 7px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #f1f5f9;
+      color: #64748b;
+    }
+    .tab.on { background: white; color: #0f172a; border: 1px solid #e2e8f0; }
+    .stat {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #334155;
+    }
+    footer {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      section.lesson { grid-template-columns: 1fr; }
+      h1 { font-size: 28px; }
+      header.top { flex-direction: column; align-items: flex-start; }
+    }
+    @media print {
+      body { background: white; }
+      .wrap { max-width: none; }
+      section.lesson, table.pick { break-inside: avoid; box-shadow: none; }
+      nav.jump { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <p class="eyebrow">ABODY GYM OS</p>
+        <h1>店舗スタッフの使い方</h1>
+        <p class="lead">シフト、休憩、予約止め、チケット。赤い番号の場所を、上から順に押します。</p>
+      </div>
+    </header>
+
+    <nav class="jump">
+      <a href="#shift"><span>1</span>シフト</a>
+      <a href="#break"><span>2</span>休憩</a>
+      <a href="#stop-all"><span>3</span>枠を止める</a>
+      <a href="#stop-one"><span>4</span>この人だけ</a>
+      <a href="#ticket"><span>5</span>チケット</a>
+    </nav>
+
+    <table class="pick">
+      <thead>
+        <tr><th>やりたいこと</th><th>開くメニュー</th><th>押すボタン</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>出勤時間を入れる</td><td>シフト → その日</td><td>右上の ＋ → 保存</td></tr>
+        <tr><td>30分休んで、その枠を止める</td><td>予約 → その日</td><td>＋ 休憩追加</td></tr>
+        <tr><td>長い時間、誰も予約できないようにする</td><td>シフト → その日</td><td>予定追加 → 枠を潰す</td></tr>
+        <tr><td>この会員だけ、その日を予約できないようにする</td><td>会員 → プラン・予約制限</td><td>この日を×</td></tr>
+        <tr><td>チケットを足す</td><td>会員 → プラン・予約制限</td><td>付与</td></tr>
+      </tbody>
+    </table>
+
+    <section class="lesson" id="shift">
+      <div>
+        <div class="kicker"><div class="num">1</div><h2>シフトを追加する</h2></div>
+        <p class="why">会員が予約できるのは、シフトを入れた時間だけです。先にシフトがないと、休憩も予約も入りません。</p>
+        <ol class="steps">
+          <li><b>1</b><div>左上のメニューから <strong>シフト</strong> を開く。</div></li>
+          <li><b>2</b><div>カレンダーの <strong>日付</strong> をタップする。</div></li>
+          <li><b>3</b><div>右上の <strong>＋</strong> を押す。</div></li>
+          <li><b>4</b><div>店舗、トレーナー、開始、終了を入れて <strong>保存</strong>。</div></li>
+        </ol>
+        <div class="note">
+          <strong>この画面の「休憩（分）」は、休む時間帯ではありません。</strong>
+          分数のメモで、給与からも引きません。何時の枠を止めるかは、次の「休憩」です。
+        </div>
+      </div>
+      <div class="stage">
+        <div class="chrome">
+          <div class="bar">
+            <div>
+              <div class="brand">ABODY GYM OS</div>
+              <div class="title">11/3（火）</div>
+            </div>
+            <div class="pills">
+              <span class="pill on">シフト</span>
+              <span class="pill">予約</span>
+              <span class="pill">会員</span>
+            </div>
+          </div>
+          <div class="body">
+            <div class="row">
+              <div class="date">11/3（火）</div>
+              <div class="btn"><span class="pin">3</span>＋</div>
+            </div>
+            <div class="card">
+              <div class="row" style="margin-bottom:8px">
+                <strong>シフト追加</strong>
+                <span class="tiny">閉じる</span>
+              </div>
+              <div class="tiny" style="margin-bottom:8px">11月3日（火）</div>
+              <div class="grid2">
+                <div>
+                  <div class="label"><span class="pin">4</span>店舗</div>
+                  <div class="field">上野</div>
+                </div>
+                <div>
+                  <div class="label">トレーナー</div>
+                  <div class="field">トレーナーA</div>
+                </div>
+                <div>
+                  <div class="label">開始</div>
+                  <div class="field">10:00</div>
+                </div>
+                <div>
+                  <div class="label">終了</div>
+                  <div class="field">19:00</div>
+                </div>
+              </div>
+              <div style="margin-top:8px">
+                <div class="label">休憩（分）</div>
+                <div class="field">0</div>
+                <div class="tiny">給与からは差し引きません</div>
+              </div>
+              <div class="btn" style="margin-top:10px; text-align:center">保存</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lesson" id="break">
+      <div>
+        <div class="kicker"><div class="num">2</div><h2>休憩を入れる</h2></div>
+        <p class="why">30分だけ席を空けます。入れた時間は会員の予約画面から消え、予約一覧に休憩として残ります。</p>
+        <ol class="steps">
+          <li><b>1</b><div>メニューの <strong>予約</strong> を開く。</div></li>
+          <li><b>2</b><div>カレンダーで <strong>その日</strong> をタップする。</div></li>
+          <li><b>3</b><div><strong>＋ 休憩追加</strong> を押す。</div></li>
+          <li><b>4</b><div>出勤中のトレーナーを選び、止める <strong>30分</strong> をタップする。</div></li>
+          <li><b>5</b><div><strong>休憩を追加する</strong> を押す。</div></li>
+        </ol>
+        <div class="note ok">
+          <strong>入ったあとの見え方</strong>
+          その日の予約一覧の先頭あたりに、黄色い「トレーナー休憩」が出ます。例: 12:00〜12:30。
+        </div>
+      </div>
+      <div class="stage">
+        <div class="chrome">
+          <div class="bar">
+            <div>
+              <div class="brand">ABODY GYM OS</div>
+              <div class="title">予約</div>
+            </div>
+            <div class="pills">
+              <span class="pill">シフト</span>
+              <span class="pill on">予約</span>
+              <span class="pill">会員</span>
+            </div>
+          </div>
+          <div class="body">
+            <div class="row">
+              <div>
+                <div style="font-weight:800">11/3（火）の予約</div>
+                <div class="tiny">カレンダーの日付をタップしたあと</div>
+              </div>
+            </div>
+            <div class="row">
+              <span class="btn amber"><span class="pin">3</span>＋ 休憩追加</span>
+              <span class="btn ghost">＋ 体験予約</span>
+              <span class="btn ghost">＋ 会員予約</span>
+            </div>
+            <div class="card">
+              <div class="row" style="margin-bottom:8px">
+                <strong>休憩追加（30分）</strong>
+                <span class="tiny">閉じる</span>
+              </div>
+              <div class="grid2">
+                <div>
+                  <div class="label">店舗</div>
+                  <div class="field">上野</div>
+                </div>
+                <div>
+                  <div class="label">日付</div>
+                  <div class="field">2026-11-03</div>
+                </div>
+              </div>
+              <div class="box" style="margin-top:8px; background:#f8fafc">
+                <div class="label"><span class="pin">4</span>トレーナー（出勤シフト）</div>
+                <div class="field">トレーナーA（10:00〜19:00）</div>
+              </div>
+              <div class="tiny" style="margin:8px 0 6px">休憩時間（30分）をタップ</div>
+              <div class="grid3">
+                <div class="slot">11:30〜12:00</div>
+                <div class="slot on">12:00〜12:30</div>
+                <div class="slot">12:30〜13:00</div>
+              </div>
+              <div style="text-align:right; margin-top:10px">
+                <span class="btn"><span class="pin">5</span>休憩を追加する</span>
+              </div>
+            </div>
+            <div class="break">
+              <div style="font-weight:800">12:00〜12:30</div>
+              <div class="tiny" style="color:#92400e; font-weight:700">トレーナー休憩</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lesson" id="stop-all">
+      <div>
+        <div class="kicker"><div class="num">3</div><h2>長い時間の予約を止める</h2></div>
+        <p class="why">研修や打ち合わせなど、30分より長い時間を止めます。会員の予約画面から、その時間が消えます。</p>
+        <ol class="steps">
+          <li><b>1</b><div><strong>シフト</strong> から、止めたい日を開く。</div></li>
+          <li><b>2</b><div>下の方の <strong>予定追加</strong> を押す。</div></li>
+          <li><b>3</b><div>タイトル、トレーナー、開始、終了を入れる。</div></li>
+          <li><b>4</b><div><strong>予約カレンダーの枠を潰す</strong> にチェックを入れる。</div></li>
+          <li><b>5</b><div><strong>保存</strong>。予定の下に「予約を潰す」と出れば止まっています。</div></li>
+        </ol>
+        <div class="note">
+          <strong>チェックを外して保存すると、予定だけ残ります。</strong>
+          その時間は、会員が予約できるままです。枠を戻すときは、予定を開いてチェックを外すか、削除します。
+        </div>
+      </div>
+      <div class="stage">
+        <div class="chrome">
+          <div class="bar">
+            <div>
+              <div class="brand">ABODY GYM OS</div>
+              <div class="title">11/3（火）</div>
+            </div>
+            <div class="pills"><span class="pill on">シフト</span></div>
+          </div>
+          <div class="body">
+            <div class="card">
+              <div class="row">
+                <strong>予定</strong>
+                <span class="btn ghost"><span class="pin">2</span>予定追加</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="row" style="margin-bottom:8px">
+                <strong>予定追加</strong>
+                <span class="tiny">閉じる</span>
+              </div>
+              <div class="label"><span class="pin">3</span>タイトル</div>
+              <div class="field">研修</div>
+              <div class="grid2" style="margin-top:8px">
+                <div>
+                  <div class="label">店舗</div>
+                  <div class="field">上野</div>
+                </div>
+                <div>
+                  <div class="label">トレーナー</div>
+                  <div class="field">トレーナーA</div>
+                </div>
+                <div>
+                  <div class="label">開始</div>
+                  <div class="field">14:00</div>
+                </div>
+                <div>
+                  <div class="label">終了</div>
+                  <div class="field">16:00</div>
+                </div>
+              </div>
+              <div class="check" style="margin-top:8px">
+                <span class="pin">4</span>
+                <span>予約カレンダーの枠を潰す</span>
+              </div>
+              <div class="btn" style="margin-top:10px; text-align:center"><span class="pin">5</span>保存</div>
+            </div>
+            <div class="box">
+              <strong>14:00〜16:00 / 研修</strong>
+              <div class="tiny">トレーナーA / 上野 / 予約を潰す</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lesson" id="stop-one">
+      <div>
+        <div class="kicker"><div class="num">4</div><h2>この会員だけ予約を止める</h2></div>
+        <p class="why">連続で取りすぎる人を、指定した日だけ止めます。他の会員の空き表示は変わりません。</p>
+        <ol class="steps">
+          <li><b>1</b><div>メニューの <strong>会員</strong> から、その人を開く。</div></li>
+          <li><b>2</b><div><strong>プラン・予約制限</strong> を開く。</div></li>
+          <li><b>3</b><div>「この人だけ翌日×」で、<strong>制限する日</strong> を選ぶ。</div></li>
+          <li><b>4</b><div><strong>この日を×</strong> を押す。</div></li>
+        </ol>
+        <div class="note ok">
+          <strong>戻すとき</strong>
+          同じ欄に出ている日付の <strong>解除</strong> を押します。その日は、また予約できるようになります。
+        </div>
+      </div>
+      <div class="stage">
+        <div class="chrome">
+          <div class="bar">
+            <div>
+              <div class="brand">ABODY GYM OS</div>
+              <div class="title">会員</div>
+            </div>
+            <div class="pills"><span class="pill on">会員</span></div>
+          </div>
+          <div class="body">
+            <div class="tabs">
+              <div class="tab">会員情報</div>
+              <div class="tab on"><span class="pin">2</span>プラン・予約制限</div>
+            </div>
+            <div class="card">
+              <div class="label">この人だけ翌日×</div>
+              <div class="tiny" style="margin-bottom:8px">指定日だけ、この会員の予約画面が×になります。</div>
+              <div class="grid2">
+                <div>
+                  <div class="label"><span class="pin">3</span>制限する日</div>
+                  <div class="field">2026-11-04</div>
+                </div>
+                <div>
+                  <div class="label">メモ</div>
+                  <div class="field">連続予約の調整</div>
+                </div>
+              </div>
+              <div class="btn" style="margin-top:10px; display:inline-block"><span class="pin">4</span>この日を×</div>
+              <div class="box" style="margin-top:10px; display:flex; justify-content:space-between; align-items:center">
+                <div><strong>2026-11-04</strong> <span class="tiny">連続予約の調整</span></div>
+                <span style="text-decoration:underline; font-size:12px">解除</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lesson" id="ticket">
+      <div>
+        <div class="kicker"><div class="num">5</div><h2>チケットを付与する</h2></div>
+        <p class="why">いつもの予約上限を超える分に使います。付与すると、会員の予約画面とマイページに残数が出ます。</p>
+        <ol class="steps">
+          <li><b>1</b><div><strong>会員</strong> から、その人を開く。</div></li>
+          <li><b>2</b><div><strong>プラン・予約制限</strong> を開く。</div></li>
+          <li><b>3</b><div>コマ数とメモを入れる。メモの初期値は「来月先行案内」です。</div></li>
+          <li><b>4</b><div><strong>付与</strong> を押す。上の「残チケット」が増えます。</div></li>
+        </ol>
+        <div class="note">
+          <strong>入会のプレゼントは、ここではありません。</strong>
+          会員の新規登録にある「入会特典チケット」で、なし / 4〜8コマを選びます。減らすときは、同じ画面の「1コマ減らす」です。
+        </div>
+      </div>
+      <div class="stage">
+        <div class="chrome">
+          <div class="bar">
+            <div>
+              <div class="brand">ABODY GYM OS</div>
+              <div class="title">会員</div>
+            </div>
+            <div class="pills"><span class="pill on">会員</span></div>
+          </div>
+          <div class="body">
+            <div class="tabs">
+              <div class="tab">会員情報</div>
+              <div class="tab on"><span class="pin">2</span>プラン・予約制限</div>
+            </div>
+            <div class="stat">残チケット: 2 コマ</div>
+            <div class="card">
+              <div class="label">チケット付与</div>
+              <div class="grid2" style="margin-top:8px">
+                <div>
+                  <div class="label"><span class="pin">3</span>コマ数</div>
+                  <div class="field">1</div>
+                </div>
+                <div>
+                  <div class="label">メモ</div>
+                  <div class="field">来月先行案内</div>
+                </div>
+              </div>
+              <div class="row" style="margin-top:10px; justify-content:flex-start">
+                <span class="btn"><span class="pin">4</span>付与</span>
+                <span class="btn ghost">1コマ減らす</span>
+              </div>
+              <div class="tiny" style="margin-top:8px">11/02 14:10 +1 来月先行案内</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      画面の名前とボタンは GYMOS の管理画面と同じです。日付・店舗・トレーナーは見本です。
+    </footer>
+  </div>
+</body>
+</html>

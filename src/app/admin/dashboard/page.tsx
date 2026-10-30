@@ -63,6 +63,7 @@ export default function AdminDashboardTopPage() {
     { href: "/admin/dashboard/members", label: "会員カルテ", icon: "🗂" },
     { href: "/admin/dashboard/today", label: "本日の予約", icon: "🧾" },
     { href: "/admin/dashboard/marketing", label: "広告レポート", icon: "📣" },
+    { href: "/admin/dashboard/manual", label: "使い方", icon: "📖" },
   ];
 
   return (
