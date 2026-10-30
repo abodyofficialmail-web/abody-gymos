@@ -15,6 +15,7 @@ import {
 } from "@/components/weight-progress/WeightProgressPanel";
 import { ReferrerMemberPicker, type ReferrerChoice } from "@/components/admin/ReferrerMemberPicker";
 import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
+import { MemberCoachingPanel } from "@/components/karte/MemberCoachingPanel";
 import type { MembershipPlan } from "@/lib/memberPlans";
 import {
   formatPreSessionSurveyDetailLines,
@@ -2154,6 +2155,25 @@ export function MemberDetailClient({
           </div>
         ) : null}
       </section>
+
+      <MemberCoachingPanel
+        memberId={memberId}
+        month={month}
+        bookingCount={rows === null ? null : monthSessionCount}
+        defaultTrainerId={trainerId}
+        notes={
+          notes === null
+            ? null
+            : sessionNotes.map((n) => ({
+                id: n.id,
+                date: n.date,
+                trainerName: n.trainer_name || "",
+                storeName: n.store_name || "",
+                content: n.content,
+                createdAt: n.created_at,
+              }))
+        }
+      />
 
       <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <KarteSwipePager labels={["目標ヒアリング", "目標写真"]}>
