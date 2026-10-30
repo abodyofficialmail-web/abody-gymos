@@ -8,6 +8,7 @@ import {
   membershipPlanLabel,
   type MembershipPlan,
 } from "@/lib/memberPlans";
+import type { BookingStopGlance } from "@/lib/booking/bookingStopGlance";
 import type { MemberBookingSnapshot } from "@/lib/booking/memberBookingRules";
 
 type BlockRow = { id: string; blocked_date: string; note: string | null; created_at: string };
@@ -21,11 +22,15 @@ export function MemberBookingPlanSection({
   memberId,
   initialPlan,
   initialTickets,
+  initialStopProposed = false,
+  onStopGlanceChange,
   embedded = false,
 }: {
   memberId: string;
   initialPlan: MembershipPlan | null;
   initialTickets: number;
+  initialStopProposed?: boolean;
+  onStopGlanceChange?: (glance: BookingStopGlance) => void;
   embedded?: boolean;
 }) {
   const [plan, setPlan] = useState<MembershipPlan | null>(initialPlan);
@@ -34,6 +39,8 @@ export function MemberBookingPlanSection({
   const [grantNote, setGrantNote] = useState("来月先行案内");
   const [blockDate, setBlockDate] = useState(tomorrowYmd);
   const [blockNote, setBlockNote] = useState("連続予約の調整");
+  const [stopProposed, setStopProposed] = useState(initialStopProposed);
+  const [stopReady, setStopReady] = useState(true);
   const [blocks, setBlocks] = useState<BlockRow[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [snapshot, setSnapshot] = useState<MemberBookingSnapshot | null>(null);
@@ -54,7 +61,16 @@ export function MemberBookingPlanSection({
     }
     setBlocks((json.blocks ?? []) as BlockRow[]);
     setLedger((json.tickets ?? []) as LedgerRow[]);
+    if (typeof json.booking_stop_proposed === "boolean") setStopProposed(json.booking_stop_proposed);
+    if (typeof json.booking_stop_ready === "boolean") setStopReady(json.booking_stop_ready);
   }, [memberId]);
+
+  useEffect(() => {
+    onStopGlanceChange?.({
+      proposed: stopProposed,
+      blockedDates: blocks.map((row) => String(row.blocked_date).slice(0, 10)),
+    });
+  }, [blocks, onStopGlanceChange, stopProposed]);
 
   useEffect(() => {
     void load().catch((e) => setErr(e instanceof Error ? e.message : "取得に失敗しました"));
@@ -106,6 +122,28 @@ export function MemberBookingPlanSection({
       await load();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "更新に失敗しました");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setProposed(next: boolean) {
+    if (saving || !stopReady) return;
+    setSaving(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/booking-rules`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ booking_stop_proposed: next }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? "保存に失敗しました");
+      setStopProposed(next);
+      setMsg(next ? "予約止め提案中にしました。カルテと予約に出ます" : "予約止め提案中をやめました");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "保存に失敗しました");
     } finally {
       setSaving(false);
     }
@@ -276,9 +314,51 @@ export function MemberBookingPlanSection({
       </div>
 
       <div className="space-y-2 border-t border-slate-100 pt-3">
+        <div className="text-xs font-semibold text-slate-700">予約を止めた方がいい人</div>
+        <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-slate-600">
+          <li>休みの日がなく、3日以上連続で予約している</li>
+          <li>先の枠を、持てる上限いっぱいまでいつも埋めている</li>
+          <li>同じ時間を毎日取って、他の会員がその時間に入れない</li>
+        </ul>
+        <div className="text-[11px] leading-relaxed text-slate-500">
+          週2〜3回で間に空いている日がある人は対象外です。今月の来店が少ない人は、予約を止めずに声をかけます。
+        </div>
+        {stopProposed ? (
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2">
+            <span className="text-sm font-bold text-rose-950">予約止め提案中</span>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void setProposed(false)}
+              className="text-xs font-semibold text-rose-900 underline disabled:opacity-60"
+            >
+              やめる
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={saving || !stopReady}
+            onClick={() => void setProposed(true)}
+            className="rounded-xl border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-900 disabled:opacity-60"
+          >
+            予約止め提案中にする
+          </button>
+        )}
+        <div className="text-[11px] leading-relaxed text-slate-500">
+          オンにすると、カルテの上と予約のその人の行に「予約止め提案中」と出ます。止める日は下で指定します。
+        </div>
+        {!stopReady ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+            予約止め提案中の保存準備ができていません。
+          </div>
+        ) : null}
+      </div>
+
+      <div className="space-y-2 border-t border-slate-100 pt-3">
         <div className="text-xs font-semibold text-slate-700">この人だけ翌日×</div>
         <div className="text-[11px] text-slate-500 leading-relaxed">
-          連続で取りすぎる人を指名すると、指定日の枠だけその会員の予約画面で×になります。他の会員の空き表示は変わりません。
+          指定した日だけ、この会員の予約画面が×になります。他の会員の空き表示は変わりません。日付を入れると、カルテと予約の印にその日も出ます。
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <label className="space-y-1">

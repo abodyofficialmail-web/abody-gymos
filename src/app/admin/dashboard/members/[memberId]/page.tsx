@@ -35,6 +35,7 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
   let hasMealPersonalOption: boolean | null = null;
   let membershipPlan: MembershipPlan | null = null;
   let bonusTicketKoma = 0;
+  let bookingStopProposed = false;
 
   {
     const { data: memberEmail, error: emailError } = await (supabase as any)
@@ -132,14 +133,22 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
   }
 
   {
-    const { data: planRow, error: planError } = await (supabase as any)
+    let planResult = await (supabase as any)
       .from("members")
-      .select("membership_plan, bonus_ticket_koma")
+      .select("membership_plan, bonus_ticket_koma, booking_stop_proposed")
       .eq("id", params.memberId)
       .maybeSingle();
-    if (!planError && planRow) {
-      membershipPlan = parseMembershipPlan(planRow.membership_plan);
-      bonusTicketKoma = Math.max(0, Number(planRow.bonus_ticket_koma ?? 0) || 0);
+    if (planResult.error && /booking_stop_proposed/i.test(String(planResult.error.message ?? ""))) {
+      planResult = await (supabase as any)
+        .from("members")
+        .select("membership_plan, bonus_ticket_koma")
+        .eq("id", params.memberId)
+        .maybeSingle();
+    }
+    if (!planResult.error && planResult.data) {
+      membershipPlan = parseMembershipPlan(planResult.data.membership_plan);
+      bonusTicketKoma = Math.max(0, Number(planResult.data.bonus_ticket_koma ?? 0) || 0);
+      bookingStopProposed = Boolean(planResult.data.booking_stop_proposed);
     }
   }
 
@@ -275,6 +284,7 @@ export default async function AdminDashboardMemberDetailPage({ params }: { param
           has_meal_personal: hasMealPersonalOption,
           membership_plan: membershipPlan,
           bonus_ticket_koma: bonusTicketKoma,
+          booking_stop_proposed: bookingStopProposed,
           line_user_id: (memberBase as any)?.line_user_id ?? null,
           line_channel_key: normalizeLineChannelKey((memberBase as any)?.line_channel_key),
           line_channel_label: lineChannelLabel(normalizeLineChannelKey((memberBase as any)?.line_channel_key)),

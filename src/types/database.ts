@@ -57,6 +57,7 @@ export interface Database {
           plan?: "4" | "8" | "unlimited" | null;
           membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
           bonus_ticket_koma?: number;
+          booking_stop_proposed?: boolean;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;
@@ -102,6 +103,7 @@ export interface Database {
           plan?: "4" | "8" | "unlimited" | null;
           membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
           bonus_ticket_koma?: number;
+          booking_stop_proposed?: boolean;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;
@@ -147,6 +149,7 @@ export interface Database {
           plan?: "4" | "8" | "unlimited" | null;
           membership_plan?: "unlimited_30" | "session_60" | "monthly_4" | "monthly_8" | "monthly_10" | "monthly_20" | "ticket" | "this_month_10" | null;
           bonus_ticket_koma?: number;
+          booking_stop_proposed?: boolean;
           weight_reminder_line_enabled?: boolean;
           trainer_visibility_pass_status?: string;
           trainer_visibility_stripe_customer_id?: string | null;

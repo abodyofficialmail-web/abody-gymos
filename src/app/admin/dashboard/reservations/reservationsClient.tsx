@@ -7,6 +7,8 @@ import {
   lowBookingMotivationBadgeClass,
   lowBookingMotivationBadgeLabel,
 } from "@/lib/lowBookingMotivation";
+import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark";
+import { bookingStopGlanceLabel } from "@/lib/booking/bookingStopGlance";
 import { formatPreSessionFormatBadge, type ReservationPreSessionHearing } from "@/lib/preSessionSurveyDisplay";
 
 const TZ = "Asia/Tokyo";
@@ -30,6 +32,8 @@ type MemberRow = {
   name: string | null;
   email?: string | null;
   line_user_id?: string | null;
+  booking_stop_proposed?: boolean;
+  booking_stop_dates?: string[];
 };
 
 type ReservationRow = {
@@ -44,6 +48,8 @@ type ReservationRow = {
   blocks_capacity?: boolean;
   member_code?: string;
   member_name?: string;
+  booking_stop_proposed?: boolean;
+  booking_stop_dates?: string[];
   session_type?: string | null;
   start_at: string;
   end_at: string;
@@ -103,6 +109,17 @@ type BodyPhotoStatusRow = {
   needs_photo: boolean;
   reason: "never" | "stale_month" | null;
 };
+
+function memberStopLabel(
+  member: { booking_stop_proposed?: boolean; booking_stop_dates?: string[] } | null | undefined
+) {
+  if (!member) return null;
+  return bookingStopGlanceLabel({
+    proposed: Boolean(member.booking_stop_proposed),
+    blockedDates: member.booking_stop_dates ?? [],
+    todayYmd: DateTime.now().setZone(TZ).toISODate() ?? "",
+  });
+}
 
 function bodyPhotoBadge(status: BodyPhotoStatusRow | undefined) {
   if (!status?.needs_photo) return null;
@@ -1114,6 +1131,13 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
               }
               const r = entry.r;
               const sa = reservationAccent(stores, r);
+              const stopLabel = r.member_id
+                ? bookingStopGlanceLabel({
+                    proposed: Boolean(r.booking_stop_proposed),
+                    blockedDates: r.booking_stop_dates ?? [],
+                    todayYmd: DateTime.now().setZone(TZ).toISODate() ?? "",
+                  })
+                : null;
               const candidates = r.trainer_candidates ?? dayCandidatesById?.get(r.id);
               const trainerText =
                 r.trainer_name ||
@@ -1130,6 +1154,11 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                         {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("HH:mm")}〜
                         {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
                       </div>
+                      {stopLabel ? (
+                        <div className="mt-1">
+                          <BookingStopGlanceMark label={stopLabel} />
+                        </div>
+                      ) : null}
                       <div className="mt-1 text-xs font-semibold text-slate-700">
                         {sessionTypeBadge(r.session_type)}
                         {!r.member_id ? (
@@ -1257,6 +1286,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                     <div className="max-h-[320px] overflow-auto">
                       {memberResults.map((m) => {
                         const active = selectedMember?.id === m.id;
+                        const stopLabel = memberStopLabel(m);
                         return (
                           <button
                             key={m.id}
@@ -1273,6 +1303,11 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                             <div className="text-sm font-semibold text-slate-900">
                               {m.member_code} {m.name ? `（${m.name}）` : ""}
                             </div>
+                            {stopLabel ? (
+                              <div className="mt-1">
+                                <BookingStopGlanceMark label={stopLabel} />
+                              </div>
+                            ) : null}
                             <div className="mt-1 text-xs text-slate-500 break-all">{m.email ?? ""}</div>
                           </button>
                         );
@@ -1298,8 +1333,13 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
               <div className="mt-4 space-y-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <div className="text-xs font-semibold text-slate-700">会員</div>
-                  <div className="text-sm text-slate-900">
-                    {selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-900">
+                    <span>
+                      {selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                    </span>
+                    {memberStopLabel(selectedMember) ? (
+                      <BookingStopGlanceMark label={memberStopLabel(selectedMember) ?? ""} />
+                    ) : null}
                   </div>
                 </div>
 
@@ -1429,8 +1469,13 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                             .toFormat("HH:mm")}`
                         : ""}
                     </div>
-                    <div>
-                      会員：{selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>
+                        会員：{selectedMember?.member_code} {selectedMember?.name ? `（${selectedMember.name}）` : ""}
+                      </span>
+                      {memberStopLabel(selectedMember) ? (
+                        <BookingStopGlanceMark label={memberStopLabel(selectedMember) ?? ""} />
+                      ) : null}
                     </div>
                     <div>セッション種別：{addSessionType === "online" ? "オンライン" : "店舗"}</div>
                   </div>

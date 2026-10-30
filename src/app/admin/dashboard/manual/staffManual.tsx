@@ -122,6 +122,7 @@ const rows = [
   ["出勤時間を入れる", "シフト → その日", "右上の ＋ → 保存"],
   ["30分休んで、その枠を止める", "予約 → その日", "＋ 休憩追加"],
   ["長い時間、誰も予約できないようにする", "シフト → その日", "予定追加 → 枠を潰す"],
+  ["連続で取りすぎる人に印を付ける", "会員 → プラン・予約制限", "予約止め提案中にする"],
   ["この会員だけ、その日を予約できないようにする", "会員 → プラン・予約制限", "この日を×"],
   ["チケットを足す", "会員 → プラン・予約制限", "付与"],
 ];
@@ -366,24 +367,30 @@ export function StaffManual() {
         id="stop-one"
         n={4}
         title="この会員だけ予約を止める"
-        why="連続で取りすぎる人を、指定した日だけ止めます。他の会員の空き表示は変わりません。"
+        why="連続で取りすぎる人だけ、指定した日を止めます。提案中にすると、カルテと予約に印が出ます。他の会員の空き表示は変わりません。"
         screen={
           <Mock title="会員" pills={[{ label: "会員", on: true }]}>
+            <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-950">
+              予約止め提案中 11/04
+            </div>
             <div className="grid grid-cols-2 gap-1.5">
               <div className="rounded-[10px] bg-slate-100 py-2 text-center text-xs font-bold text-slate-500">会員情報</div>
               <div className="rounded-[10px] border border-slate-200 bg-white py-2 text-center text-xs font-bold">
                 <Pin n={2} />プラン・予約制限
               </div>
             </div>
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-950">
+              <Pin n={3} />予約止め提案中
+            </div>
             <div className="rounded-2xl border border-slate-200 p-3">
               <div className="text-[11px] font-bold text-slate-700">この人だけ翌日×</div>
               <div className="mb-2 text-[11px] text-slate-500">指定日だけ、この会員の予約画面が×になります。</div>
               <div className="grid grid-cols-2 gap-2">
-                <Field label="制限する日" value="2026-11-04" pin={3} />
+                <Field label="制限する日" value="2026-11-04" pin={4} />
                 <Field label="メモ" value="連続予約の調整" />
               </div>
               <div className="mt-2.5 inline-block rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white">
-                <Pin n={4} />この日を×
+                <Pin n={5} />この日を×
               </div>
               <div className="mt-2.5 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
                 <div>
@@ -395,7 +402,18 @@ export function StaffManual() {
           </Mock>
         }
       >
-        <ol className="grid list-none gap-2.5 p-0">
+        <Note title="止めた方がいい人">
+          次のどれかに当てはまる人です。
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            <li>休みの日がなく、3日以上連続で予約している</li>
+            <li>先の枠を、持てる上限いっぱいまでいつも埋めている</li>
+            <li>同じ時間を毎日取って、他の会員がその時間に入れない</li>
+          </ul>
+          <div className="mt-1">
+            週2〜3回で間に空いている日がある人は対象外です。今月の来店が少ない人は、予約を止めずに声をかけます。
+          </div>
+        </Note>
+        <ol className="mt-3 grid list-none gap-2.5 p-0">
           <Step n={1}>
             メニューの <strong>会員</strong> から、その人を開く。
           </Step>
@@ -403,14 +421,17 @@ export function StaffManual() {
             <strong>プラン・予約制限</strong> を開く。
           </Step>
           <Step n={3}>
-            「この人だけ翌日×」で、<strong>制限する日</strong> を選ぶ。
+            <strong>予約止め提案中にする</strong> を押す。カルテの上と、予約のその人の行に赤い「予約止め提案中」が出ます。
           </Step>
           <Step n={4}>
-            <strong>この日を×</strong> を押す。
+            「この人だけ翌日×」で、<strong>制限する日</strong> を選ぶ。
+          </Step>
+          <Step n={5}>
+            <strong>この日を×</strong> を押す。印に、止める日も出ます。
           </Step>
         </ol>
         <Note tone="ok" title="戻すとき">
-          同じ欄に出ている日付の <strong>解除</strong> を押します。その日は、また予約できるようになります。
+          提案をやめるときは、同じ欄の <strong>やめる</strong> を押します。日付は、出ている行の <strong>解除</strong> を押すと、また予約できるようになります。
         </Note>
       </Lesson>
 

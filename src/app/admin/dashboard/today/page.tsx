@@ -2,7 +2,9 @@
 
 import { DateTime } from "luxon";
 import { useEffect, useMemo, useState } from "react";
+import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark";
 import { GymShell } from "@/components/gym/GymShell";
+import { bookingStopGlanceLabel } from "@/lib/booking/bookingStopGlance";
 import {
   isLowBookingMotivationNeed,
   lowBookingMotivationBadgeClass,
@@ -21,6 +23,8 @@ type ReservationRow = {
   member_id: string;
   member_code?: string;
   member_name?: string;
+  booking_stop_proposed?: boolean;
+  booking_stop_dates?: string[];
   session_type?: string | null;
   start_at: string;
   end_at: string;
@@ -138,13 +142,22 @@ export default function AdminDashboardTodayPage() {
         {rows === null ? <div className="text-sm text-slate-600">読み込み中…</div> : null}
         {rows !== null && todayRows.length === 0 ? <div className="text-sm text-slate-600">本日の予約はありません。</div> : null}
         <div className="grid gap-2">
-          {todayRows.map((r) => (
+          {todayRows.map((r) => {
+          const stopLabel = r.member_id
+            ? bookingStopGlanceLabel({
+                proposed: Boolean(r.booking_stop_proposed),
+                blockedDates: r.booking_stop_dates ?? [],
+                todayYmd: today,
+              })
+            : null;
+          return (
             <div key={r.id} className="rounded-xl bg-white p-6 shadow-md hover:shadow-lg border border-slate-200">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="text-sm font-bold text-slate-900">
                   {DateTime.fromISO(r.start_at).setZone(TZ).toFormat("HH:mm")}〜
                   {DateTime.fromISO(r.end_at).setZone(TZ).toFormat("HH:mm")}
                 </div>
+                {stopLabel ? <BookingStopGlanceMark label={stopLabel} /> : null}
                 {String(r.session_type ?? "store") !== "online"
                   ? bodyPhotoBadge(bodyPhotoStatusByMember[r.member_id])
                   : null}
@@ -178,7 +191,8 @@ export default function AdminDashboardTodayPage() {
                 </a>
               ) : null}
             </div>
-          ))}
+          );
+        })}
         </div>
       </div>
     </GymShell>

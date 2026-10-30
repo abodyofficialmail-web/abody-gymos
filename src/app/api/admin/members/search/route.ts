@@ -26,12 +26,12 @@ export async function GET(request: Request) {
 
     // 基本はアクティブ会員のみ（カルテ用途）
     // NOTE: or検索は supabase の `or()` 文字列で実装
-    let query = (supabase as any)
-      .from("members")
-      .select("id, member_code, name, email, line_user_id, is_active, store_id")
-      .eq("is_active", true)
-      .order("member_code", { ascending: true })
-      .limit(limit);
+    let includeProposed = true;
+    const runQuery = (withProposed: boolean) => {
+      const cols = "id, member_code, name, email, line_user_id, is_active, store_id" + (withProposed ? ", booking_stop_proposed" : "");
+      return (supabase as any).from("members").select(cols).eq("is_active", true).order("member_code", { ascending: true }).limit(limit);
+    };
+    let query = runQuery(includeProposed);
 
     const keyword = q.trim();
     if (keyword) {
@@ -40,9 +40,49 @@ export async function GET(request: Request) {
       query = query.or(`member_code.ilike."%${escaped}%",name.ilike."%${escaped}%",email.ilike."%${escaped}%"`);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+    if (error && includeProposed && /booking_stop_proposed|does not exist|schema cache/i.test(String(error.message ?? ""))) {
+      includeProposed = false;
+      query = runQuery(false);
+      const keywordRetry = q.trim();
+      if (keywordRetry) {
+        const escapedRetry = keywordRetry.replaceAll('"', '\\"');
+        query = query.or(`member_code.ilike."%${escapedRetry}%",name.ilike."%${escapedRetry}%",email.ilike."%${escapedRetry}%"`);
+      }
+      const second = await query;
+      data = second.data;
+      error = second.error;
+    }
     if (error) return jsonResponse({ error: "会員の検索に失敗しました", detail: error.message }, 500);
-    return jsonResponse({ members: data ?? [] }, 200);
+
+    const members = (data ?? []) as Array<{ id: string; booking_stop_proposed?: boolean | null }>;
+    const datesByMember = new Map<string, string[]>();
+    const memberIds = members.map((m) => m.id).filter(Boolean);
+    if (memberIds.length > 0) {
+      const todayYmd = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
+      const blocks = await (supabase as any)
+        .from("member_booking_date_blocks")
+        .select("member_id, blocked_date")
+        .in("member_id", memberIds)
+        .gte("blocked_date", todayYmd);
+      if (!blocks.error) {
+        for (const row of blocks.data ?? []) {
+          const memberId = String(row.member_id ?? "");
+          const ymd = String(row.blocked_date ?? "").slice(0, 10);
+          if (!memberId || !ymd) continue;
+          const list = datesByMember.get(memberId) ?? [];
+          list.push(ymd);
+          datesByMember.set(memberId, list);
+        }
+      }
+    }
+    return jsonResponse({
+      members: members.map((m) => ({
+        ...m,
+        booking_stop_proposed: Boolean(m.booking_stop_proposed),
+        booking_stop_dates: datesByMember.get(m.id) ?? [],
+      })),
+    }, 200);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "会員検索でエラーが発生しました", detail: message }, 500);

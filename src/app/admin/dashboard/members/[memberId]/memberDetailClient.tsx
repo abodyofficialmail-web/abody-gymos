@@ -14,7 +14,9 @@ import {
   type WeightProgressPanelData,
 } from "@/components/weight-progress/WeightProgressPanel";
 import { ReferrerMemberPicker, type ReferrerChoice } from "@/components/admin/ReferrerMemberPicker";
+import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark";
 import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
+import { bookingStopGlanceLabel, type BookingStopGlance } from "@/lib/booking/bookingStopGlance";
 import { MemberCoachingPanel } from "@/components/karte/MemberCoachingPanel";
 import type { MembershipPlan } from "@/lib/memberPlans";
 import {
@@ -291,6 +293,7 @@ export function MemberDetailClient({
     has_meal_personal?: boolean | null;
     membership_plan?: MembershipPlan | null;
     bonus_ticket_koma?: number;
+    booking_stop_proposed?: boolean;
     line_user_id: string | null;
     line_channel_key?: string | null;
     line_channel_label?: string | null;
@@ -311,6 +314,14 @@ export function MemberDetailClient({
   const month = useMemo(() => DateTime.now().setZone(TZ).toFormat("yyyy-MM"), []);
   const monthLabel = useMemo(() => DateTime.now().setZone(TZ).setLocale("ja").toFormat("M月"), []);
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
+  const [stopGlance, setStopGlance] = useState<BookingStopGlance>({
+    proposed: Boolean(member.booking_stop_proposed),
+    blockedDates: [],
+  });
+  const onStopGlanceChange = useCallback((glance: BookingStopGlance) => {
+    setStopGlance(glance);
+  }, []);
+  const stopGlanceLabel = bookingStopGlanceLabel({ ...stopGlance, todayYmd });
   const [membershipStatus, setMembershipStatus] = useState<MembershipStatus>(() =>
     resolveMembershipStatus(member.membership_status, member.is_active)
   );
@@ -1181,6 +1192,11 @@ export function MemberDetailClient({
 
       {/* 会員基本情報 / プラン・予約制限 */}
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        {stopGlanceLabel ? (
+          <div className="mb-3">
+            <BookingStopGlanceMark label={stopGlanceLabel} prominent />
+          </div>
+        ) : null}
         <KarteSwipePager labels={["会員情報", "プラン・予約制限"]}>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1278,6 +1294,8 @@ export function MemberDetailClient({
             memberId={memberId}
             initialPlan={member.membership_plan ?? null}
             initialTickets={member.bonus_ticket_koma ?? 0}
+            initialStopProposed={Boolean(member.booking_stop_proposed)}
+            onStopGlanceChange={onStopGlanceChange}
             embedded
           />
         </KarteSwipePager>

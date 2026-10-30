@@ -11,9 +11,14 @@ export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
 
-const patchSchema = z.object({
-  membership_plan: z.union([z.enum(MEMBERSHIP_PLANS), z.null()]).optional(),
-});
+const patchSchema = z
+  .object({
+    membership_plan: z.union([z.enum(MEMBERSHIP_PLANS), z.null()]).optional(),
+    booking_stop_proposed: z.boolean().optional(),
+  })
+  .refine((data) => data.membership_plan !== undefined || data.booking_stop_proposed !== undefined, {
+    message: "更新項目がありません",
+  });
 
 export async function GET(_request: Request, ctx: { params: { memberId: string } }) {
   try {
@@ -31,12 +36,22 @@ export async function GET(_request: Request, ctx: { params: { memberId: string }
       .eq("member_id", ctx.params.memberId)
       .order("created_at", { ascending: false })
       .limit(20);
+    const proposed = await (supabase as any)
+      .from("members")
+      .select("booking_stop_proposed")
+      .eq("id", ctx.params.memberId)
+      .maybeSingle();
+    const proposedMissing = Boolean(
+      proposed.error && /booking_stop_proposed|does not exist|schema cache/i.test(String(proposed.error.message ?? ""))
+    );
 
     return jsonResponse({
       schema_ready: loaded.schemaReady,
       snapshot: snapshotFromContext(loaded, nowIso),
       blocks: blocks.error ? [] : blocks.data ?? [],
       tickets: ledger.error ? [] : ledger.data ?? [],
+      booking_stop_proposed: proposedMissing ? false : Boolean(proposed.data?.booking_stop_proposed),
+      booking_stop_ready: !proposedMissing,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -48,20 +63,22 @@ export async function PATCH(request: Request, ctx: { params: { memberId: string 
   try {
     const parsed = patchSchema.safeParse(await request.json().catch(() => ({})));
     if (!parsed.success) return jsonResponse({ error: "リクエストが不正です" }, 400);
-    if (parsed.data.membership_plan === undefined) {
-      return jsonResponse({ error: "更新項目がありません" }, 400);
-    }
 
     const supabase = createSupabaseServiceClient();
-    const { error } = await (supabase as any)
-      .from("members")
-      .update({
-        membership_plan: parsed.data.membership_plan,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", ctx.params.memberId);
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (parsed.data.membership_plan !== undefined) update.membership_plan = parsed.data.membership_plan;
+    if (parsed.data.booking_stop_proposed !== undefined) {
+      update.booking_stop_proposed = parsed.data.booking_stop_proposed;
+    }
+    const { error } = await (supabase as any).from("members").update(update).eq("id", ctx.params.memberId);
     if (error) {
       const msg = String(error.message ?? "");
+      if (/booking_stop_proposed/i.test(msg)) {
+        return jsonResponse(
+          { error: "予約止め提案中の保存準備ができていません（DBマイグレーション未適用の可能性）", detail: error.message },
+          500
+        );
+      }
       if (/membership_plan|does not exist|schema cache/i.test(msg)) {
         return jsonResponse(
           { error: "プラン保存の準備ができていません（DBマイグレーション未適用の可能性）", detail: error.message },
@@ -70,7 +87,14 @@ export async function PATCH(request: Request, ctx: { params: { memberId: string 
       }
       return jsonResponse({ error: "更新に失敗しました", detail: error.message }, 500);
     }
-    return jsonResponse({ ok: true, membership_plan: parsed.data.membership_plan }, 200);
+    return jsonResponse(
+      {
+        ok: true,
+        membership_plan: parsed.data.membership_plan,
+        booking_stop_proposed: parsed.data.booking_stop_proposed,
+      },
+      200
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "更新中にエラーが発生しました", detail: message }, 500);

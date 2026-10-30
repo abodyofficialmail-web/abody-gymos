@@ -283,6 +283,18 @@ const getQuerySchema = z.object({
     .transform((v) => v === "1" || v === "true"),
 });
 
+async function loadMembersForReservationList(supabase: SupabaseClient<Database>, memberIds: string[]) {
+  if (memberIds.length === 0) return { data: [] as any[], error: null };
+  const first = await (supabase as any)
+    .from("members")
+    .select("id, member_code, name, booking_stop_proposed")
+    .in("id", memberIds);
+  if (first.error && /booking_stop_proposed|does not exist|schema cache/i.test(String(first.error.message ?? ""))) {
+    return (supabase as any).from("members").select("id, member_code, name").in("id", memberIds);
+  }
+  return first;
+}
+
 /** reservations はスカラーのみ取得し、店舗・トレーナー・会員名は別クエリで付与（PostgREST の embed 関係エラーを避ける） */
 async function enrichReservationRowsFromScalars(
   supabase: SupabaseClient<Database>,
@@ -304,26 +316,47 @@ async function enrichReservationRowsFromScalars(
   const trainerIds = Array.from(new Set(rows.map((r) => r.trainer_id).filter(Boolean))) as string[];
   const memberIds = Array.from(new Set(rows.map((r) => r.member_id).filter(Boolean))) as string[];
 
-  const [storesRes, trainersRes, membersRes] = await Promise.all([
+  const todayYmd = DateTime.now().setZone("Asia/Tokyo").toISODate() ?? "";
+  const [storesRes, trainersRes, membersRes, blocksRes] = await Promise.all([
     storeIds.length
       ? (supabase as any).from("stores").select("id, name").in("id", storeIds)
       : Promise.resolve({ data: [] as any[], error: null }),
     trainerIds.length
       ? (supabase as any).from("trainers").select("id, display_name").in("id", trainerIds)
       : Promise.resolve({ data: [] as any[], error: null }),
+    loadMembersForReservationList(supabase, memberIds),
     memberIds.length
-      ? (supabase as any).from("members").select("id, member_code, name").in("id", memberIds)
+      ? (supabase as any)
+          .from("member_booking_date_blocks")
+          .select("member_id, blocked_date")
+          .in("member_id", memberIds)
+          .gte("blocked_date", todayYmd)
       : Promise.resolve({ data: [] as any[], error: null }),
   ]);
 
   const storeById = new Map<string, string>((storesRes.data ?? []).map((s: any) => [s.id, String(s.name ?? "")]));
   const trainerById = new Map<string, string>((trainersRes.data ?? []).map((t: any) => [t.id, String(t.display_name ?? "")]));
-  const memberById = new Map<string, { member_code: string; name: string }>(
+  const memberById = new Map<string, { member_code: string; name: string; booking_stop_proposed: boolean }>(
     (membersRes.data ?? []).map((m: any) => [
       m.id,
-      { member_code: String(m.member_code ?? ""), name: String(m.name ?? "") },
+      {
+        member_code: String(m.member_code ?? ""),
+        name: String(m.name ?? ""),
+        booking_stop_proposed: Boolean(m.booking_stop_proposed),
+      },
     ])
   );
+  const stopDatesByMember = new Map<string, string[]>();
+  if (!blocksRes.error) {
+    for (const row of blocksRes.data ?? []) {
+      const memberId = String(row.member_id ?? "");
+      const ymd = String(row.blocked_date ?? "").slice(0, 10);
+      if (!memberId || !ymd) continue;
+      const list = stopDatesByMember.get(memberId) ?? [];
+      list.push(ymd);
+      stopDatesByMember.set(memberId, list);
+    }
+  }
 
   return rows.map((r) => {
     const mem = r.member_id ? memberById.get(r.member_id) : undefined;
@@ -343,6 +376,8 @@ async function enrichReservationRowsFromScalars(
       trainer_name: r.trainer_id ? trainerById.get(r.trainer_id) ?? "" : "",
       member_code: mem?.member_code ?? "",
       member_name: mem?.name ?? "",
+      booking_stop_proposed: mem?.booking_stop_proposed ?? false,
+      booking_stop_dates: r.member_id ? stopDatesByMember.get(r.member_id) ?? [] : [],
       member: mem && r.member_id ? { id: r.member_id, name: mem.name } : null,
     };
   });
