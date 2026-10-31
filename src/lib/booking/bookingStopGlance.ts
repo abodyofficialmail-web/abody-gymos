@@ -10,6 +10,13 @@ function komaForVisit(startAtIso: string, endAtIso: string, zone: string): numbe
 
 export const BOOKING_STOP_LAST_MONTH_VISITS = 12;
 export const BOOKING_STOP_FIRST_WEEK_KOMA = 4;
+/** 先月多かった人を止めるのは当月の頭まで。6日以降は先月の回数では止め候補にしない。 */
+export const BOOKING_STOP_LAST_MONTH_ACT_THROUGH_DAY = 5;
+
+export function lastMonthStopCandidateOpen(todayYmd: string, zone = "Asia/Tokyo"): boolean {
+  const day = DateTime.fromISO(todayYmd, { zone }).day;
+  return day >= 1 && day <= BOOKING_STOP_LAST_MONTH_ACT_THROUGH_DAY;
+}
 
 export type BookingStopGlance = {
   proposed: boolean;
@@ -59,11 +66,15 @@ export function summarizeBookingStopCounts(params: {
 }
 
 export function bookingStopCountReasons(input: {
+  todayYmd: string;
   lastMonthVisits?: number | null;
   firstWeekKoma?: number | null;
 }): string[] {
   const reasons: string[] = [];
-  if ((input.lastMonthVisits ?? 0) >= BOOKING_STOP_LAST_MONTH_VISITS) {
+  if (
+    lastMonthStopCandidateOpen(input.todayYmd) &&
+    (input.lastMonthVisits ?? 0) >= BOOKING_STOP_LAST_MONTH_VISITS
+  ) {
     reasons.push(`先月${input.lastMonthVisits}回`);
   }
   if ((input.firstWeekKoma ?? 0) >= BOOKING_STOP_FIRST_WEEK_KOMA) {

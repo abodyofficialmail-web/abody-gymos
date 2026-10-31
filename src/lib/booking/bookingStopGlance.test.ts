@@ -56,8 +56,35 @@ describe("bookingStopGlanceLabel", () => {
     });
     assert.deepEqual(counts, { lastMonthVisits: 12, firstWeekKoma: 4 });
     assert.equal(
-      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-11-10", ...counts }),
+      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-11-05", ...counts }),
       "止め候補 先月12回・1週目4コマ"
+    );
+    assert.equal(
+      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-11-10", ...counts }),
+      "止め候補 1週目4コマ"
+    );
+  });
+
+  it("drops last month after the 5th, including month-end", () => {
+    const september = Array.from({ length: 12 }, (_, i) => ({
+      start_at: `2026-09-${String(i + 1).padStart(2, "0")}T10:00:00+09:00`,
+      end_at: `2026-09-${String(i + 1).padStart(2, "0")}T10:30:00+09:00`,
+    }));
+    const onThe31st = summarizeBookingStopCounts({ todayYmd: "2026-10-31", reservations: september });
+    assert.equal(onThe31st.lastMonthVisits, 12);
+    assert.equal(
+      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-10-31", ...onThe31st }),
+      null
+    );
+    assert.equal(
+      bookingStopGlanceLabel({
+        proposed: false,
+        blockedDates: [],
+        todayYmd: "2026-11-06",
+        lastMonthVisits: 14,
+        firstWeekKoma: 0,
+      }),
+      null
     );
   });
 

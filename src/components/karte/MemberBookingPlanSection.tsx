@@ -8,7 +8,13 @@ import {
   membershipPlanLabel,
   type MembershipPlan,
 } from "@/lib/memberPlans";
-import type { BookingStopGlance } from "@/lib/booking/bookingStopGlance";
+import {
+  BOOKING_STOP_FIRST_WEEK_KOMA,
+  BOOKING_STOP_LAST_MONTH_ACT_THROUGH_DAY,
+  BOOKING_STOP_LAST_MONTH_VISITS,
+  lastMonthStopCandidateOpen,
+  type BookingStopGlance,
+} from "@/lib/booking/bookingStopGlance";
 import type { MemberBookingSnapshot } from "@/lib/booking/memberBookingRules";
 
 type BlockRow = { id: string; blocked_date: string; note: string | null; created_at: string };
@@ -322,17 +328,24 @@ export function MemberBookingPlanSection({
         <div className="grid gap-1 text-[11px] leading-relaxed text-slate-700">
           <div>
             先月{" "}
-            <span className={(lastMonthVisits ?? 0) >= 12 ? "font-bold text-rose-800" : "font-semibold"}>
+            <span
+              className={
+                lastMonthStopCandidateOpen(DateTime.now().setZone("Asia/Tokyo").toISODate() ?? "") &&
+                (lastMonthVisits ?? 0) >= BOOKING_STOP_LAST_MONTH_VISITS
+                  ? "font-bold text-rose-800"
+                  : "font-semibold"
+              }
+            >
               {lastMonthVisits == null ? "…" : `${lastMonthVisits}回`}
             </span>
-            （12回以上で止め候補）
+            （{BOOKING_STOP_LAST_MONTH_VISITS}回以上なら、今月{BOOKING_STOP_LAST_MONTH_ACT_THROUGH_DAY}日までの止め候補）
           </div>
           <div>
             今月1日〜7日{" "}
-            <span className={(firstWeekKoma ?? 0) >= 4 ? "font-bold text-rose-800" : "font-semibold"}>
+            <span className={(firstWeekKoma ?? 0) >= BOOKING_STOP_FIRST_WEEK_KOMA ? "font-bold text-rose-800" : "font-semibold"}>
               {firstWeekKoma == null ? "…" : `${firstWeekKoma}コマ`}
             </span>
-            （4コマ以上で止め候補）
+            （{BOOKING_STOP_FIRST_WEEK_KOMA}コマ以上で止め候補）
           </div>
         </div>
         <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-slate-600">
