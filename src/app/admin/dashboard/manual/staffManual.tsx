@@ -367,11 +367,11 @@ export function StaffManual() {
         id="stop-one"
         n={4}
         title="この会員だけ予約を止める"
-        why="連続で取りすぎる人だけ、指定した日を止めます。提案中にすると、カルテと予約に印が出ます。他の会員の空き表示は変わりません。"
+        why="連続で取りすぎる人だけ、指定した日を止めます。回数の基準に達すると印が出ます。他の会員の空き表示は変わりません。"
         screen={
           <Mock title="会員" pills={[{ label: "会員", on: true }]}>
             <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-950">
-              予約止め提案中 11/04
+              止め候補 先月12回・1週目4コマ
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               <div className="rounded-[10px] bg-slate-100 py-2 text-center text-xs font-bold text-slate-500">会員情報</div>
@@ -402,16 +402,32 @@ export function StaffManual() {
           </Mock>
         }
       >
-        <Note title="止めた方がいい人">
-          次のどれかに当てはまる人です。
+        <Note title="印の見方">
+          カルテの一番上と、予約のその人の行に出ます。プラン・予約制限には、先月の回数と今月1日〜7日のコマ数も出ます。
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            <li>
+              <strong>止め候補 先月12回</strong>：先月の予約が12回以上。1件を1回と数えます。60分でも1回です。
+            </li>
+            <li>
+              <strong>止め候補 1週目4コマ</strong>：今月1日〜7日が4コマ以上。30分が1コマ、60分が2コマです。
+            </li>
+            <li>
+              <strong>予約止め提案中</strong>：スタッフが「予約止め提案中にする」を押した状態です。
+            </li>
+            <li>
+              <strong>予約止め中 11/04</strong>：その日を×にして、この会員だけ予約できない日です。
+            </li>
+          </ul>
+          <div className="mt-1">12回未満、4コマ未満の人には、回数の印は出ません。数字が赤ければ基準以上です。</div>
+        </Note>
+        <Note title="止め方">
+          印が出た人、または次のどれかに当てはまる人を止めます。
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
             <li>休みの日がなく、3日以上連続で予約している</li>
             <li>先の枠を、持てる上限いっぱいまでいつも埋めている</li>
             <li>同じ時間を毎日取って、他の会員がその時間に入れない</li>
           </ul>
-          <div className="mt-1">
-            週2〜3回で間に空いている日がある人は対象外です。今月の来店が少ない人は、予約を止めずに声をかけます。
-          </div>
+          <div className="mt-1">週2〜3回で間に空いている日がある人は対象外です。今月の来店が少ない人は、予約を止めずに声をかけます。</div>
         </Note>
         <ol className="mt-3 grid list-none gap-2.5 p-0">
           <Step n={1}>

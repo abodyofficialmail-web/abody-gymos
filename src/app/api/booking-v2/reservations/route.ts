@@ -26,6 +26,7 @@ import {
   evaluateLoadedMemberBooking,
   loadMemberBookingRuleContext,
 } from "@/lib/booking/memberBookingRulesDb";
+import { bookingStopCountQueryRange, summarizeBookingStopCounts } from "@/lib/booking/bookingStopGlance";
 import { isOctoberEarlyAccessCode, isOctoberEarlyAccessDate } from "@/lib/booking/octoberEarlyAccess";
 import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
 import { fetchPreSessionHearingByReservationIds } from "@/lib/preSessionSurveyForKarte";
@@ -317,7 +318,8 @@ async function enrichReservationRowsFromScalars(
   const memberIds = Array.from(new Set(rows.map((r) => r.member_id).filter(Boolean))) as string[];
 
   const todayYmd = DateTime.now().setZone("Asia/Tokyo").toISODate() ?? "";
-  const [storesRes, trainersRes, membersRes, blocksRes] = await Promise.all([
+  const countRange = bookingStopCountQueryRange(todayYmd);
+  const [storesRes, trainersRes, membersRes, blocksRes, countRes] = await Promise.all([
     storeIds.length
       ? (supabase as any).from("stores").select("id, name").in("id", storeIds)
       : Promise.resolve({ data: [] as any[], error: null }),
@@ -331,6 +333,15 @@ async function enrichReservationRowsFromScalars(
           .select("member_id, blocked_date")
           .in("member_id", memberIds)
           .gte("blocked_date", todayYmd)
+      : Promise.resolve({ data: [] as any[], error: null }),
+    memberIds.length
+      ? (supabase as any)
+          .from("reservations")
+          .select("member_id, start_at, end_at, status")
+          .in("member_id", memberIds)
+          .neq("status", "cancelled")
+          .gte("start_at", countRange.queryStartIso)
+          .lt("start_at", countRange.queryEndIso)
       : Promise.resolve({ data: [] as any[], error: null }),
   ]);
 
@@ -346,6 +357,20 @@ async function enrichReservationRowsFromScalars(
       },
     ])
   );
+  const countsByMember = new Map<string, { lastMonthVisits: number; firstWeekKoma: number }>();
+  if (!countRes.error) {
+    const byMember = new Map<string, Array<{ start_at: string; end_at: string; status?: string | null }>>();
+    for (const row of countRes.data ?? []) {
+      const memberId = String(row.member_id ?? "");
+      if (!memberId) continue;
+      const list = byMember.get(memberId) ?? [];
+      list.push(row);
+      byMember.set(memberId, list);
+    }
+    for (const [memberId, list] of byMember) {
+      countsByMember.set(memberId, summarizeBookingStopCounts({ reservations: list, todayYmd }));
+    }
+  }
   const stopDatesByMember = new Map<string, string[]>();
   if (!blocksRes.error) {
     for (const row of blocksRes.data ?? []) {
@@ -378,6 +403,8 @@ async function enrichReservationRowsFromScalars(
       member_name: mem?.name ?? "",
       booking_stop_proposed: mem?.booking_stop_proposed ?? false,
       booking_stop_dates: r.member_id ? stopDatesByMember.get(r.member_id) ?? [] : [],
+      booking_stop_last_month_visits: r.member_id ? countsByMember.get(r.member_id)?.lastMonthVisits ?? 0 : 0,
+      booking_stop_first_week_koma: r.member_id ? countsByMember.get(r.member_id)?.firstWeekKoma ?? 0 : 0,
       member: mem && r.member_id ? { id: r.member_id, name: mem.name } : null,
     };
   });

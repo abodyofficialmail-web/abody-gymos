@@ -34,6 +34,8 @@ type MemberRow = {
   line_user_id?: string | null;
   booking_stop_proposed?: boolean;
   booking_stop_dates?: string[];
+  booking_stop_last_month_visits?: number;
+  booking_stop_first_week_koma?: number;
 };
 
 type ReservationRow = {
@@ -50,6 +52,8 @@ type ReservationRow = {
   member_name?: string;
   booking_stop_proposed?: boolean;
   booking_stop_dates?: string[];
+  booking_stop_last_month_visits?: number;
+  booking_stop_first_week_koma?: number;
   session_type?: string | null;
   start_at: string;
   end_at: string;
@@ -111,12 +115,22 @@ type BodyPhotoStatusRow = {
 };
 
 function memberStopLabel(
-  member: { booking_stop_proposed?: boolean; booking_stop_dates?: string[] } | null | undefined
+  member:
+    | {
+        booking_stop_proposed?: boolean;
+        booking_stop_dates?: string[];
+        booking_stop_last_month_visits?: number;
+        booking_stop_first_week_koma?: number;
+      }
+    | null
+    | undefined
 ) {
   if (!member) return null;
   return bookingStopGlanceLabel({
     proposed: Boolean(member.booking_stop_proposed),
     blockedDates: member.booking_stop_dates ?? [],
+    lastMonthVisits: member.booking_stop_last_month_visits ?? 0,
+    firstWeekKoma: member.booking_stop_first_week_koma ?? 0,
     todayYmd: DateTime.now().setZone(TZ).toISODate() ?? "",
   });
 }
@@ -1131,13 +1145,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
               }
               const r = entry.r;
               const sa = reservationAccent(stores, r);
-              const stopLabel = r.member_id
-                ? bookingStopGlanceLabel({
-                    proposed: Boolean(r.booking_stop_proposed),
-                    blockedDates: r.booking_stop_dates ?? [],
-                    todayYmd: DateTime.now().setZone(TZ).toISODate() ?? "",
-                  })
-                : null;
+              const stopLabel = r.member_id ? memberStopLabel(r) : null;
               const candidates = r.trainer_candidates ?? dayCandidatesById?.get(r.id);
               const trainerText =
                 r.trainer_name ||

@@ -25,6 +25,8 @@ type ReservationRow = {
   member_name?: string;
   booking_stop_proposed?: boolean;
   booking_stop_dates?: string[];
+  booking_stop_last_month_visits?: number;
+  booking_stop_first_week_koma?: number;
   session_type?: string | null;
   start_at: string;
   end_at: string;
@@ -147,6 +149,8 @@ export default function AdminDashboardTodayPage() {
             ? bookingStopGlanceLabel({
                 proposed: Boolean(r.booking_stop_proposed),
                 blockedDates: r.booking_stop_dates ?? [],
+                lastMonthVisits: r.booking_stop_last_month_visits ?? 0,
+                firstWeekKoma: r.booking_stop_first_week_koma ?? 0,
                 todayYmd: today,
               })
             : null;

@@ -16,7 +16,7 @@ import {
 import { ReferrerMemberPicker, type ReferrerChoice } from "@/components/admin/ReferrerMemberPicker";
 import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark";
 import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
-import { bookingStopGlanceLabel, type BookingStopGlance } from "@/lib/booking/bookingStopGlance";
+import { bookingStopGlanceLabel, summarizeBookingStopCounts, type BookingStopGlance } from "@/lib/booking/bookingStopGlance";
 import { MemberCoachingPanel } from "@/components/karte/MemberCoachingPanel";
 import type { MembershipPlan } from "@/lib/memberPlans";
 import {
@@ -325,7 +325,6 @@ export function MemberDetailClient({
   const onStopGlanceChange = useCallback((glance: BookingStopGlance) => {
     setStopGlance(glance);
   }, []);
-  const stopGlanceLabel = bookingStopGlanceLabel({ ...stopGlance, todayYmd });
   const [membershipStatus, setMembershipStatus] = useState<MembershipStatus>(() =>
     resolveMembershipStatus(member.membership_status, member.is_active)
   );
@@ -705,6 +704,20 @@ export function MemberDetailClient({
     if (lastRows === null) return null;
     return lastRows.filter((r) => String(r.status ?? "") !== "cancelled").length;
   }, [lastRows]);
+  const stopCounts = useMemo(
+    () =>
+      summarizeBookingStopCounts({
+        reservations: [...(lastRows ?? []), ...(rows ?? [])],
+        todayYmd,
+      }),
+    [lastRows, rows, todayYmd]
+  );
+  const stopGlanceLabel = bookingStopGlanceLabel({
+    ...stopGlance,
+    todayYmd,
+    lastMonthVisits: lastRows === null ? null : stopCounts.lastMonthVisits,
+    firstWeekKoma: rows === null ? null : stopCounts.firstWeekKoma,
+  });
 
   const { hearingNotes, sessionNotes } = useMemo(() => splitGoalHearingNotes(notes), [notes]);
   const filteredSessionNotes = useMemo(() => {
@@ -1318,6 +1331,8 @@ export function MemberDetailClient({
             initialTickets={member.bonus_ticket_koma ?? 0}
             initialStopProposed={Boolean(member.booking_stop_proposed)}
             onStopGlanceChange={onStopGlanceChange}
+            lastMonthVisits={lastRows === null ? null : stopCounts.lastMonthVisits}
+            firstWeekKoma={rows === null ? null : stopCounts.firstWeekKoma}
             embedded
           />
         </KarteSwipePager>

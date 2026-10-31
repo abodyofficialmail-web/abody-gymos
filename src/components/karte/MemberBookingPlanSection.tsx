@@ -24,6 +24,8 @@ export function MemberBookingPlanSection({
   initialTickets,
   initialStopProposed = false,
   onStopGlanceChange,
+  lastMonthVisits = null,
+  firstWeekKoma = null,
   embedded = false,
 }: {
   memberId: string;
@@ -31,6 +33,8 @@ export function MemberBookingPlanSection({
   initialTickets: number;
   initialStopProposed?: boolean;
   onStopGlanceChange?: (glance: BookingStopGlance) => void;
+  lastMonthVisits?: number | null;
+  firstWeekKoma?: number | null;
   embedded?: boolean;
 }) {
   const [plan, setPlan] = useState<MembershipPlan | null>(initialPlan);
@@ -315,6 +319,22 @@ export function MemberBookingPlanSection({
 
       <div className="space-y-2 border-t border-slate-100 pt-3">
         <div className="text-xs font-semibold text-slate-700">予約を止めた方がいい人</div>
+        <div className="grid gap-1 text-[11px] leading-relaxed text-slate-700">
+          <div>
+            先月{" "}
+            <span className={(lastMonthVisits ?? 0) >= 12 ? "font-bold text-rose-800" : "font-semibold"}>
+              {lastMonthVisits == null ? "…" : `${lastMonthVisits}回`}
+            </span>
+            （12回以上で止め候補）
+          </div>
+          <div>
+            今月1日〜7日{" "}
+            <span className={(firstWeekKoma ?? 0) >= 4 ? "font-bold text-rose-800" : "font-semibold"}>
+              {firstWeekKoma == null ? "…" : `${firstWeekKoma}コマ`}
+            </span>
+            （4コマ以上で止め候補）
+          </div>
+        </div>
         <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-slate-600">
           <li>休みの日がなく、3日以上連続で予約している</li>
           <li>先の枠を、持てる上限いっぱいまでいつも埋めている</li>

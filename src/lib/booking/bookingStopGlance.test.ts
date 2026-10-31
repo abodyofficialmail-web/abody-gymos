@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bookingStopGlanceLabel } from "./bookingStopGlance.ts";
+import { bookingStopGlanceLabel, summarizeBookingStopCounts } from "./bookingStopGlance.ts";
 
 const today = "2026-11-01";
 
@@ -28,6 +28,57 @@ describe("bookingStopGlanceLabel", () => {
         todayYmd: today,
       }),
       "予約止め中 11/04・11/06"
+    );
+  });
+
+  it("flags last month visits and the first seven days by koma", () => {
+    const counts = summarizeBookingStopCounts({
+      todayYmd: "2026-11-10",
+      reservations: [
+        ...Array.from({ length: 12 }, (_, i) => ({
+          start_at: `2026-10-${String(i + 1).padStart(2, "0")}T10:00:00+09:00`,
+          end_at: `2026-10-${String(i + 1).padStart(2, "0")}T10:30:00+09:00`,
+        })),
+        {
+          start_at: "2026-11-02T10:00:00+09:00",
+          end_at: "2026-11-02T11:00:00+09:00",
+        },
+        {
+          start_at: "2026-11-03T10:00:00+09:00",
+          end_at: "2026-11-03T11:00:00+09:00",
+        },
+        {
+          start_at: "2026-11-08T10:00:00+09:00",
+          end_at: "2026-11-08T12:00:00+09:00",
+          status: "cancelled",
+        },
+      ],
+    });
+    assert.deepEqual(counts, { lastMonthVisits: 12, firstWeekKoma: 4 });
+    assert.equal(
+      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-11-10", ...counts }),
+      "止め候補 先月12回・1週目4コマ"
+    );
+  });
+
+  it("keeps people under the count lines unmarked", () => {
+    const counts = summarizeBookingStopCounts({
+      todayYmd: "2026-11-10",
+      reservations: [
+        {
+          start_at: "2026-10-02T10:00:00+09:00",
+          end_at: "2026-10-02T11:00:00+09:00",
+        },
+        {
+          start_at: "2026-11-02T10:00:00+09:00",
+          end_at: "2026-11-02T11:00:00+09:00",
+        },
+      ],
+    });
+    assert.deepEqual(counts, { lastMonthVisits: 1, firstWeekKoma: 2 });
+    assert.equal(
+      bookingStopGlanceLabel({ proposed: false, blockedDates: [], todayYmd: "2026-11-10", ...counts }),
+      null
     );
   });
 
