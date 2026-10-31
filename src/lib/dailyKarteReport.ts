@@ -62,6 +62,64 @@ export function isKarteSent(
   });
 }
 
+export type ShiftCover = {
+  storeId: string;
+  trainerId: string;
+  startMin: number;
+  endMin: number;
+};
+
+export function localTimeToMinutes(value: string): number {
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(value ?? "").trim());
+  if (!match) return NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function tokyoMinutes(iso: string): number {
+  const dt = DateTime.fromISO(iso).setZone(TZ);
+  if (!dt.isValid) return NaN;
+  return dt.hour * 60 + dt.minute;
+}
+
+/** 休憩ではないシフトが、セッションの開始から終了まで覆っているトレーナー */
+export function coveringTrainerIds(
+  shifts: ShiftCover[],
+  storeId: string,
+  startMin: number,
+  endMin: number
+): string[] {
+  if (!Number.isFinite(startMin) || !Number.isFinite(endMin) || endMin <= startMin) return [];
+  const ids = new Set<string>();
+  for (const shift of shifts) {
+    if (shift.storeId !== storeId || !shift.trainerId) continue;
+    if (!Number.isFinite(shift.startMin) || !Number.isFinite(shift.endMin)) continue;
+    if (shift.startMin <= startMin && shift.endMin >= endMin) ids.add(shift.trainerId);
+  }
+  return Array.from(ids);
+}
+
+/**
+ * 予約に担当が無いときは、その時間の出勤者を使う。
+ * 複数人のときはカルテを書いた人、それも無ければ出勤者全員を返す。
+ */
+export function resolveSessionTrainer(input: {
+  reservationTrainerId: string | null;
+  noteTrainerIds: string[];
+  coveringTrainerIds: string[];
+}): string[] {
+  if (input.reservationTrainerId) return [input.reservationTrainerId];
+  const cover = Array.from(new Set(input.coveringTrainerIds.filter(Boolean)));
+  const noteIds = Array.from(new Set(input.noteTrainerIds.filter(Boolean)));
+  if (cover.length === 1) return cover;
+  if (cover.length > 1) {
+    const wrote = noteIds.filter((id) => cover.includes(id));
+    if (wrote.length === 1) return wrote;
+    return cover.sort();
+  }
+  if (noteIds.length === 1) return noteIds;
+  return [];
+}
+
 /** 当日は終了済みだけ。過去日はその日の予約をすべて数える。 */
 export function sessionIsReportable(
   session: { startAt: string; endAt: string },
@@ -139,7 +197,7 @@ export function formatDailyKarteReport(input: {
       const sentN = group.filter((s) => s.sent).length;
       total += group.length;
       sent += sentN;
-      lines.push(`${name}　${group.length}セッション　カルテ送信 ${formatRate(sentN, group.length)}`);
+      lines.push(`${name}　${group.length}件　送信${formatRate(sentN, group.length)}`);
       const missing = group.filter((s) => !s.sent).sort((a, b) => a.startAt.localeCompare(b.startAt));
       if (missing.length > 0) {
         lines.push(`未送信 ${missing.length}件`);
@@ -152,9 +210,9 @@ export function formatDailyKarteReport(input: {
   }
 
   if (total === 0) {
-    lines.push("合計　0セッション");
+    lines.push("合計　0件");
   } else {
-    lines.push(`合計　${total}セッション　カルテ送信 ${formatRate(sent, total)}`);
+    lines.push(`合計　${total}件　送信${formatRate(sent, total)}`);
     const unsent = total - sent;
     if (unsent > 0) lines.push(`未送信 ${unsent}件`);
   }
@@ -209,7 +267,7 @@ export async function loadDailyKarteReport(
   const dayStart = DateTime.fromISO(dateYmd, { zone: TZ }).startOf("day").toUTC();
   const dayEnd = dayStart.plus({ days: 1 });
 
-  const [storeRows, reservationRows, noteRows, recipient] = await Promise.all([
+  const [storeRows, reservationRows, noteRows, shiftRows, recipient] = await Promise.all([
     supabase.from("stores").select("id,name,is_active").order("name", { ascending: true }),
     fetchPages((from, to) =>
       supabase
@@ -226,6 +284,15 @@ export async function loadDailyKarteReport(
         .from("client_notes")
         .select("id, member_id, trainer_id, date")
         .eq("date", dateYmd)
+        .order("id", { ascending: true })
+        .range(from, to)
+    ),
+    fetchPages((from, to) =>
+      supabase
+        .from("trainer_shifts")
+        .select("id, store_id, trainer_id, start_local, end_local, is_break, status")
+        .eq("shift_date", dateYmd)
+        .neq("status", "draft")
         .order("id", { ascending: true })
         .range(from, to)
     ),
@@ -257,9 +324,39 @@ export async function loadDailyKarteReport(
     }
   }
 
+  const notes: KarteNote[] = (noteRows as any[])
+    .filter((row) => String(row.date ?? "") === dateYmd)
+    .map((row) => ({
+      memberId: String(row.member_id ?? ""),
+      trainerId: row.trainer_id ? String(row.trainer_id) : null,
+    }));
+  const noteTrainersByMember = new Map<string, string[]>();
+  for (const note of notes) {
+    if (!note.trainerId) continue;
+    const list = noteTrainersByMember.get(note.memberId) ?? [];
+    list.push(note.trainerId);
+    noteTrainersByMember.set(note.memberId, list);
+  }
+
+  const shifts: ShiftCover[] = (shiftRows as any[])
+    .filter((row) => !row.is_break)
+    .map((row) => ({
+      storeId: String(row.store_id ?? ""),
+      trainerId: String(row.trainer_id ?? ""),
+      startMin: localTimeToMinutes(String(row.start_local ?? "")),
+      endMin: localTimeToMinutes(String(row.end_local ?? "")),
+    }))
+    .filter((shift) => shift.storeId && shift.trainerId);
+
   const memberIds = Array.from(new Set(reservations.map((row) => String(row.member_id))));
   const trainerIds = Array.from(
-    new Set(reservations.map((row) => String(row.trainer_id ?? "")).filter(Boolean))
+    new Set(
+      [
+        ...reservations.map((row) => String(row.trainer_id ?? "")),
+        ...notes.map((note) => note.trainerId ?? ""),
+        ...shifts.map((shift) => shift.trainerId),
+      ].filter(Boolean)
+    )
   );
 
   const [memberRows, trainerRows] = await Promise.all([
@@ -294,26 +391,34 @@ export async function loadDailyKarteReport(
     trainerNameById.set(String(row.id), String(row.display_name ?? ""));
   }
 
-  const notes: KarteNote[] = (noteRows as any[])
-    .filter((row) => String(row.date ?? "") === dateYmd)
-    .map((row) => ({
-      memberId: String(row.member_id ?? ""),
-      trainerId: row.trainer_id ? String(row.trainer_id) : null,
-    }));
-
   const sessions: DailyKarteSession[] = reservations.map((row) => {
     const memberId = String(row.member_id);
-    const trainerId = row.trainer_id ? String(row.trainer_id) : null;
+    const storeId = String(row.store_id);
+    const startMin = tokyoMinutes(String(row.start_at));
+    let endMin = tokyoMinutes(String(row.end_at ?? ""));
+    if (!Number.isFinite(endMin) || endMin <= startMin) endMin = startMin + 60;
+    const trainerIds = resolveSessionTrainer({
+      reservationTrainerId: row.trainer_id ? String(row.trainer_id) : null,
+      noteTrainerIds: noteTrainersByMember.get(memberId) ?? [],
+      coveringTrainerIds: coveringTrainerIds(shifts, storeId, startMin, endMin),
+    });
     const member = memberById.get(memberId);
+    const trainerName =
+      trainerIds.length === 0
+        ? "担当未設定"
+        : trainerIds
+            .map((id) => trainerNameById.get(id)?.trim() || "担当未設定")
+            .sort((a, b) => a.localeCompare(b, "ja"))
+            .join("・");
     return {
-      storeId: String(row.store_id),
-      trainerId,
-      trainerName: trainerId ? trainerNameById.get(trainerId) || "担当未設定" : "担当未設定",
+      storeId,
+      trainerId: trainerIds.slice().sort().join("|") || null,
+      trainerName,
       memberId,
       memberCode: member?.code ?? "",
       memberName: member?.name ?? "",
       startAt: String(row.start_at),
-      sent: isKarteSent({ memberId, trainerId }, notes),
+      sent: isKarteSent({ memberId, trainerId: null }, notes),
     };
   });
 

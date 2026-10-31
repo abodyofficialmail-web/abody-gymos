@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { DateTime } from "luxon";
 import {
+  coveringTrainerIds,
   formatDailyKarteReport,
   isKarteSent,
+  resolveSessionTrainer,
   sessionIsReportable,
   type DailyKarteSession,
 } from "./dailyKarteReport.ts";
@@ -79,6 +81,36 @@ describe("sessionIsReportable", () => {
   });
 });
 
+describe("resolveSessionTrainer", () => {
+  const shifts = [
+    { storeId: "ueno", trainerId: "hiromu", startMin: 10 * 60, endMin: 18 * 60 },
+    { storeId: "ueno", trainerId: "seiya", startMin: 17 * 60, endMin: 22 * 60 },
+  ];
+
+  it("uses the only trainer on shift when the reservation has none", () => {
+    const cover = coveringTrainerIds(shifts, "ueno", 11 * 60, 12 * 60);
+    assert.deepEqual(resolveSessionTrainer({ reservationTrainerId: null, noteTrainerIds: [], coveringTrainerIds: cover }), [
+      "hiromu",
+    ]);
+  });
+
+  it("keeps both trainers when they overlap and nobody wrote the karte", () => {
+    const cover = coveringTrainerIds(shifts, "ueno", 17 * 60, 18 * 60);
+    assert.deepEqual(
+      resolveSessionTrainer({ reservationTrainerId: null, noteTrainerIds: [], coveringTrainerIds: cover }).sort(),
+      ["hiromu", "seiya"]
+    );
+  });
+
+  it("uses the trainer who wrote the karte when several people are on shift", () => {
+    const cover = coveringTrainerIds(shifts, "ueno", 17 * 60, 18 * 60);
+    assert.deepEqual(
+      resolveSessionTrainer({ reservationTrainerId: null, noteTrainerIds: ["seiya"], coveringTrainerIds: cover }),
+      ["seiya"]
+    );
+  });
+});
+
 describe("formatDailyKarteReport", () => {
   const stores = [
     { id: "ueno", name: "上野" },
@@ -121,10 +153,10 @@ describe("formatDailyKarteReport", () => {
     const ebisu = text.indexOf("━━ 恵比寿 ━━");
     const ueno = text.indexOf("━━ 上野 ━━");
     assert.ok(ebisu >= 0 && ebisu < ueno);
-    assert.match(text, /ゆうと　2セッション　カルテ送信 50%（1\/2）/);
+    assert.match(text, /ゆうと　2件　送信50%（1\/2）/);
     assert.match(text, /未送信 1件\n・21:00 山田太郎（EBI001）/);
-    assert.match(text, /ひろむ　1セッション　カルテ送信 100%（1\/1）/);
-    assert.match(text, /合計　3セッション　カルテ送信 67%（2\/3）\n未送信 1件$/);
+    assert.match(text, /ひろむ　1件　送信100%（1\/1）/);
+    assert.match(text, /合計　3件　送信67%（2\/3）\n未送信 1件$/);
     const uenoBlock = text.slice(ueno, text.indexOf("合計"));
     assert.doesNotMatch(uenoBlock, /未送信/);
   });
@@ -142,8 +174,8 @@ describe("formatDailyKarteReport", () => {
       ],
     });
     assert.match(text, /━━ 上野 ━━\nセッションなし/);
-    assert.match(text, /カルテ送信 100%（1\/1）/);
+    assert.match(text, /送信100%（1\/1）/);
     assert.doesNotMatch(text, /未送信/);
-    assert.match(text, /合計　1セッション　カルテ送信 100%（1\/1）$/);
+    assert.match(text, /合計　1件　送信100%（1\/1）$/);
   });
 });
