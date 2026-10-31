@@ -7,10 +7,14 @@ export async function OPTIONS() {
 }
 
 const monthSchema = z.string().regex(/^\d{4}-\d{2}$/u, "month は YYYY-MM です");
-const actionSchema = z.enum(["ticket", "next_booking", "proposal", "motivation"]);
+const actionSchema = z.string().regex(/^(ticket|next_booking|proposal|motivation|imp_[0-9a-f]{8})$/u);
 
 function missingTable(message: string): boolean {
   return /member_coaching_checks|does not exist|schema cache/i.test(message);
+}
+
+function rejectedActionKey(message: string): boolean {
+  return /member_coaching_checks_action_chk/i.test(message);
 }
 
 export async function GET(request: Request, ctx: { params: { memberId: string } }) {
@@ -58,6 +62,9 @@ export async function POST(request: Request, ctx: { params: { memberId: string }
         .eq("action_key", action_key);
       if (removed.error) {
         if (missingTable(removed.error.message)) return jsonResponse({ error: "実施記録のテーブルがまだありません" }, 503);
+        if (rejectedActionKey(removed.error.message)) {
+          return jsonResponse({ error: "個別の提案チェックを保存する更新がまだです" }, 503);
+        }
         return jsonResponse({ error: removed.error.message }, 500);
       }
       return jsonResponse({ ok: true }, 200);
@@ -81,6 +88,9 @@ export async function POST(request: Request, ctx: { params: { memberId: string }
     );
     if (saved.error) {
       if (missingTable(saved.error.message)) return jsonResponse({ error: "実施記録のテーブルがまだありません" }, 503);
+      if (rejectedActionKey(saved.error.message)) {
+        return jsonResponse({ error: "個別の提案チェックを保存する更新がまだです" }, 503);
+      }
       return jsonResponse({ error: saved.error.message }, 500);
     }
     return jsonResponse({ ok: true, trainer_name: trainerName }, 200);

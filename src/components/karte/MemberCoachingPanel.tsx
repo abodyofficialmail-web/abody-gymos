@@ -3,6 +3,7 @@
 import { DateTime } from "luxon";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  buildMemberProposals,
   collectImprovePoints,
   resolveCoachingFollowup,
   summarizeImprovePoints,
@@ -78,7 +79,13 @@ export function MemberCoachingPanel({
       hiatusEndAt,
     });
   }, [todayYmd, thisMonthCount, lastMonthCount, joinedAt, membershipStatus, hiatusEndAt]);
-  const actions = followup?.actions ?? [];
+  const proposals = useMemo(() => {
+    if (!improveSummary || !followup) return null;
+    return buildMemberProposals({
+      items: improveSummary.items,
+      followupActions: followup.actions,
+    });
+  }, [improveSummary, followup]);
 
   const loadChecks = useCallback(async () => {
     const res = await fetch(
@@ -170,11 +177,15 @@ export function MemberCoachingPanel({
         ) : null}
       </div>
 
-      {followup && actions.length > 0 ? (
+      {proposals && proposals.length > 0 ? (
         <div className="space-y-2 border-t border-slate-100 pt-3">
           <div className="text-xs font-semibold text-slate-700">提案</div>
-          <div className="text-sm font-semibold text-slate-900">{followup.title}</div>
-          <p className="text-xs leading-relaxed text-slate-600">{followup.detail}</p>
+          <p className="text-xs leading-relaxed text-slate-600">
+            この会員の改善点と状況に合わせた確認項目です。対応したらチェックすると、誰がいつやったかが残ります。
+          </p>
+          {followup && followup.actions.length > 0 ? (
+            <p className="text-xs leading-relaxed text-slate-600">{followup.detail}</p>
+          ) : null}
           <label className="block text-xs text-slate-600">
             実施したトレーナー
             <select
@@ -196,7 +207,7 @@ export function MemberCoachingPanel({
             </div>
           ) : null}
           <ul className="space-y-2">
-            {actions.map((action) => {
+            {proposals.map((action) => {
               const check = checks.find((row) => row.action_key === action.key);
               return (
                 <li key={action.key} className="rounded-xl border border-slate-200 px-3 py-2">
@@ -225,10 +236,13 @@ export function MemberCoachingPanel({
         </div>
       ) : null}
 
-      {followup && actions.length === 0 ? (
+      {proposals && proposals.length === 0 ? (
         <div className="space-y-1 border-t border-slate-100 pt-3">
           <div className="text-xs font-semibold text-slate-700">提案</div>
-          <p className="text-xs text-slate-500">{followup.detail}</p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            この会員のカルテには、まだ個別の提案になる改善点がありません。
+            {followup?.detail ? ` ${followup.detail}` : ""}
+          </p>
         </div>
       ) : null}
 

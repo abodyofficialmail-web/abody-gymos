@@ -29,7 +29,12 @@ export type ImproveSummary = {
   items: ImproveSummaryItem[];
 };
 
-export type CoachingActionKey = "ticket" | "next_booking" | "proposal" | "motivation";
+export type CoachingActionKey =
+  | "ticket"
+  | "next_booking"
+  | "proposal"
+  | "motivation"
+  | `imp_${string}`;
 
 export type CoachingAction = {
   key: CoachingActionKey;
@@ -141,6 +146,39 @@ export function summarizeImprovePoints(points: ImprovePoint[]): ImproveSummary {
     summary: `これまでの改善点は、${shown.map((item) => firstLine(item.body)).join("、")}です。`,
     items: shown,
   };
+}
+
+export function improveActionKey(body: string): `imp_${string}` {
+  const norm = body.replace(/\s+/g, "");
+  let hash = 2166136261;
+  for (let i = 0; i < norm.length; i += 1) {
+    hash ^= norm.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `imp_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function monthDay(ymd: string): string {
+  const month = Number(ymd.slice(5, 7));
+  const day = Number(ymd.slice(8, 10));
+  if (!month || !day) return ymd;
+  return `${month}/${day}`;
+}
+
+export function buildMemberProposals(input: {
+  items: ImproveSummaryItem[];
+  followupActions?: CoachingAction[];
+}): CoachingAction[] {
+  const personal: CoachingAction[] = input.items.map((item) => ({
+    key: improveActionKey(item.body),
+    label: firstLine(item.body),
+    detail: `${item.trainerName}が ${monthDay(item.date)} のセッションで残した改善点です。次のセッションで確認して、対応したらチェックします。${
+      item.times > 1 ? `同じ内容が${item.times}回あります。` : ""
+    }`,
+  }));
+  const seen = new Set(personal.map((item) => item.key));
+  const extra = (input.followupActions ?? []).filter((action) => !seen.has(action.key));
+  return [...personal, ...extra];
 }
 
 export function coachingActionsForCount(count: number): CoachingAction[] {

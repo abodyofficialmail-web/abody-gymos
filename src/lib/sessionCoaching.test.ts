@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  buildMemberProposals,
   coachingActionsForCount,
   collectImprovePoints,
+  improveActionKey,
   resolveCoachingFollowup,
   summarizeImprovePoints,
   type CoachingNote,
@@ -154,6 +156,34 @@ describe("resolveCoachingFollowup", () => {
       returned.actions.map((a) => a.key),
       ["next_booking", "proposal"]
     );
+  });
+
+  it("turns each member's improvement points into checklist proposals", () => {
+    const summary = summarizeImprovePoints(
+      collectImprovePoints([
+        note({
+          id: "n1",
+          trainerName: "ゆうと",
+          date: "2026-10-12",
+          content: ["【改善点】", "肩甲骨を寄せる"].join("\n"),
+        }),
+        note({
+          id: "n2",
+          trainerName: "たけはる",
+          date: "2026-10-20",
+          content: ["【改善点】", "スクワットは浅めで"].join("\n"),
+        }),
+      ])
+    );
+    const proposals = buildMemberProposals({
+      items: summary.items,
+      followupActions: coachingActionsForCount(8),
+    });
+    assert.equal(proposals.length, 2);
+    assert.equal(proposals[0]?.key, improveActionKey("スクワットは浅めで"));
+    assert.match(proposals[0]?.detail ?? "", /たけはるが 10\/20/);
+    assert.equal(proposals[1]?.label, "肩甲骨を寄せる");
+    assert.equal(improveActionKey("肩甲骨を寄せる"), improveActionKey("肩甲骨を 寄せる"));
   });
 
   it("keeps someone still on hiatus out of the low-visit list", () => {
