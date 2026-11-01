@@ -9,7 +9,7 @@
       "schedule": "0 22 * * *"
     },
     {
-      "path": "/api/cron/daily-karte-report?date=2026-10-30&force=1",
+      "path": "/api/cron/daily-karte-report",
       "schedule": "30 13 * * *"
     },
     {
