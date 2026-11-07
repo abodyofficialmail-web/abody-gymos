@@ -13,6 +13,16 @@ import {
 } from "@/lib/lineChannel";
 import { createHmac, timingSafeEqual } from "crypto";
 import { canBookOrLogin } from "@/lib/memberMembershipStatus";
+import { MEMBER_BOOKING_BLOCKED_MESSAGE } from "@/lib/booking/memberBookingRules";
+import {
+  applyTicketDelta,
+  evaluateLoadedMemberBooking,
+  loadMemberBookingRuleContext,
+} from "@/lib/booking/memberBookingRulesDb";
+import {
+  isSakuragichoSameDayFreeze,
+  SAKURAGICHO_SAME_DAY_CLOSED_MESSAGE,
+} from "@/lib/booking/sakuragichoTodayFreeze";
 
 const TZ = "Asia/Tokyo";
 const STEP_MIN = 30;
@@ -341,6 +351,7 @@ export async function listOpenInviteSlots(
   supabase: SupabaseClient,
   ctx: InviteContext
 ): Promise<InviteSlot[]> {
+  if (isSakuragichoSameDayFreeze({ storeName: ctx.store_name, dateYmd: ctx.shift_date })) return [];
   const candidates = generateInviteSlots({
     dateYmd: ctx.shift_date,
     startLocal: ctx.start_local,
@@ -365,6 +376,20 @@ export async function listOpenInviteSlots(
     if ((count ?? 0) > 0) continue;
     open.push(slot);
   }
+  try {
+    const ctxRules = await loadMemberBookingRuleContext(supabase, { memberId: ctx.member_id });
+    const kept: InviteSlot[] = [];
+    for (const slot of open) {
+      const verdict = await evaluateLoadedMemberBooking(
+        ctxRules,
+        { start_at: slot.start_at, end_at: slot.end_at, store_id: ctx.store_id, session_type: "store" }
+      );
+      if (verdict.ok || verdict.reason === "confirm_ticket") kept.push(slot);
+    }
+    return kept;
+  } catch (e) {
+    console.error("invite slot member rule filter failed", e);
+  }
   return open;
 }
 
@@ -387,6 +412,9 @@ export async function bookInviteSlot(
   const end = DateTime.fromISO(endAt);
   if (!start.isValid || !end.isValid || end <= start) {
     return { ok: false, status: 400, error: "日時が不正です" };
+  }
+  if (isSakuragichoSameDayFreeze({ storeName: ctx.store_name, dateYmd: ctx.shift_date })) {
+    return { ok: false, status: 409, error: SAKURAGICHO_SAME_DAY_CLOSED_MESSAGE };
   }
   const minutes = Math.round(end.diff(start, "minutes").minutes);
   if (minutes !== ctx.slot_minutes) {
@@ -427,6 +455,23 @@ export async function bookInviteSlot(
   if (dupErr) return { ok: false, status: 500, error: "予約の重複確認に失敗しました" };
   if ((dup ?? 0) > 0) return { ok: false, status: 409, error: "この時間は既に予約されています" };
 
+  let ticketsToConsume = 0;
+  {
+    const ctxRules = await loadMemberBookingRuleContext(supabase, { memberId: ctx.member_id });
+    const verdict = await evaluateLoadedMemberBooking(
+      ctxRules,
+      {
+        start_at: startAt,
+        end_at: endAt,
+        store_id: ctx.store_id,
+        session_type: "store",
+      },
+      { confirmTicketUse: true }
+    );
+    if (!verdict.ok) return { ok: false, status: 409, error: MEMBER_BOOKING_BLOCKED_MESSAGE };
+    ticketsToConsume = verdict.ticketsToConsume;
+  }
+
   const insertRow = {
     store_id: ctx.store_id,
     member_id: ctx.member_id,
@@ -437,6 +482,7 @@ export async function bookInviteSlot(
     status: "confirmed",
     notes: "created_from=invite_shift_booking",
     blocks_capacity: true,
+    tickets_consumed: ticketsToConsume,
   };
   const selectCols = "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status";
   const first = await supabase.from("reservations").insert(insertRow).select(selectCols).single();
@@ -445,9 +491,10 @@ export async function bookInviteSlot(
   if (insErr) {
     const msg = String(insErr.message ?? "");
     if (insErr.code === "23505") return { ok: false, status: 409, error: "既に予約されています" };
-    if (/blocks_capacity|guest_name|does not exist|column/i.test(msg)) {
+    if (/blocks_capacity|guest_name|tickets_consumed|does not exist|column/i.test(msg)) {
       const row2 = { ...insertRow } as Record<string, unknown>;
       delete row2.blocks_capacity;
+      delete row2.tickets_consumed;
       const second = await supabase.from("reservations").insert(row2 as typeof insertRow).select(selectCols).single();
       reservation = second.data as Record<string, unknown> | null;
       insErr = second.error;
@@ -455,6 +502,16 @@ export async function bookInviteSlot(
   }
   if (insErr || !reservation) {
     return { ok: false, status: 500, error: "予約の保存に失敗しました" };
+  }
+
+  if (ticketsToConsume > 0) {
+    await applyTicketDelta(supabase, {
+      memberId: ctx.member_id,
+      delta: -ticketsToConsume,
+      reason: "booking",
+      note: "案内枠の予約消化",
+      reservationId: String(reservation.id),
+    });
   }
 
   if (ctx.line_user_id) {
