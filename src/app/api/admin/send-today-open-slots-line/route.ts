@@ -65,7 +65,7 @@ async function openStarts(storeId: string, date: string): Promise<string[]> {
     .filter(Boolean)
     .filter((iso) => {
       const start = DateTime.fromISO(iso).setZone(TZ);
-      return start.isValid && start > now;
+      return start.isValid && start > now.plus({ minutes: 60 });
     })
     .map(hhmm);
   return [...new Set(starts)].sort();
