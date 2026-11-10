@@ -16,6 +16,7 @@ import {
   isMealPersonalStripeObject,
   recordMealPersonalPassEvent,
 } from "@/lib/stripeMealPersonalPass";
+import { reportMembershipPaymentLinkCheckout } from "@/lib/paymentLinkSuccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -120,6 +121,9 @@ export async function POST(request: Request) {
         });
         return json({ received: true, product: MEAL_SESSION_TICKET_PRODUCT, ...granted });
       }
+      const membership = await reportMembershipPaymentLinkCheckout(supabase, obj);
+      if (membership === "reported") return json({ received: true, product: "membership_payment_link" });
+      if (membership === "unpaid") return json({ received: true, ignored: "unpaid" });
       if (String(obj.mode ?? "") !== "subscription") return json({ received: true, ignored: "not_subscription" });
       const subscriptionId = customerIdOf(obj.subscription);
       const customerId = customerIdOf(obj.customer);

@@ -61,6 +61,7 @@ export default function AdminDashboardTopPage() {
     { href: "/admin/dashboard/trainers", label: "トレーナー一覧", icon: "👤" },
     { href: "/admin/dashboard/reservations", label: "予約一覧", icon: "🕒" },
     { href: "/admin/dashboard/members", label: "会員カルテ", icon: "🗂" },
+    { href: "/admin/dashboard/payment-links", label: "決済リンク", icon: "💳" },
     { href: "/admin/dashboard/today", label: "本日の予約", icon: "🧾" },
     { href: "/admin/dashboard/marketing", label: "広告レポート", icon: "📣" },
     { href: "/admin/dashboard/manual", label: "使い方", icon: "📖" },

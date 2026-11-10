@@ -6,6 +6,7 @@ const DASH_NAV = [
   { href: "/admin/dashboard/shifts", label: "シフト" },
   { href: "/admin/dashboard/reservations", label: "予約" },
   { href: "/admin/dashboard/members", label: "会員" },
+  { href: "/admin/dashboard/payment-links", label: "決済" },
   { href: "/admin/dashboard/session-surveys", label: "セッション評価" },
   { href: "/admin/dashboard/marketing", label: "広告レポート" },
   { href: "/admin/dashboard/manual", label: "使い方" },
