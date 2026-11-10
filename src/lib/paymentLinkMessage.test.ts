@@ -38,6 +38,19 @@ describe("buildPaymentLinkLineMessage", () => {
     assert.doesNotMatch(text, new RegExp(plan.url));
   });
 
+  it("welcomes a new member without mentioning the previous card", () => {
+    const text = buildPaymentLinkLineMessage({
+      memberName: "鈴木",
+      reason: "new_enrollment",
+      item: plan,
+      card: "standard",
+    });
+    assert.match(text, /鈴木様/);
+    assert.match(text, /ご入会ありがとうございます/);
+    assert.match(text, /入会のお支払いをお願いいたします/);
+    assert.doesNotMatch(text, /前のカード/);
+  });
+
   it("describes a plan change", () => {
     const text = buildPaymentLinkLineMessage({
       memberName: "佐藤",

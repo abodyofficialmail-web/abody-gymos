@@ -187,7 +187,7 @@ export function PaymentLinkSendSection() {
 
       <div>
         <div className="text-xs font-semibold text-slate-700">送る理由</div>
-        <div className="mt-1 grid grid-cols-3 gap-2">
+        <div className="mt-1 grid grid-cols-2 gap-2">
           {PAYMENT_SEND_REASONS.map((row) => {
             const selected = reason === row.id;
             return (
