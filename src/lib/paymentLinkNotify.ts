@@ -66,7 +66,8 @@ function groupNotifyTargets(targets: PaymentLinkNotifyTarget[]): Array<{ lineUse
   return Array.from(groups, ([lineUserId, labels]) => ({ lineUserId, labels }));
 }
 
-export async function pushPaymentLinkNotice(
+/** ゆうととテストアカウント（EBI020）へ運営LINEを送る */
+export async function pushOpsLineNotice(
   supabase: SupabaseClient<Database>,
   text: string
 ): Promise<{ ok: boolean; sent: string[]; missed: string[] }> {
@@ -85,9 +86,16 @@ export async function pushPaymentLinkNotice(
     }
     return { ok: missed.length === 0 && sent.length > 0, sent, missed };
   } catch (e) {
-    console.error("[paymentLinkNotify]", e instanceof Error ? e.message : e);
+    console.error("[opsLineNotice]", e instanceof Error ? e.message : e);
     return { ok: false, sent: [], missed: wanted };
   }
+}
+
+export async function pushPaymentLinkNotice(
+  supabase: SupabaseClient<Database>,
+  text: string
+): Promise<{ ok: boolean; sent: string[]; missed: string[] }> {
+  return pushOpsLineNotice(supabase, text);
 }
 
 export async function notifyPaymentLinkSent(

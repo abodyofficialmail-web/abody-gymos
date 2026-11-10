@@ -1446,6 +1446,54 @@ export interface Database {
         };
         Relationships: [];
       };
+      open_slot_task_reports: {
+        Row: {
+          id: string;
+          store_id: string;
+          slot_start_at: string;
+          slot_end_at: string;
+          task_key: string;
+          task_label: string;
+          detail: string | null;
+          operator_trainer_id: string | null;
+          operator_name: string | null;
+          member_id: string | null;
+          member_label: string | null;
+          reservation_id: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          slot_start_at: string;
+          slot_end_at: string;
+          task_key: string;
+          task_label: string;
+          detail?: string | null;
+          operator_trainer_id?: string | null;
+          operator_name?: string | null;
+          member_id?: string | null;
+          member_label?: string | null;
+          reservation_id?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          slot_start_at?: string;
+          slot_end_at?: string;
+          task_key?: string;
+          task_label?: string;
+          detail?: string | null;
+          operator_trainer_id?: string | null;
+          operator_name?: string | null;
+          member_id?: string | null;
+          member_label?: string | null;
+          reservation_id?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       trainer_ops_messages: {
         Row: {
           id: string;

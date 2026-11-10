@@ -10,6 +10,7 @@ import {
 import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark";
 import { bookingStopGlanceLabel } from "@/lib/booking/bookingStopGlance";
 import { formatPreSessionFormatBadge, type ReservationPreSessionHearing } from "@/lib/preSessionSurveyDisplay";
+import { OpenSlotTaskPanel, type OpenSlotDto, type OpenSlotTaskReport } from "./openSlotTaskPanel";
 
 const TZ = "Asia/Tokyo";
 
@@ -75,7 +76,9 @@ type DayBreakItem = {
 
 type DayTimelineEntry =
   | { kind: "reservation"; sort: number; r: ReservationRow }
-  | { kind: "break"; sort: number; b: DayBreakItem };
+  | { kind: "break"; sort: number; b: DayBreakItem }
+  | { kind: "open"; sort: number; slot: OpenSlotDto; reports: OpenSlotTaskReport[] }
+  | { kind: "task"; sort: number; report: OpenSlotTaskReport };
 
 type StoreTheme = {
   accent: string;
@@ -287,6 +290,13 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
   const [bodyPhotoStatusByMember, setBodyPhotoStatusByMember] = useState<Record<string, BodyPhotoStatusRow>>(
     {}
   );
+  const [openSlots, setOpenSlots] = useState<OpenSlotDto[] | null>(null);
+  const [slotReports, setSlotReports] = useState<OpenSlotTaskReport[]>([]);
+  const [slotReportsReady, setSlotReportsReady] = useState(true);
+  const [openSlotCountByStore, setOpenSlotCountByStore] = useState<Record<string, number>>({});
+  const [taskSlot, setTaskSlot] = useState<OpenSlotDto | null>(null);
+  const [slotReload, setSlotReload] = useState(0);
+  const [taskTrainers, setTaskTrainers] = useState<Array<{ id: string; display_name: string }>>([]);
 
   const selectedStoreName = useMemo(() => {
     return stores.find((s) => s.id === selectedStoreId)?.name ?? "";
@@ -298,6 +308,71 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
   }, [selectedStoreId, selectedStoreName]);
 
   const todayYmd = useMemo(() => DateTime.now().setZone(TZ).toISODate()!, []);
+
+  const loadOpenSlotTasks = useCallback(async () => {
+    if (!selectedStoreId || !selectedYmd || selectedYmd !== todayYmd) {
+      setOpenSlots([]);
+      setSlotReports([]);
+      return;
+    }
+    const data = await apiGet<{ slots: OpenSlotDto[]; reports: OpenSlotTaskReport[]; reports_ready?: boolean }>(
+      `/api/admin/open-slot-tasks?store_id=${encodeURIComponent(selectedStoreId)}&date=${encodeURIComponent(selectedYmd)}`
+    );
+    setOpenSlots(data.slots ?? []);
+    setSlotReports(data.reports ?? []);
+    setSlotReportsReady(data.reports_ready !== false);
+  }, [selectedStoreId, selectedYmd, todayYmd]);
+
+  useEffect(() => {
+    apiGet<{ trainers: Array<{ id: string; display_name: string }> }>("/api/booking-v2/trainers?all=1")
+      .then((data) => setTaskTrainers(data.trainers ?? []))
+      .catch(() => setTaskTrainers([]));
+  }, []);
+
+  useEffect(() => {
+    if (stores.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      stores.map(async (store) => {
+        const data = await apiGet<{ slots: OpenSlotDto[] }>(
+          `/api/admin/open-slot-tasks?store_id=${encodeURIComponent(store.id)}&date=${encodeURIComponent(todayYmd)}`
+        );
+        return [store.id, data.slots?.length ?? 0] as const;
+      })
+    )
+      .then((pairs) => {
+        if (!cancelled) setOpenSlotCountByStore(Object.fromEntries(pairs));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [stores, todayYmd, slotReload]);
+
+  useEffect(() => {
+    if (!selectedStoreId || selectedYmd !== todayYmd) {
+      setOpenSlots([]);
+      setSlotReports([]);
+      return;
+    }
+    let cancelled = false;
+    setOpenSlots(null);
+    loadOpenSlotTasks().catch(() => {
+      if (!cancelled) {
+        setOpenSlots([]);
+        setSlotReports([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadOpenSlotTasks, selectedStoreId, selectedYmd, todayYmd]);
+
+  useEffect(() => {
+    if (slotReload === 0) return;
+    if (!selectedStoreId || selectedYmd !== todayYmd) return;
+    loadOpenSlotTasks().catch(() => undefined);
+  }, [loadOpenSlotTasks, selectedStoreId, selectedYmd, slotReload, todayYmd]);
 
   const refreshRows = async () => {
     if (!selectedStoreId) {
@@ -896,20 +971,30 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
 
   const dayTimeline = useMemo((): DayTimelineEntry[] => {
     const entries: DayTimelineEntry[] = [];
+    const sameSlot = (a: string, b: string) => Math.abs(DateTime.fromISO(a).toMillis() - DateTime.fromISO(b).toMillis()) < 2000;
+    const openList = selectedYmd === todayYmd ? (openSlots ?? []) : [];
     for (const r of selectedDayRows) {
       entries.push({ kind: "reservation", sort: DateTime.fromISO(r.start_at).toMillis(), r });
     }
     for (const b of dayBreakItems) {
       entries.push({ kind: "break", sort: b.startMs, b });
     }
-    entries.sort((a, b) => {
-      const d = a.sort - b.sort;
-      if (d !== 0) return d;
-      if (a.kind !== b.kind) return a.kind === "break" ? -1 : 1;
-      return 0;
-    });
+    for (const slot of openList) {
+      entries.push({
+        kind: "open",
+        sort: DateTime.fromISO(slot.start_at).toMillis(),
+        slot,
+        reports: slotReports.filter((report) => sameSlot(report.slot_start_at, slot.start_at)),
+      });
+    }
+    for (const report of slotReports) {
+      if (openList.some((slot) => sameSlot(slot.start_at, report.slot_start_at))) continue;
+      entries.push({ kind: "task", sort: DateTime.fromISO(report.slot_start_at).toMillis(), report });
+    }
+    const kindOrder = (kind: DayTimelineEntry["kind"]) => (kind === "break" ? 0 : kind === "reservation" ? 1 : kind === "open" ? 2 : 3);
+    entries.sort((a, b) => a.sort - b.sort || kindOrder(a.kind) - kindOrder(b.kind));
     return entries;
-  }, [selectedDayRows, dayBreakItems]);
+  }, [selectedDayRows, dayBreakItems, openSlots, slotReports, selectedYmd, todayYmd]);
 
   return (
     <div className="space-y-3">
@@ -951,7 +1036,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
               type="button"
               onClick={() => {
                 setSelectedStoreId(s.id);
-                setSelectedYmd(null);
+                setSelectedYmd(todayYmd);
               }}
               className={[
                 "w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors",
@@ -963,7 +1048,14 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                   : { borderColor: "#E5E7EB" }
               }
             >
-              {s.name}
+              <span className="flex items-center justify-between gap-2">
+                <span>{s.name}</span>
+                {(openSlotCountByStore[s.id] ?? 0) > 0 ? (
+                  <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-bold text-white">
+                    本日空き {openSlotCountByStore[s.id]}
+                  </span>
+                ) : null}
+              </span>
             </button>
           );
         })}
@@ -1082,6 +1174,16 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
               <div className="text-sm font-bold text-slate-900">
                 {DateTime.fromISO(selectedYmd, { zone: TZ }).toFormat("M/d（ccc）")} の予約
               </div>
+              {selectedYmd === todayYmd && (openSlots?.length ?? 0) > 0 ? (
+                <div className="mt-1 text-xs font-semibold text-emerald-800">
+                  空き枠が {openSlots?.length} 件あります。枠からタスクを実行すると、ゆうととテストアカウントに報告します。
+                </div>
+              ) : null}
+              {selectedYmd === todayYmd && !slotReportsReady ? (
+                <div className="mt-1 text-xs font-semibold text-amber-800">
+                  報告の保存先がまだありません。データベースへ open_slot_task_reports の追加が必要です。
+                </div>
+              ) : null}
               <div className="mt-1 text-[11px] text-slate-500">
                 体型写真は月1回。
                 <span className="mx-1 rounded-md bg-rose-100 px-1 py-0.5 font-semibold text-rose-900">写真なし</span>
@@ -1120,9 +1222,14 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
           {rows === null || dayShiftsByStore === null ? (
             <div className="text-sm text-slate-600">読み込み中…</div>
           ) : null}
+          {selectedYmd === todayYmd && openSlots === null && rows !== null ? (
+            <div className="text-xs text-slate-500">空き枠を確認しています…</div>
+          ) : null}
 
-          {rows !== null && dayShiftsByStore !== null && dayTimeline.length === 0 ? (
-            <div className="text-sm text-slate-600">この日の予約・休憩はありません。</div>
+          {rows !== null && dayShiftsByStore !== null && (selectedYmd !== todayYmd || openSlots !== null) && dayTimeline.length === 0 ? (
+            <div className="text-sm text-slate-600">
+              {selectedYmd === todayYmd ? "この日の予約・休憩・空き枠はありません。" : "この日の予約・休憩はありません。"}
+            </div>
           ) : null}
 
           <div className="grid gap-2">
@@ -1140,6 +1247,65 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                     </div>
                     <div className="mt-1 text-xs font-semibold text-amber-950">☕ トレーナー休憩</div>
                     <div className="mt-1 text-xs text-amber-900">{b.trainer_name}</div>
+                  </div>
+                );
+              }
+              if (entry.kind === "open") {
+                const slot = entry.slot;
+                return (
+                  <div
+                    key={`open-${slot.start_at}`}
+                    className="rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/80 p-4 shadow-sm"
+                    style={{ borderLeftWidth: 6, borderLeftColor: "#059669" }}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="text-sm font-bold text-emerald-950">
+                          {DateTime.fromISO(slot.start_at).setZone(TZ).toFormat("HH:mm")}〜
+                          {DateTime.fromISO(slot.end_at).setZone(TZ).toFormat("HH:mm")}
+                        </div>
+                        <div className="mt-1 text-xs font-semibold text-emerald-900">空き枠</div>
+                        {entry.reports.length > 0 ? (
+                          <div className="mt-2 space-y-1">
+                            {entry.reports.map((report) => (
+                              <div key={report.id} className="text-xs text-emerald-950">
+                                報告済み: {report.task_label}
+                                {report.operator_name ? `（${report.operator_name}）` : ""}
+                                {report.detail ? ` / ${report.detail}` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setTaskSlot(slot)}
+                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800"
+                      >
+                        タスクを選ぶ
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+              if (entry.kind === "task") {
+                const report = entry.report;
+                return (
+                  <div
+                    key={report.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
+                    style={{ borderLeftWidth: 6, borderLeftColor: "#059669" }}
+                  >
+                    <div className="text-sm font-bold text-slate-900">
+                      {DateTime.fromISO(report.slot_start_at).setZone(TZ).toFormat("HH:mm")}〜
+                      {DateTime.fromISO(report.slot_end_at).setZone(TZ).toFormat("HH:mm")}
+                    </div>
+                    <div className="mt-1 text-xs font-semibold text-slate-700">タスク報告: {report.task_label}</div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      {report.operator_name || "担当"}
+                      {report.member_label ? ` / ${report.member_label}` : ""}
+                    </div>
+                    {report.detail ? <div className="mt-1 text-xs text-slate-700">{report.detail}</div> : null}
                   </div>
                 );
               }
@@ -1247,6 +1413,22 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
       )}
       </>
       )}
+
+      {taskSlot && selectedStoreId ? (
+        <OpenSlotTaskPanel
+          storeId={selectedStoreId}
+          storeName={selectedStoreName}
+          slot={taskSlot}
+          reservations={selectedDayRows}
+          trainers={taskTrainers}
+          defaultTrainerId=""
+          onClose={() => setTaskSlot(null)}
+          onDone={() => {
+            setSlotReload((n) => n + 1);
+            void refreshRows();
+          }}
+        />
+      ) : null}
 
       {/* 予約追加モーダル */}
       {addOpen ? (
