@@ -182,7 +182,12 @@ async function findMembersByEmail(supabase: SupabaseClient<Database>, email: str
     .ilike("email", escapeIlike(email))
     .limit(5);
   if (error) throw new Error(error.message);
-  return data ?? [];
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    member_code: row.member_code,
+    name: row.name,
+    store_id: row.store_id ?? null,
+  }));
 }
 
 async function storeNameOf(supabase: SupabaseClient<Database>, storeId: string | null): Promise<string | null> {
@@ -437,7 +442,7 @@ export async function recordMembershipInvoiceFailure(
 ): Promise<"recorded" | "not_ours" | "unavailable"> {
   if (!input.invoiceId || input.amountYen == null) return "not_ours";
   let plan = identifyPlanByAmount(input.amountYen);
-  let guided: Awaited<ReturnType<typeof latestGuidance>> = null;
+  let guided: Awaited<ReturnType<typeof latestGuidance>> | null = null;
   if (!plan && input.email) {
     try {
       guided = await latestGuidance(supabase, input.email);
