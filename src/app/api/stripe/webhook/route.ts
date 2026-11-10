@@ -16,7 +16,8 @@ import {
   isMealPersonalStripeObject,
   recordMealPersonalPassEvent,
 } from "@/lib/stripeMealPersonalPass";
-import { reportMembershipPaymentLinkCheckout } from "@/lib/paymentLinkSuccess";
+import { recordMembershipCheckoutFailure, recordMembershipInvoiceFailure } from "@/lib/membershipPayments";
+import { reportMembershipPaymentLinkCheckout, resolveMembershipPaymentLink } from "@/lib/paymentLinkSuccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,6 +110,22 @@ export async function POST(request: Request) {
 
   try {
     const supabase = createSupabaseServiceClient();
+
+    if (type === "checkout.session.async_payment_failed") {
+      const matched = await resolveMembershipPaymentLink(obj);
+      if (matched) {
+        const failure = await recordMembershipCheckoutFailure(supabase, {
+          sessionId: String(obj.id ?? ""),
+          email: String(obj.customer_details?.email ?? obj.customer_email ?? "").trim(),
+          payerName: String(obj.customer_details?.name ?? "").trim(),
+          amountYen: typeof obj.amount_total === "number" ? obj.amount_total : null,
+          item: matched.item,
+          card: matched.card,
+        });
+        if (failure === "unavailable") return json({ error: "membership ledger unavailable" }, 500);
+        return json({ received: true, product: "membership_payment_link", status: "failed" });
+      }
+    }
 
     if (type === "checkout.session.completed") {
       if (String(obj.metadata?.product ?? "") === MEAL_SESSION_TICKET_PRODUCT) {
@@ -272,6 +289,18 @@ export async function POST(request: Request) {
           status: String(sub?.status ?? (type === "invoice.paid" ? "active" : "past_due")),
           setActivatedAt: type === "invoice.paid",
         });
+      }
+      if (type === "invoice.payment_failed") {
+        const failure = await recordMembershipInvoiceFailure(supabase, {
+          invoiceId: String(obj.id ?? ""),
+          amountYen: typeof obj.amount_due === "number" ? obj.amount_due : typeof obj.total === "number" ? obj.total : null,
+          email: email.trim(),
+          payerName: String(obj.customer_name ?? "").trim(),
+        });
+        if (failure === "recorded") {
+          return json({ received: true, product: "membership_payment_link", status: "failed" });
+        }
+        if (failure === "unavailable") return json({ error: "membership ledger unavailable" }, 500);
       }
       if (!subscriptionMatchesProduct(sub)) return json({ received: true, ignored: "other_product" });
       const memberId = await findMemberIdForTrainerPass({

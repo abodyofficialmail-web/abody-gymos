@@ -90,6 +90,15 @@ function buyStripePath(url: string): string {
   }
 }
 
+export function matchPaymentLinkInText(text: string): { item: PaymentLinkItem; card: "standard" | "amex" } | null {
+  const source = String(text ?? "");
+  for (const item of allPaymentLinks()) {
+    if (item.amexUrl && source.includes(item.amexUrl)) return { item, card: "amex" };
+    if (source.includes(item.url)) return { item, card: "standard" };
+  }
+  return null;
+}
+
 export function knownPaymentUrls(): string[] {
   const urls: string[] = [];
   for (const item of allPaymentLinks()) {

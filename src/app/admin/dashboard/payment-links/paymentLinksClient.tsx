@@ -9,6 +9,7 @@ import {
   type PaymentLinkItem,
 } from "@/lib/paymentLinks";
 import { PaymentLinkSendSection } from "./paymentLinkSendSection";
+import { PaymentStatusSection, type PaymentGuideRequest } from "./paymentStatusSection";
 
 function CopyButton({
   copyKey,
@@ -107,6 +108,8 @@ function PaymentCard({
 export function PaymentLinksClient() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<PaymentGuideRequest | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   async function onCopy(key: string, text: string) {
     setCopyError(null);
@@ -123,7 +126,12 @@ export function PaymentLinksClient() {
 
   return (
     <div className="space-y-6">
-      <PaymentLinkSendSection />
+      <PaymentStatusSection
+        reloadKey={reloadKey}
+        onReload={() => setReloadKey((value) => value + 1)}
+        onGuide={setPrefill}
+      />
+      <PaymentLinkSendSection prefill={prefill} onSent={() => setReloadKey((value) => value + 1)} />
       <p className="text-sm leading-relaxed text-slate-600">
         リンクとクーポンの一覧です。アメックスは専用リンクを使います。
       </p>

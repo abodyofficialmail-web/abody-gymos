@@ -2,13 +2,17 @@ import { z } from "zod";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { normalizeLineChannelKey } from "@/lib/lineChannel";
 import { pushLineTextForMember } from "@/lib/lineMessagingPush";
+import { recordMembershipGuidance } from "@/lib/membershipPayments";
 import { notifyPaymentLinkSent } from "@/lib/paymentLinkNotify";
-import { knownPaymentUrls } from "@/lib/paymentLinks";
+import { allPaymentLinks, knownPaymentUrls, matchPaymentLinkInText } from "@/lib/paymentLinks";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
 const bodySchema = z.object({
   member_code: z.string().trim().min(1).max(32),
   text: z.string().trim().min(1).max(2000),
+  plan_id: z.string().trim().max(40).optional(),
+  reason: z.enum(["payment_failed", "card_change", "plan_change", "new_enrollment"]).optional(),
+  card: z.enum(["standard", "amex"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -25,7 +29,7 @@ export async function POST(req: Request) {
     const supabase = createSupabaseServiceClient();
     const { data: member, error } = await supabase
       .from("members")
-      .select("id, member_code, name, line_user_id, line_channel_key, store_id")
+      .select("id, member_code, name, email, line_user_id, line_channel_key, store_id")
       .eq("member_code", code)
       .maybeSingle();
     if (error) return jsonResponse({ error: "会員の確認に失敗しました" }, 500);
@@ -58,7 +62,31 @@ export async function POST(req: Request) {
       sentText: text,
     });
 
-    return jsonResponse({ ok: true, member_code: member.member_code, name: member.name, notify });
+    const fromText = matchPaymentLinkInText(text);
+    const item = allPaymentLinks().find((link) => link.id === parsed.data.plan_id) ?? fromText?.item ?? null;
+    const card = parsed.data.card === "amex" && item?.amexUrl ? "amex" : fromText?.card ?? "standard";
+    const recordSaved = item
+      ? await recordMembershipGuidance(supabase, {
+          memberId: member.id,
+          memberCode: member.member_code,
+          memberName: member.name,
+          email: member.email,
+          storeName,
+          planId: item.id,
+          planName: item.name,
+          priceYen: item.priceYen,
+          cardKind: card,
+          reason: parsed.data.reason ?? "payment_failed",
+        })
+      : false;
+
+    return jsonResponse({
+      ok: true,
+      member_code: member.member_code,
+      name: member.name,
+      notify,
+      record_saved: recordSaved,
+    });
   } catch {
     return jsonResponse({ error: "送信に失敗しました" }, 500);
   }

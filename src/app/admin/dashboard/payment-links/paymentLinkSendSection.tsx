@@ -9,6 +9,7 @@ import {
   type PaymentLinkItem,
 } from "@/lib/paymentLinks";
 import { PAYMENT_SEND_REASONS, buildPaymentLinkLineMessage, type PaymentSendReason } from "@/lib/paymentLinkMessage";
+import type { PaymentGuideRequest } from "./paymentStatusSection";
 
 type MemberHit = {
   id: string;
@@ -24,7 +25,13 @@ function memberLabel(member: MemberHit): string {
   return `${member.member_code}${member.name ? ` ${member.name}` : ""}`;
 }
 
-export function PaymentLinkSendSection() {
+export function PaymentLinkSendSection({
+  prefill,
+  onSent,
+}: {
+  prefill?: PaymentGuideRequest | null;
+  onSent?: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MemberHit[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -63,12 +70,29 @@ export function PaymentLinkSendSection() {
   }, [generated]);
 
   useEffect(() => {
+    if (!prefill?.memberCode) return;
+    setMember(null);
+    setReason(prefill.reason);
+    if (prefill.planId && SEND_LINKS.some((link) => link.id === prefill.planId)) {
+      setLinkId(prefill.planId);
+    }
+    setCard(prefill.card === "amex" ? "amex" : "standard");
+    setIncludeCoupon(false);
+    setQuery(prefill.memberCode);
+    setSentTo(null);
+    setSendError(null);
+    setConfirming(false);
+    document.getElementById("payment-send")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [prefill]);
+
+  useEffect(() => {
     const q = query.trim();
     if (!q) {
       setResults(null);
       setSearchError(null);
       return;
     }
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       fetch(`/api/admin/members/search?q=${encodeURIComponent(q)}&limit=20`, { cache: "no-store" })
         .then(async (res) => {
@@ -77,15 +101,23 @@ export function PaymentLinkSendSection() {
           return json as { members: MemberHit[] };
         })
         .then((json) => {
-          setResults(json.members ?? []);
+          if (cancelled) return;
+          const rows = json.members ?? [];
+          setResults(rows);
           setSearchError(null);
+          const exact = rows.find((row) => row.member_code.toUpperCase() === q.toUpperCase());
+          if (exact) setMember(exact);
         })
         .catch((e: unknown) => {
+          if (cancelled) return;
           setResults([]);
           setSearchError(e instanceof Error ? e.message : "会員検索に失敗しました");
         });
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [query]);
 
   async function copyDraft() {
@@ -107,7 +139,13 @@ export function PaymentLinkSendSection() {
       const res = await fetch("/api/admin/payment-link-line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ member_code: member.member_code, text: draft }),
+        body: JSON.stringify({
+          member_code: member.member_code,
+          text: draft,
+          plan_id: item?.id,
+          reason,
+          card: effectiveCard,
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(String(json.error ?? "LINEに送れませんでした"));
@@ -116,10 +154,13 @@ export function PaymentLinkSendSection() {
       const missedLabels = notify?.missed ?? [];
       const notice = sentLabels.length ? `${sentLabels.join("、")}にも通知しました。` : "";
       setSentTo(`${memberLabel(member)} にLINEで送りました。${notice}`);
-      if (missedLabels.length) {
+      if (json.record_saved === false) {
+        setSendError("LINEは送りました。決済の記録には残せませんでした。");
+      } else if (missedLabels.length) {
         setSendError(`${missedLabels.join("、")}への通知は届きませんでした。`);
       }
       setConfirming(false);
+      onSent?.();
     } catch (e: unknown) {
       setSendError(e instanceof Error ? e.message : "LINEに送れませんでした");
     } finally {
@@ -128,7 +169,7 @@ export function PaymentLinkSendSection() {
   }
 
   return (
-    <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section id="payment-send" className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div>
         <h2 className="text-base font-bold text-slate-900">会員様に送る</h2>
         <p className="mt-1 text-sm leading-relaxed text-slate-600">

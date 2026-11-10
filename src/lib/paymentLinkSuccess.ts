@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import { recordMembershipPaymentPaid } from "@/lib/membershipPayments";
 import { pushPaymentLinkNotice } from "@/lib/paymentLinkNotify";
 import { formatYen, matchPaymentLinkUrl, type PaymentLinkItem } from "@/lib/paymentLinks";
 import { stripeGet } from "@/lib/stripeTrainerPass";
@@ -113,6 +114,17 @@ export async function reportMembershipPaymentLinkCheckout(
         : "メールアドレスでは見つかりませんでした";
 
   const amount = typeof session.amount_total === "number" ? session.amount_total : null;
+  await recordMembershipPaymentPaid(supabase, {
+    sessionId: String(session.id ?? ""),
+    memberId: member?.id ?? null,
+    memberCode: member?.member_code ?? null,
+    memberName: members.length === 1 ? (member?.name ?? payerName) || null : payerName || null,
+    email,
+    storeName,
+    item: matched.item,
+    card: matched.card,
+    amountYen: amount,
+  });
   const text = buildPaymentSuccessReport({
     planName: matched.item.name,
     priceYen: matched.item.priceYen,
