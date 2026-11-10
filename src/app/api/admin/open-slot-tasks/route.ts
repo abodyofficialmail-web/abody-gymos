@@ -48,12 +48,8 @@ async function listTodayOpenSlots(storeId: string, dateYmd: string): Promise<Slo
   const res = await getAvailableSlots(req);
   const body = await res.json().catch(() => null);
   if (!res.ok || !Array.isArray(body)) return [];
-  const now = DateTime.now().setZone(TZ);
   return (body as SlotDto[])
-    .filter((slot) => {
-      const end = DateTime.fromISO(String(slot.end_at ?? "")).setZone(TZ);
-      return end.isValid && end > now;
-    })
+    .filter((slot) => DateTime.fromISO(String(slot.start_at ?? "")).setZone(TZ).isValid)
     .map((slot) => ({ start_at: String(slot.start_at), end_at: String(slot.end_at) }));
 }
 
@@ -126,7 +122,6 @@ export async function POST(request: Request) {
     const today = DateTime.now().setZone(TZ).toISODate();
     const dateYmd = start.toISODate();
     if (!dateYmd || dateYmd !== today) return jsonResponse({ error: "当日の空き枠だけ実行できます" }, 400);
-    if (end <= DateTime.now().setZone(TZ)) return jsonResponse({ error: "この枠は終了しています" }, 400);
 
     const note = String(body.detail ?? "").trim();
     if (body.task_key === "other" && !note) return jsonResponse({ error: "その他タスクの内容を書いてください" }, 400);
