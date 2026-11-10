@@ -70,7 +70,7 @@ export async function POST(req: Request) {
           memberId: member.id,
           memberCode: member.member_code,
           memberName: member.name,
-          email: member.email,
+          email: member.email ?? null,
           storeName,
           planId: item.id,
           planName: item.name,
