@@ -138,6 +138,18 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
     };
   }, [selectedStoreId]);
 
+  const membershipSummary = useMemo(() => {
+    let active = 0;
+    let hiatus = 0;
+    for (const m of members ?? []) {
+      if (selectedStoreId !== "all" && String(m.store_id ?? "") !== selectedStoreId) continue;
+      const status = resolveMembershipStatus(m.membership_status, m.is_active);
+      if (status === "active") active += 1;
+      else if (status === "hiatus") hiatus += 1;
+    }
+    return { active, hiatus };
+  }, [members, selectedStoreId]);
+
   const activeMembers = useMemo(
     () =>
       (members ?? []).filter(
@@ -236,6 +248,14 @@ export function MembersClient(props: { stores: Store[]; members: MemberRow[] }) 
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 space-y-1">
         <div className="font-semibold text-slate-900">{monthLabel}の予約状況（有効会員）</div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          <span>
+            継続中: <span className="font-semibold text-emerald-800">{membershipSummary.active}人</span>
+          </span>
+          <span>
+            休会中: <span className="font-semibold text-amber-800">{membershipSummary.hiatus}人</span>
+          </span>
+        </div>
         {countsLoading ? (
           <div className="text-xs text-slate-500">集計中…</div>
         ) : (
