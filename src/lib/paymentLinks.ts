@@ -31,7 +31,7 @@ export const PERSONAL_PAYMENT_LINKS: PaymentLinkItem[] = [
     id: "monthly-4",
     name: "月4回プラン",
     priceYen: 16000,
-    url: "https://buy.stripe.com/bJe14nfrNctX3qH00B7ok0A",
+    url: "https://buy.stripe.com/3cI00j3J5gKd2mD3cN7ok0B",
   },
   {
     id: "hiatus-1m",
