@@ -1,10 +1,12 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { MembershipLedgerError, listMembershipPayments } from "@/lib/membershipPayments";
+import { importRecentMembershipCheckouts } from "@/lib/paymentLinkSuccess";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
 export async function GET() {
   try {
     const supabase = createSupabaseServiceClient();
+    await importRecentMembershipCheckouts(supabase);
     const snapshot = await listMembershipPayments(supabase);
     return jsonResponse({
       month_label: snapshot.monthLabel,

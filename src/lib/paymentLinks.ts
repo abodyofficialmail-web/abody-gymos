@@ -7,6 +7,8 @@ export type PaymentLinkItem = {
   amexUrl?: string;
   /** 店舗ごとの決済リンク。その店の会員に送るときだけ使う。 */
   storeUrls?: { storeName: string; url: string }[];
+  /** 差し替え前のリンク。過去の決済も同じプランとして拾う。 */
+  previousUrls?: string[];
 };
 
 export type PaymentCoupon = {
@@ -37,6 +39,7 @@ export const PERSONAL_PAYMENT_LINKS: PaymentLinkItem[] = [
     name: "月4回プラン",
     priceYen: 16000,
     url: "https://buy.stripe.com/3cI00j3J5gKd2mD3cN7ok0B",
+    previousUrls: ["https://buy.stripe.com/bJe14nfrNctX3qH00B7ok0A"],
   },
   {
     id: "hiatus-1m",
@@ -95,6 +98,7 @@ function linkTargets(item: PaymentLinkItem): Array<{ url: string; card: "standar
   const targets: Array<{ url: string; card: "standard" | "amex" }> = [];
   if (item.amexUrl) targets.push({ url: item.amexUrl, card: "amex" });
   for (const store of item.storeUrls ?? []) targets.push({ url: store.url, card: "standard" });
+  for (const url of item.previousUrls ?? []) targets.push({ url, card: "standard" });
   targets.push({ url: item.url, card: "standard" });
   return targets;
 }

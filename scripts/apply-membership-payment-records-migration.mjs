@@ -12,7 +12,9 @@ import pg from "pg";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 const sqlPath = path.join(root, "supabase/migrations/20261110123000_membership_payment_records.sql");
+const periodSqlPath = path.join(root, "supabase/migrations/20261111140000_membership_payment_periods.sql");
 const sql = fs.readFileSync(sqlPath, "utf8");
+const periodSql = fs.readFileSync(periodSqlPath, "utf8");
 
 function loadEnvLocal() {
   for (const name of [".env.local", ".env.production.local", ".env.prod.query", ".env.local.bak-before-vercel-run"]) {
@@ -59,6 +61,7 @@ async function applyWithPg() {
   await client.connect();
   try {
     await client.query(sql);
+    await client.query(periodSql);
     const { rows } = await client.query("select to_regclass('public.membership_payment_records') as table");
     console.log("OK: マイグレーション適用済み", rows[0]);
     return true;
@@ -68,10 +71,14 @@ async function applyWithPg() {
 }
 
 async function tableExists(serviceKey, supabaseUrl) {
-  const res = await fetch(`${supabaseUrl}/rest/v1/membership_payment_records?select=id&limit=1`, {
-    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-  });
-  return res.ok;
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/membership_payment_records?select=id&limit=1`, {
+      headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -79,16 +86,18 @@ async function main() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
+  if (await applyWithPg()) return;
+
   if (serviceKey && supabaseUrl && (await tableExists(serviceKey, supabaseUrl))) {
-    console.log("membership_payment_records は既に存在します。");
+    console.log("membership_payment_records は既に存在します。継続期間の列はデータベースパスワードがないため、SQLを貼り付けてください。\n");
+    console.log(periodSql);
     return;
   }
-
-  if (await applyWithPg()) return;
 
   console.log("=== membership_payment_records マイグレーション（手動） ===\n");
   console.log("Supabase Dashboard → SQL → New query に貼り付けて Run:\n");
   console.log(sql);
+  console.log(periodSql);
 }
 
 main().catch((e) => {

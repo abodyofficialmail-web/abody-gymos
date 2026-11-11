@@ -20,6 +20,8 @@ export type MembershipPaymentRecord = {
   status: MembershipPaymentStatus;
   reason: string | null;
   occurred_at: string;
+  period_start: string | null;
+  period_end: string | null;
 };
 
 export type MembershipPaymentSnapshot = {
@@ -55,6 +57,8 @@ type LedgerRow = {
   status: string;
   reason: string | null;
   occurred_at: string;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 
 type MemberMatch = {
@@ -75,6 +79,18 @@ function asLedgerError(error: LedgerError): MembershipLedgerError {
     error.code === "42P01" ||
     /membership_payment_records|schema cache/i.test(message);
   return new MembershipLedgerError(message, unavailable);
+}
+
+const PERIOD_COLUMNS = ["period_start", "period_end", "stripe_subscription_id"] as const;
+
+function missingPeriodColumn(message: string): boolean {
+  return PERIOD_COLUMNS.some((column) => message.includes(column));
+}
+
+function withoutPeriodColumns<T extends Record<string, unknown>>(row: T): T {
+  const next = { ...row };
+  for (const column of PERIOD_COLUMNS) delete next[column];
+  return next;
 }
 
 function escapeIlike(value: string): string {
@@ -171,6 +187,8 @@ function toRecord(row: LedgerRow): MembershipPaymentRecord {
     status,
     reason: row.reason,
     occurred_at: row.occurred_at,
+    period_start: row.period_start ?? null,
+    period_end: row.period_end ?? null,
   };
 }
 
@@ -221,13 +239,22 @@ export async function listMembershipPayments(
     .limit(1000);
   if (month.error) throw asLedgerError(month.error);
 
-  const recent = await db
+  const recentColumns =
+    "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at, period_start, period_end";
+  let recent = await db
     .from("membership_payment_records")
-    .select(
-      "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at"
-    )
+    .select(recentColumns)
     .order("occurred_at", { ascending: false })
     .limit(100);
+  if (recent.error && missingPeriodColumn(String(recent.error.message ?? ""))) {
+    recent = await db
+      .from("membership_payment_records")
+      .select(
+        "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at"
+      )
+      .order("occurred_at", { ascending: false })
+      .limit(100);
+  }
   if (recent.error) throw asLedgerError(recent.error);
 
   const monthRows = (month.data ?? []) as Array<{ status: string; amount_yen: number | null; price_yen: number | null }>;
@@ -288,32 +315,132 @@ export async function recordMembershipPaymentPaid(
     item: PaymentLinkItem;
     card: "standard" | "amex";
     amountYen: number | null;
+    occurredAt?: string | null;
+    periodStart?: string | null;
+    periodEnd?: string | null;
+    subscriptionId?: string | null;
   }
 ): Promise<boolean> {
   if (!input.sessionId) return false;
-  const { error } = await ledger(supabase).from("membership_payment_records").upsert(
-    {
-      member_id: input.memberId,
-      member_code: input.memberCode,
-      member_name: input.memberName,
-      email: input.email || null,
-      store_name: input.storeName,
-      plan_id: input.item.id,
-      plan_name: input.item.name,
-      price_yen: input.item.priceYen,
-      amount_yen: input.amountYen,
-      card_kind: input.card,
-      status: "paid",
-      stripe_session_id: input.sessionId,
-      occurred_at: new Date().toISOString(),
-    },
-    { onConflict: "stripe_session_id" }
-  );
-  if (error) {
-    console.error("membership paid record", error.message);
+  return upsertLedger(supabase, {
+    member_id: input.memberId,
+    member_code: input.memberCode,
+    member_name: input.memberName,
+    email: input.email || null,
+    store_name: input.storeName,
+    plan_id: input.item.id,
+    plan_name: input.item.name,
+    price_yen: input.item.priceYen,
+    amount_yen: input.amountYen,
+    card_kind: input.card,
+    status: "paid",
+    stripe_session_id: input.sessionId,
+    stripe_subscription_id: input.subscriptionId || null,
+    period_start: input.periodStart ?? null,
+    period_end: input.periodEnd ?? null,
+    occurred_at: input.occurredAt || new Date().toISOString(),
+  }, "stripe_session_id");
+}
+
+async function upsertLedger(
+  supabase: SupabaseClient<Database>,
+  row: Record<string, unknown>,
+  onConflict: string
+): Promise<boolean> {
+  const db = ledger(supabase);
+  const first = await db.from("membership_payment_records").upsert(row, { onConflict });
+  if (!first.error) return true;
+  if (!missingPeriodColumn(String(first.error.message ?? ""))) {
+    console.error("membership paid record", first.error.message);
+    return false;
+  }
+  const second = await db.from("membership_payment_records").upsert(withoutPeriodColumns(row), { onConflict });
+  if (second.error) {
+    console.error("membership paid record", second.error.message);
     return false;
   }
   return true;
+}
+
+function tokyoDay(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const day = DateTime.fromISO(iso).setZone("Asia/Tokyo");
+  return day.isValid ? day.toFormat("yyyy-LL-dd") : "";
+}
+
+export async function recordMembershipRenewal(
+  supabase: SupabaseClient<Database>,
+  input: {
+    invoiceId: string;
+    subscriptionId: string;
+    amountYen: number | null;
+    periodStart: string | null;
+    periodEnd: string | null;
+    occurredAt: string | null;
+  }
+): Promise<"recorded" | "not_ours" | "unavailable"> {
+  if (!input.invoiceId || !input.subscriptionId || !input.periodStart) return "not_ours";
+  const db = ledger(supabase);
+  const existing = await db
+    .from("membership_payment_records")
+    .select("id, member_id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, card_kind, period_start")
+    .eq("status", "paid")
+    .eq("stripe_subscription_id", input.subscriptionId)
+    .order("occurred_at", { ascending: false })
+    .limit(1);
+  if (existing.error) {
+    if (missingPeriodColumn(String(existing.error.message ?? ""))) return "not_ours";
+    const wrapped = asLedgerError(existing.error);
+    return wrapped.unavailable ? "unavailable" : "not_ours";
+  }
+  const row = ((existing.data ?? []) as Array<Record<string, unknown>>)[0];
+  if (!row) return "not_ours";
+
+  const samePeriod = tokyoDay(String(row.period_start ?? "")) === tokyoDay(input.periodStart);
+  if (!row.period_start || samePeriod) {
+    const updated = await db
+      .from("membership_payment_records")
+      .update({
+        period_start: input.periodStart,
+        period_end: input.periodEnd,
+        stripe_subscription_id: input.subscriptionId,
+      })
+      .eq("id", row.id);
+    if (updated.error) {
+      if (missingPeriodColumn(String(updated.error.message ?? ""))) return "not_ours";
+      console.error("membership renewal update", updated.error.message);
+      return "unavailable";
+    }
+    return "recorded";
+  }
+
+  const inserted = await db.from("membership_payment_records").upsert(
+    {
+      member_id: row.member_id ?? null,
+      member_code: row.member_code ?? null,
+      member_name: row.member_name ?? null,
+      email: row.email ?? null,
+      store_name: row.store_name ?? null,
+      plan_id: row.plan_id ?? null,
+      plan_name: row.plan_name,
+      price_yen: row.price_yen ?? null,
+      amount_yen: input.amountYen,
+      card_kind: row.card_kind ?? null,
+      status: "paid",
+      stripe_invoice_id: input.invoiceId,
+      stripe_subscription_id: input.subscriptionId,
+      period_start: input.periodStart,
+      period_end: input.periodEnd,
+      occurred_at: input.occurredAt || input.periodStart,
+    },
+    { onConflict: "stripe_invoice_id" }
+  );
+  if (inserted.error) {
+    console.error("membership renewal record", inserted.error.message);
+    const wrapped = asLedgerError(inserted.error);
+    return wrapped.unavailable ? "unavailable" : "not_ours";
+  }
+  return "recorded";
 }
 
 async function latestGuidance(supabase: SupabaseClient<Database>, email: string) {

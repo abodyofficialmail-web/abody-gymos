@@ -8,7 +8,7 @@ import {
   sumPaidYen,
   tokyoMonthRange,
 } from "./membershipPayments.ts";
-import { matchPaymentLinkInText } from "./paymentLinks.ts";
+import { matchPaymentLinkInText, matchPaymentLinkUrl } from "./paymentLinks.ts";
 
 describe("identifyPlanByAmount", () => {
   it("matches list prices, half prices, and the shared 3300 yen plans", () => {
@@ -26,6 +26,14 @@ describe("identifyPlanByAmount", () => {
     assert.equal(identifyPlanByAmount(980), null);
     assert.equal(identifyPlanByAmount(9800), null);
     assert.equal(identifyPlanByAmount(500), null);
+  });
+});
+
+describe("matchPaymentLinkUrl", () => {
+  it("keeps the replaced monthly-4 link and the Fukuoka link on the same plans", () => {
+    assert.equal(matchPaymentLinkUrl("https://buy.stripe.com/bJe14nfrNctX3qH00B7ok0A")?.item.id, "monthly-4");
+    assert.equal(matchPaymentLinkUrl("https://buy.stripe.com/3cI00j3J5gKd2mD3cN7ok0B")?.item.id, "monthly-4");
+    assert.equal(matchPaymentLinkUrl("https://buy.stripe.com/fZu4gz3bI1CN6U53MZcEw02")?.item.id, "personal-30");
   });
 });
 

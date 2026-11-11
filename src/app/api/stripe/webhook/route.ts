@@ -16,7 +16,7 @@ import {
   isMealPersonalStripeObject,
   recordMealPersonalPassEvent,
 } from "@/lib/stripeMealPersonalPass";
-import { recordMembershipCheckoutFailure, recordMembershipInvoiceFailure } from "@/lib/membershipPayments";
+import { recordMembershipCheckoutFailure, recordMembershipInvoiceFailure, recordMembershipRenewal } from "@/lib/membershipPayments";
 import { reportMembershipPaymentLinkCheckout, resolveMembershipPaymentLink } from "@/lib/paymentLinkSuccess";
 
 export const runtime = "nodejs";
@@ -289,6 +289,22 @@ export async function POST(request: Request) {
           status: String(sub?.status ?? (type === "invoice.paid" ? "active" : "past_due")),
           setActivatedAt: type === "invoice.paid",
         });
+      }
+      if (type === "invoice.paid") {
+        const item = sub?.items?.data?.[0];
+        const renewal = await recordMembershipRenewal(supabase, {
+          invoiceId: String(obj.id ?? ""),
+          subscriptionId,
+          amountYen:
+            typeof obj.amount_paid === "number" ? obj.amount_paid : typeof obj.total === "number" ? obj.total : null,
+          periodStart: unixSecondsToIso(sub?.current_period_start ?? item?.current_period_start),
+          periodEnd: unixSecondsToIso(sub?.current_period_end ?? item?.current_period_end),
+          occurredAt: unixSecondsToIso(obj.status_transitions?.paid_at ?? obj.created),
+        });
+        if (renewal === "recorded") {
+          return json({ received: true, product: "membership_payment_link", status: "renewed" });
+        }
+        if (renewal === "unavailable") return json({ error: "membership ledger unavailable" }, 500);
       }
       if (type === "invoice.payment_failed") {
         const failure = await recordMembershipInvoiceFailure(supabase, {

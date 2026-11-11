@@ -7,9 +7,10 @@ export type StripeSubscription = {
   id?: string;
   status?: string;
   customer?: string | { id?: string };
+  current_period_start?: number;
   current_period_end?: number;
   metadata?: { member_id?: string; member_code?: string };
-  items?: { data?: Array<{ price?: { id?: string } }> };
+  items?: { data?: Array<{ price?: { id?: string }; current_period_start?: number; current_period_end?: number }> };
 };
 
 export function customerIdOf(value: unknown): string {

@@ -26,6 +26,8 @@ type PaymentRecord = {
   status: "guided" | "paid" | "failed";
   reason: string | null;
   occurred_at: string;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 
 type Snapshot = {
@@ -65,6 +67,19 @@ function formatWhen(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatDay(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric" });
+}
+
+function periodLabel(row: PaymentRecord): string {
+  const start = row.period_start ? formatDay(row.period_start) : "";
+  const end = row.period_end ? formatDay(row.period_end) : "";
+  if (!start || !end) return "";
+  return `継続 ${start}〜${end}`;
 }
 
 function reasonLabel(reason: string | null): string {
@@ -141,7 +156,7 @@ export function PaymentStatusSection({
         <div>
           <h2 className="text-base font-bold text-slate-900">決済状況</h2>
           <p className="mt-1 text-sm leading-relaxed text-slate-600">
-            案内を送った記録、決済成功、決済失敗が残ります。失敗と、まだ支払い前の案内から決済案内を送れます。
+            案内、決済成功、決済失敗、継続期間が残ります。成功の金額が今月の売上です。失敗と、まだ支払い前の案内から決済案内を送れます。
           </p>
         </div>
         <button
@@ -223,6 +238,7 @@ export function PaymentStatusSection({
                     {row.plan_name}
                     {amountLabel(row) ? ` ${amountLabel(row)}` : ""}
                   </div>
+                  {periodLabel(row) ? <div className="mt-0.5 text-xs text-slate-600">{periodLabel(row)}</div> : null}
                   <div className="mt-0.5 text-xs text-slate-500">
                     {[reasonLabel(row.reason), row.card_kind === "amex" ? "アメックス" : "", row.store_name]
                       .filter(Boolean)
