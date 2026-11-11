@@ -239,22 +239,17 @@ export async function listMembershipPayments(
     .limit(1000);
   if (month.error) throw asLedgerError(month.error);
 
-  const recentColumns =
-    "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at, period_start, period_end";
-  let recent = await db
+  const baseColumns =
+    "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at";
+  const withPeriod = await db
     .from("membership_payment_records")
-    .select(recentColumns)
+    .select(`${baseColumns}, period_start, period_end`)
     .order("occurred_at", { ascending: false })
     .limit(100);
-  if (recent.error && missingPeriodColumn(String(recent.error.message ?? ""))) {
-    recent = await db
-      .from("membership_payment_records")
-      .select(
-        "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at"
-      )
-      .order("occurred_at", { ascending: false })
-      .limit(100);
-  }
+  const recent =
+    withPeriod.error && missingPeriodColumn(String(withPeriod.error.message ?? ""))
+      ? await db.from("membership_payment_records").select(baseColumns).order("occurred_at", { ascending: false }).limit(100)
+      : withPeriod;
   if (recent.error) throw asLedgerError(recent.error);
 
   const monthRows = (month.data ?? []) as Array<{ status: string; amount_yen: number | null; price_yen: number | null }>;
