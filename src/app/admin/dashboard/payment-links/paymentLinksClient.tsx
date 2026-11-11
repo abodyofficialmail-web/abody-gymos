@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  FUKUOKA_PAYMENT_COUPONS,
   OPTION_PAYMENT_LINKS,
   PAYMENT_COUPONS,
   PERSONAL_PAYMENT_LINKS,
@@ -100,6 +101,16 @@ function PaymentCard({
             onCopy={onCopy}
           />
         ) : null}
+        {item.storeUrls?.map((store) => (
+          <LinkRow
+            key={store.storeName}
+            title={`${store.storeName}店`}
+            url={store.url}
+            copyKey={`store:${item.id}:${store.storeName}`}
+            copiedKey={copiedKey}
+            onCopy={onCopy}
+          />
+        ))}
       </div>
     </article>
   );
@@ -133,7 +144,7 @@ export function PaymentLinksClient() {
       />
       <PaymentLinkSendSection prefill={prefill} onSent={() => setReloadKey((value) => value + 1)} />
       <p className="text-sm leading-relaxed text-slate-600">
-        リンクとクーポンの一覧です。アメックスは専用リンクを使います。
+        リンクとクーポンの一覧です。アメックスは専用リンクを使います。福岡店の30分通い放題・月10回は、福岡店の会員に送るときだけ福岡店のリンクになります。
       </p>
       {copyError ? (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{copyError}</div>
@@ -157,6 +168,30 @@ export function PaymentLinksClient() {
         <h2 className="text-sm font-bold text-slate-900">クーポンコード</h2>
         <div className="grid gap-2">
           {PAYMENT_COUPONS.map((coupon) => (
+            <div
+              key={coupon.id}
+              className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <div className="text-sm font-bold text-slate-900">{coupon.label}</div>
+                <div className="mt-1 font-mono text-lg font-bold tracking-wide text-slate-900">{coupon.code}</div>
+              </div>
+              <CopyButton
+                copyKey={`coupon:${coupon.id}`}
+                text={coupon.code}
+                label="コードをコピー"
+                copiedKey={copiedKey}
+                onCopy={onCopy}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-bold text-slate-900">福岡店のクーポン</h2>
+        <div className="grid gap-2">
+          {FUKUOKA_PAYMENT_COUPONS.map((coupon) => (
             <div
               key={coupon.id}
               className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"

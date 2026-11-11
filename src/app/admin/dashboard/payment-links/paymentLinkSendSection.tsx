@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   OPTION_PAYMENT_LINKS,
-  PAYMENT_COUPONS,
   PERSONAL_PAYMENT_LINKS,
+  couponsForStore,
   formatYen,
   type PaymentLinkItem,
 } from "@/lib/paymentLinks";
@@ -17,6 +17,7 @@ type MemberHit = {
   name: string | null;
   email: string | null;
   line_user_id: string | null;
+  store_name?: string | null;
 };
 
 const SEND_LINKS: PaymentLinkItem[] = [...PERSONAL_PAYMENT_LINKS, ...OPTION_PAYMENT_LINKS];
@@ -40,7 +41,7 @@ export function PaymentLinkSendSection({
   const [linkId, setLinkId] = useState(SEND_LINKS[0]?.id ?? "");
   const [card, setCard] = useState<"standard" | "amex">("standard");
   const [includeCoupon, setIncludeCoupon] = useState(false);
-  const [couponId, setCouponId] = useState(PAYMENT_COUPONS[0]?.id ?? "");
+  const [couponId, setCouponId] = useState(couponsForStore(null)[0]?.id ?? "");
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -48,8 +49,9 @@ export function PaymentLinkSendSection({
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
 
+  const coupons = useMemo(() => couponsForStore(member?.store_name), [member?.store_name]);
   const item = SEND_LINKS.find((link) => link.id === linkId) ?? SEND_LINKS[0];
-  const coupon = includeCoupon ? (PAYMENT_COUPONS.find((row) => row.id === couponId) ?? null) : null;
+  const coupon = includeCoupon ? (coupons.find((row) => row.id === couponId) ?? coupons[0] ?? null) : null;
   const effectiveCard = item?.amexUrl && card === "amex" ? "amex" : "standard";
 
   const generated = useMemo(() => {
@@ -60,8 +62,14 @@ export function PaymentLinkSendSection({
       item,
       card: effectiveCard,
       coupon,
+      storeName: member?.store_name,
     });
-  }, [member?.name, reason, item, effectiveCard, coupon]);
+  }, [member?.name, member?.store_name, reason, item, effectiveCard, coupon]);
+
+  useEffect(() => {
+    if (coupons.some((row) => row.id === couponId)) return;
+    setCouponId(coupons[0]?.id ?? "");
+  }, [coupons, couponId]);
 
   useEffect(() => {
     setDraft(generated);
@@ -208,7 +216,9 @@ export function PaymentLinkSendSection({
                     className={`w-full rounded-lg px-3 py-2 text-left ${selected ? "bg-white" : "hover:bg-white"}`}
                   >
                     <div className="text-sm font-semibold text-slate-900">{memberLabel(row)}</div>
-                    <div className="text-xs text-slate-500">{row.line_user_id ? "LINE連携済み" : "LINE未連携"}</div>
+                    <div className="text-xs text-slate-500">
+                      {[row.store_name, row.line_user_id ? "LINE連携済み" : "LINE未連携"].filter(Boolean).join(" / ")}
+                    </div>
                   </button>
                 );
               })
@@ -219,7 +229,10 @@ export function PaymentLinkSendSection({
 
       {member ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900">
-          <div className="font-semibold">送付先 {memberLabel(member)}</div>
+          <div className="font-semibold">
+            送付先 {memberLabel(member)}
+            {member.store_name ? `（${member.store_name}）` : ""}
+          </div>
           {member.line_user_id ? null : (
             <div className="mt-1 text-amber-800">LINE未連携です。文章をコピーして別の方法で送ってください。</div>
           )}
@@ -272,6 +285,9 @@ export function PaymentLinkSendSection({
             ))}
           </optgroup>
         </select>
+        {member?.store_name === "福岡" && item?.id === "personal-30" ? (
+          <p className="mt-1 text-xs text-slate-600">福岡店の30分通い放題・月10回リンクを使います。</p>
+        ) : null}
       </div>
 
       <div>
@@ -304,7 +320,7 @@ export function PaymentLinkSendSection({
             onChange={(e) => setCouponId(e.target.value)}
             className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-[16px]"
           >
-            {PAYMENT_COUPONS.map((row) => (
+            {coupons.map((row) => (
               <option key={row.id} value={row.id}>
                 {row.code}（{row.label}）
               </option>

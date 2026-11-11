@@ -35,9 +35,10 @@ export function buildPaymentLinkLineMessage(params: {
   item: PaymentLinkItem;
   card: "standard" | "amex";
   coupon?: PaymentCoupon | null;
+  storeName?: string | null;
 }): string {
   const card = params.card === "amex" && params.item.amexUrl ? "amex" : "standard";
-  const url = paymentLinkUrl(params.item, card);
+  const url = paymentLinkUrl(params.item, card, params.storeName);
   const lines = [
     "お世話になっております！",
     "Abodyです😊",

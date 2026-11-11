@@ -55,7 +55,17 @@ export async function GET(request: Request) {
     }
     if (error) return jsonResponse({ error: "会員の検索に失敗しました", detail: error.message }, 500);
 
-    const members = (data ?? []) as Array<{ id: string; booking_stop_proposed?: boolean | null }>;
+    const members = (data ?? []) as Array<{ id: string; store_id?: string | null; booking_stop_proposed?: boolean | null }>;
+    const storeIds = [...new Set(members.map((m) => String(m.store_id ?? "")).filter(Boolean))];
+    const storeNames = new Map<string, string>();
+    if (storeIds.length > 0) {
+      const stores = await supabase.from("stores").select("id, name").in("id", storeIds);
+      if (!stores.error) {
+        for (const store of stores.data ?? []) {
+          if (store.id && store.name) storeNames.set(store.id, store.name);
+        }
+      }
+    }
     const datesByMember = new Map<string, string[]>();
     const memberIds = members.map((m) => m.id).filter(Boolean);
     if (memberIds.length > 0) {
@@ -79,6 +89,7 @@ export async function GET(request: Request) {
     return jsonResponse({
       members: members.map((m) => ({
         ...m,
+        store_name: storeNames.get(String(m.store_id ?? "")) ?? null,
         booking_stop_proposed: Boolean(m.booking_stop_proposed),
         booking_stop_dates: datesByMember.get(m.id) ?? [],
       })),

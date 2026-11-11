@@ -51,6 +51,21 @@ describe("buildPaymentLinkLineMessage", () => {
     assert.doesNotMatch(text, /前のカード/);
   });
 
+  it("uses the Fukuoka link and Fukuoka coupon for a Fukuoka member", () => {
+    const text = buildPaymentLinkLineMessage({
+      memberName: "相川",
+      reason: "new_enrollment",
+      item: plan,
+      card: "standard",
+      storeName: "福岡",
+      coupon: { id: "fukuoka-980", label: "980円", code: "Fukuoka", storeName: "福岡" },
+    });
+    assert.match(text, /相川様/);
+    assert.match(text, /https:\/\/buy\.stripe\.com\/fZu4gz3bI1CN6U53MZcEw02/);
+    assert.match(text, /Fukuoka/);
+    assert.doesNotMatch(text, new RegExp(plan.url));
+  });
+
   it("describes a plan change", () => {
     const text = buildPaymentLinkLineMessage({
       memberName: "佐藤",
