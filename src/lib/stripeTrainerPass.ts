@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { getAppUrl } from "@/lib/constants";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 import { isMissingTrainerVisibilityColumn, pickActiveMember } from "@/lib/trainerVisibilityPass";
@@ -25,13 +26,31 @@ export function trainerVisibilityCheckoutUrl(): string | null {
   return base || null;
 }
 
-export async function stripePost(path: string, body: Record<string, string>): Promise<any> {
-  const key = process.env.STRIPE_SECRET_KEY?.trim();
+const stripeKeyContext = new AsyncLocalStorage<string>();
+
+export function stripeAccountKeys(): string[] {
+  const keys = [process.env.STRIPE_SECRET_KEY, process.env.STRIPE_FUKUOKA_SECRET_KEY]
+    .map((value) => value?.trim() ?? "")
+    .filter(Boolean);
+  return [...new Set(keys)];
+}
+
+export function runWithStripeKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return stripeKeyContext.run(key, fn);
+}
+
+function stripeSecret(explicit?: string): string {
+  const key = explicit?.trim() || stripeKeyContext.getStore() || process.env.STRIPE_SECRET_KEY?.trim() || "";
   if (!key) throw new Error("STRIPE_SECRET_KEY が未設定です");
+  return key;
+}
+
+export async function stripePost(path: string, body: Record<string, string>, key?: string): Promise<any> {
+  const secret = stripeSecret(key);
   const res = await fetch(`https://api.stripe.com/v1${path}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${key}`,
+      Authorization: `Bearer ${secret}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(body).toString(),
@@ -104,11 +123,10 @@ export function subscriptionMatchesProduct(sub: StripeSubscription | null | unde
   return items.some((it) => it?.price?.id === priceId);
 }
 
-export async function stripeGet(path: string): Promise<any> {
-  const key = process.env.STRIPE_SECRET_KEY?.trim();
-  if (!key) throw new Error("STRIPE_SECRET_KEY が未設定です");
+export async function stripeGet(path: string, key?: string): Promise<any> {
+  const secret = stripeSecret(key);
   const res = await fetch(`https://api.stripe.com/v1${path}`, {
-    headers: { Authorization: `Bearer ${key}` },
+    headers: { Authorization: `Bearer ${secret}` },
   });
   const jsonBody = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -120,12 +138,15 @@ export async function stripeGet(path: string): Promise<any> {
 
 export async function loadSubscription(subscriptionId: string): Promise<StripeSubscription | null> {
   if (!subscriptionId) return null;
-  try {
-    return (await stripeGet(`/subscriptions/${encodeURIComponent(subscriptionId)}`)) as StripeSubscription;
-  } catch (e) {
-    console.error("stripe subscription fetch failed", e);
-    return null;
+  const keys = stripeAccountKeys();
+  for (const key of keys.length > 0 ? keys : [undefined]) {
+    try {
+      return (await stripeGet(`/subscriptions/${encodeURIComponent(subscriptionId)}`, key)) as StripeSubscription;
+    } catch (e) {
+      console.error("stripe subscription fetch failed", e);
+    }
   }
+  return null;
 }
 
 export async function findMemberIdForTrainerPass(params: {

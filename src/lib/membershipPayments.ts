@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import type { Database } from "@/types/database";
 import { pushPaymentLinkNotice } from "@/lib/paymentLinkNotify";
 import { allPaymentLinks, formatYen, type PaymentLinkItem } from "@/lib/paymentLinks";
-import { stripePost } from "@/lib/stripeTrainerPass";
+import { stripeAccountKeys, stripePost } from "@/lib/stripeTrainerPass";
 
 export type MembershipPaymentStatus = "guided" | "paid" | "failed";
 
@@ -380,7 +380,23 @@ export async function stopMembershipRenewal(
   const subscriptionId = String(row.stripe_subscription_id ?? "").trim();
   if (!subscriptionId) return { ok: false, error: "この決済の継続番号が無いため、ここから止められません" };
   try {
-    await stripePost(`/subscriptions/${encodeURIComponent(subscriptionId)}`, { cancel_at_period_end: "true" });
+    const keys = stripeAccountKeys();
+    let stopped = false;
+    let last: unknown = null;
+    for (const key of keys.length > 0 ? keys : [undefined]) {
+      try {
+        await stripePost(
+          `/subscriptions/${encodeURIComponent(subscriptionId)}`,
+          { cancel_at_period_end: "true" },
+          key
+        );
+        stopped = true;
+        break;
+      } catch (error) {
+        last = error;
+      }
+    }
+    if (!stopped) throw last;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     return { ok: false, error: message ? `決済を止められませんでした。${message}` : "決済を止められませんでした" };

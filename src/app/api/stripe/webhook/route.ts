@@ -89,12 +89,14 @@ async function applyMealPass(params: {
 }
 
 export async function POST(request: Request) {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
-  if (!secret) return json({ error: "STRIPE_WEBHOOK_SECRET が未設定です" }, 500);
+  const secrets = [process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_FUKUOKA_WEBHOOK_SECRET]
+    .map((value) => value?.trim() ?? "")
+    .filter(Boolean);
+  if (secrets.length === 0) return json({ error: "STRIPE_WEBHOOK_SECRET が未設定です" }, 500);
 
   const raw = await request.text();
   const signature = request.headers.get("stripe-signature");
-  if (!verifyStripeSignature(raw, signature, secret)) {
+  if (!secrets.some((secret) => verifyStripeSignature(raw, signature, secret))) {
     return json({ error: "invalid signature" }, 400);
   }
 

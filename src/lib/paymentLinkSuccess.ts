@@ -3,7 +3,7 @@ import type { Database } from "@/types/database";
 import { identifyPlanByAmount, recordMembershipPaymentPaid } from "@/lib/membershipPayments";
 import { pushPaymentLinkNotice } from "@/lib/paymentLinkNotify";
 import { allPaymentLinks, formatYen, matchPaymentLinkUrl, type PaymentLinkItem } from "@/lib/paymentLinks";
-import { loadSubscription, stripeGet } from "@/lib/stripeTrainerPass";
+import { loadSubscription, runWithStripeKey, stripeAccountKeys, stripeGet } from "@/lib/stripeTrainerPass";
 import { unixSecondsToIso } from "@/lib/stripeWebhook";
 
 type CheckoutSession = {
@@ -82,8 +82,16 @@ export async function resolveMembershipPaymentLink(
   if (direct) return direct;
   const id = paymentLinkIdOf(session);
   if (!id) return null;
-  const link = await stripeGet(`/payment_links/${encodeURIComponent(id)}`);
-  return matchPaymentLinkUrl(String(link?.url ?? ""));
+  for (const key of stripeAccountKeys()) {
+    try {
+      const link = await stripeGet(`/payment_links/${encodeURIComponent(id)}`, key);
+      const matched = matchPaymentLinkUrl(String(link?.url ?? ""));
+      if (matched) return matched;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 function escapeIlike(value: string): string {
@@ -351,17 +359,6 @@ async function importRecentMembershipCharges(
     startingAfter = String(rows[rows.length - 1]?.id ?? "");
     if (!startingAfter) break;
   }
-  try {
-    const found = await stripeGet(`/charges/search?query=${encodeURIComponent("amount:15400")}&limit=10`);
-    const seen = new Set(charges.map((charge) => String(charge.id ?? "")));
-    for (const charge of (found?.data ?? []) as Array<Record<string, unknown>>) {
-      const id = String(charge.id ?? "");
-      if (!id || seen.has(id)) continue;
-      charges.push(charge);
-    }
-  } catch (error) {
-    console.error("membership 15400 search", error instanceof Error ? error.message : error);
-  }
 
   let saved = 0;
   const amounts = charges.map((charge) => (typeof charge.amount === "number" ? charge.amount : 0));
@@ -452,89 +449,7 @@ async function findMembersByName(supabase: SupabaseClient<Database>, name: strin
   return data ?? [];
 }
 
-export async function probeMembershipStripeAccount(supabase: SupabaseClient<Database>): Promise<{
-  fukuoka_link: boolean;
-  matched_links: number;
-    charge_15400: number;
-    charge_15400_rows: Array<{ paid_on: string | null; name: string | null; status: string | null }>;
-  customer_found: boolean;
-  customer_charges: number;
-  note: string | null;
-}> {
-  let fukuoka = false;
-  let matched = 0;
-  let note: string | null = null;
-  try {
-    let startingAfter = "";
-    for (let page = 0; page < 4; page += 1) {
-      const query = new URLSearchParams({ limit: "100" });
-      if (startingAfter) query.set("starting_after", startingAfter);
-      const list = await stripeGet(`/payment_links?${query.toString()}`);
-      const links = (list?.data ?? []) as Array<{ id?: string; url?: string }>;
-      for (const link of links) {
-        const url = String(link.url ?? "");
-        if (url.includes("fZu4gz3bI1CN6U53MZcEw02")) fukuoka = true;
-        if (matchPaymentLinkUrl(url)) matched += 1;
-      }
-      if (!list?.has_more || links.length === 0) break;
-      startingAfter = String(links[links.length - 1]?.id ?? "");
-      if (!startingAfter) break;
-    }
-  } catch (error) {
-    note = error instanceof Error ? error.message : "payment_links";
-  }
-
-  const charge15400Rows: Array<{ paid_on: string | null; name: string | null; status: string | null }> = [];
-  try {
-    const found = await stripeGet(`/charges/search?query=${encodeURIComponent("amount:15400")}&limit=10`);
-    for (const charge of (found?.data ?? []) as Array<Record<string, unknown>>) {
-      const billing = (charge.billing_details ?? {}) as { name?: string | null };
-      charge15400Rows.push({
-        paid_on: unixSecondsToIso(charge.created),
-        name: String(billing.name ?? "").trim() || null,
-        status: String(charge.status ?? "") || null,
-      });
-    }
-  } catch (error) {
-    note = [note, error instanceof Error ? error.message : "charges_search"].filter(Boolean).join(" / ");
-  }
-
-  let customerFound = false;
-  let customerCharges = 0;
-  try {
-    const { data: member } = await supabase
-      .from("members")
-      .select("email")
-      .eq("member_code", "FUK015")
-      .maybeSingle();
-    const email = String(member?.email ?? "").trim();
-    if (email) {
-      const customers = await stripeGet(`/customers?email=${encodeURIComponent(email)}&limit=5`);
-      const rows = (customers?.data ?? []) as Array<{ id?: string }>;
-      customerFound = rows.length > 0;
-      for (const customer of rows) {
-        const id = String(customer.id ?? "");
-        if (!id) continue;
-        const charges = await stripeGet(`/charges?customer=${encodeURIComponent(id)}&limit=20`);
-        customerCharges += Array.isArray(charges?.data) ? charges.data.length : 0;
-      }
-    }
-  } catch (error) {
-    note = [note, error instanceof Error ? error.message : "customer"].filter(Boolean).join(" / ");
-  }
-
-  return {
-    fukuoka_link: fukuoka,
-    matched_links: matched,
-    charge_15400: charge15400Rows.length,
-    charge_15400_rows: charge15400Rows,
-    customer_found: customerFound,
-    customer_charges: customerCharges,
-    note,
-  };
-}
-
-export async function importRecentMembershipCheckouts(
+async function importMembershipCheckoutsForCurrentKey(
   supabase: SupabaseClient<Database>
 ): Promise<{ saved: number; chargeAmounts: number[] }> {
   const since = Math.floor(Date.now() / 1000) - 45 * 24 * 60 * 60;
@@ -626,6 +541,21 @@ export async function importRecentMembershipCheckouts(
     chargeAmounts = charges.amounts;
   } catch (error) {
     console.error("membership charge import", error instanceof Error ? error.message : error);
+  }
+  return { saved, chargeAmounts };
+}
+
+export async function importRecentMembershipCheckouts(
+  supabase: SupabaseClient<Database>
+): Promise<{ saved: number; chargeAmounts: number[] }> {
+  const keys = stripeAccountKeys();
+  if (keys.length === 0) return importMembershipCheckoutsForCurrentKey(supabase);
+  let saved = 0;
+  const chargeAmounts: number[] = [];
+  for (const key of keys) {
+    const result = await runWithStripeKey(key, () => importMembershipCheckoutsForCurrentKey(supabase));
+    saved += result.saved;
+    chargeAmounts.push(...result.chargeAmounts);
   }
   return { saved, chargeAmounts };
 }

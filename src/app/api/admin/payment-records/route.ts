@@ -1,16 +1,11 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
 import { MembershipLedgerError, listMembershipPayments, stopMembershipRenewal } from "@/lib/membershipPayments";
-import { importRecentMembershipCheckouts, probeMembershipStripeAccount } from "@/lib/paymentLinkSuccess";
+import { importRecentMembershipCheckouts } from "@/lib/paymentLinkSuccess";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const supabase = createSupabaseServiceClient();
-    const probe = new URL(request.url).searchParams.get("probe") === "1";
-    if (probe) {
-      const account = await probeMembershipStripeAccount(supabase);
-      return jsonResponse(account);
-    }
     await importRecentMembershipCheckouts(supabase);
     const snapshot = await listMembershipPayments(supabase);
     return jsonResponse({
