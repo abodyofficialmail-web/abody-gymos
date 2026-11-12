@@ -3,20 +3,12 @@ import { MembershipLedgerError, listMembershipPayments, stopMembershipRenewal } 
 import { importRecentMembershipCheckouts } from "@/lib/paymentLinkSuccess";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const supabase = createSupabaseServiceClient();
-    const imported = await importRecentMembershipCheckouts(supabase);
+    await importRecentMembershipCheckouts(supabase);
     const snapshot = await listMembershipPayments(supabase);
-    const probe = new URL(request.url).searchParams.get("probe") === "1";
     return jsonResponse({
-      ...(probe
-        ? {
-            charge_amounts: imported.chargeAmounts,
-            charge_count: imported.chargeAmounts.length,
-            has_15400: imported.chargeAmounts.includes(15400),
-          }
-        : {}),
       month_label: snapshot.monthLabel,
       sales_yen: snapshot.salesYen,
       month_counts: snapshot.monthCounts,
