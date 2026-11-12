@@ -323,22 +323,33 @@ async function importRecentMembershipCharges(
   knownPaymentIntents: Set<string>
 ): Promise<number> {
   const since = Math.floor(Date.now() / 1000) - 5 * 24 * 60 * 60;
-  let charges: Array<Record<string, unknown>> = [];
-  try {
+  const charges: Array<Record<string, unknown>> = [];
+  let startingAfter = "";
+  for (let page = 0; page < 3; page += 1) {
     const query = new URLSearchParams({ limit: "100", "created[gte]": String(since) });
+    if (startingAfter) query.set("starting_after", startingAfter);
     query.append("expand[]", "data.customer");
     query.append("expand[]", "data.invoice");
-    const list = await stripeGet(`/charges?${query.toString()}`);
-    charges = (list?.data ?? []) as Array<Record<string, unknown>>;
-  } catch (error) {
-    console.error("membership charge import", error instanceof Error ? error.message : error);
+    let list: { data?: Array<Record<string, unknown>>; has_more?: boolean };
     try {
-      const list = await stripeGet(`/charges?limit=100&created[gte]=${since}`);
-      charges = (list?.data ?? []) as Array<Record<string, unknown>>;
-    } catch (retryError) {
-      console.error("membership charge import", retryError instanceof Error ? retryError.message : retryError);
-      return 0;
+      list = await stripeGet(`/charges?${query.toString()}`);
+    } catch (error) {
+      console.error("membership charge import", error instanceof Error ? error.message : error);
+      if (page > 0) break;
+      try {
+        const plain = new URLSearchParams({ limit: "100", "created[gte]": String(since) });
+        if (startingAfter) plain.set("starting_after", startingAfter);
+        list = await stripeGet(`/charges?${plain.toString()}`);
+      } catch (retryError) {
+        console.error("membership charge import", retryError instanceof Error ? retryError.message : retryError);
+        return 0;
+      }
     }
+    const rows = list?.data ?? [];
+    charges.push(...rows);
+    if (!list?.has_more || rows.length === 0) break;
+    startingAfter = String(rows[rows.length - 1]?.id ?? "");
+    if (!startingAfter) break;
   }
 
   let saved = 0;
@@ -461,14 +472,29 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
   const paymentIntents = new Set<string>();
   let saved = 0;
   for (const session of sessions) {
-    const paymentIntentId = stripeIdOf(session.payment_intent);
-    if (paymentIntentId) paymentIntents.add(paymentIntentId);
     try {
-      const matched = matchPaymentLinkUrl(await paymentLinkUrlFor(session, linkUrls));
+      let matched = matchPaymentLinkUrl(await paymentLinkUrlFor(session, linkUrls));
+      if (!matched && typeof session.amount_total === "number") {
+        const plan = identifyPlanByAmount(session.amount_total);
+        const item = plan?.planId ? allPaymentLinks().find((row) => row.id === plan.planId) : null;
+        if (item && plan) {
+          const payerEmail = String(session.customer_details?.email ?? session.customer_email ?? "").trim();
+          const payer = String(session.customer_details?.name ?? "").trim();
+          const byEmail = await findMembersByEmail(supabase, payerEmail);
+          const byName = byEmail.length === 1 || !payer ? [] : await findMembersByName(supabase, payer);
+          if ((byEmail.length === 1 || byName.length === 1) && checkoutPaid(session)) {
+            matched = { item: plan.planName === item.name ? item : { ...item, name: plan.planName }, card: "standard" };
+          }
+        }
+      }
       if (!matched || !checkoutPaid(session) || !session.id) continue;
+      const paymentIntentId = stripeIdOf(session.payment_intent);
+      if (paymentIntentId) paymentIntents.add(paymentIntentId);
       const email = String(session.customer_details?.email ?? session.customer_email ?? "").trim();
       const payerName = String(session.customer_details?.name ?? "").trim();
-      const members = await findMembersByEmail(supabase, email);
+      const byEmail = await findMembersByEmail(supabase, email);
+      const byName = byEmail.length === 1 || !payerName ? [] : await findMembersByName(supabase, payerName);
+      const members = byEmail.length === 1 ? byEmail : byName;
       const member = members.length === 1 ? members[0] : null;
       let storeName: string | null = null;
       if (member?.store_id) {
