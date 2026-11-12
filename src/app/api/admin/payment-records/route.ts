@@ -1,5 +1,5 @@
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
-import { MembershipLedgerError, listMembershipPayments } from "@/lib/membershipPayments";
+import { MembershipLedgerError, listMembershipPayments, stopMembershipRenewal } from "@/lib/membershipPayments";
 import { importRecentMembershipCheckouts } from "@/lib/paymentLinkSuccess";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
@@ -23,5 +23,21 @@ export async function GET() {
       return jsonResponse({ error: "決済記録の取得に失敗しました" }, 500);
     }
     return jsonResponse({ error: "決済記録の取得に失敗しました" }, 500);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json().catch(() => ({}))) as { id?: unknown };
+    const supabase = createSupabaseServiceClient();
+    const result = await stopMembershipRenewal(supabase, String(body.id ?? ""));
+    if (!result.ok) return jsonResponse({ error: result.error }, 400);
+    return jsonResponse({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/SUPABASE_SERVICE_ROLE_KEY|NEXT_PUBLIC_SUPABASE_URL|STRIPE_SECRET_KEY/.test(message)) {
+      return jsonResponse({ error: "決済を止められませんでした" }, 500);
+    }
+    return jsonResponse({ error: "決済を止められませんでした" }, 500);
   }
 }

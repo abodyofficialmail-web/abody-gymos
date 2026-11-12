@@ -28,6 +28,8 @@ type PaymentRecord = {
   occurred_at: string;
   period_start?: string | null;
   period_end?: string | null;
+  stripe_subscription_id?: string | null;
+  stopped_at?: string | null;
 };
 
 type Snapshot = {
@@ -116,6 +118,8 @@ export function PaymentStatusSection({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterId>("open");
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [stopError, setStopError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,7 +160,7 @@ export function PaymentStatusSection({
         <div>
           <h2 className="text-base font-bold text-slate-900">決済状況</h2>
           <p className="mt-1 text-sm leading-relaxed text-slate-600">
-            案内、決済成功、決済失敗、継続期間が残ります。成功の金額が今月の売上です。失敗と、まだ支払い前の案内から決済案内を送れます。
+            案内、決済成功、決済失敗、継続期間が残ります。成功の金額が今月の売上です。GymOSから送ったリンクの次回以降は、ここから止められます。
           </p>
         </div>
         <button
@@ -209,6 +213,8 @@ export function PaymentStatusSection({
         })}
       </div>
 
+      {stopError ? <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{stopError}</div> : null}
+
       {loading && !snapshot ? <div className="text-sm text-slate-600">読み込み中です。</div> : null}
 
       {snapshot && records.length === 0 ? (
@@ -240,10 +246,17 @@ export function PaymentStatusSection({
                   </div>
                   {periodLabel(row) ? <div className="mt-0.5 text-xs text-slate-600">{periodLabel(row)}</div> : null}
                   <div className="mt-0.5 text-xs text-slate-500">
-                    {[reasonLabel(row.reason), row.card_kind === "amex" ? "アメックス" : "", row.store_name]
+                    {[
+                      row.reason === "stopped" || row.stopped_at ? "" : reasonLabel(row.reason),
+                      row.card_kind === "amex" ? "アメックス" : "",
+                      row.store_name,
+                    ]
                       .filter(Boolean)
                       .join(" / ")}
                   </div>
+                  {row.reason === "stopped" || row.stopped_at ? (
+                    <div className="mt-1 text-xs font-semibold text-slate-700">次回以降は停止します。</div>
+                  ) : null}
                   {!row.member_code ? <div className="mt-1 text-xs text-amber-800">会員番号が未特定です。</div> : null}
                 </div>
                 {canGuide ? (
@@ -261,6 +274,38 @@ export function PaymentStatusSection({
                     className="shrink-0 rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
                   >
                     決済案内
+                  </button>
+                ) : null}
+                {row.status === "paid" && row.stripe_subscription_id && row.reason !== "stopped" && !row.stopped_at ? (
+                  <button
+                    type="button"
+                    disabled={stoppingId === row.id}
+                    onClick={() => {
+                      const name = whoLabel(row);
+                      const ok = window.confirm(
+                        `${name}の${row.plan_name}は、次回以降の決済を止めます。今の期間の支払いは残ります。`
+                      );
+                      if (!ok) return;
+                      setStoppingId(row.id);
+                      setStopError(null);
+                      fetch("/api/admin/payment-records", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ id: row.id }),
+                      })
+                        .then(async (res) => {
+                          const json = (await res.json().catch(() => ({}))) as { error?: string };
+                          if (!res.ok) throw new Error(json.error || "決済を止められませんでした");
+                          onReload();
+                        })
+                        .catch((e: unknown) => {
+                          setStopError(e instanceof Error ? e.message : "決済を止められませんでした");
+                        })
+                        .finally(() => setStoppingId(null));
+                    }}
+                    className="shrink-0 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-800 disabled:opacity-60"
+                  >
+                    {stoppingId === row.id ? "止めています" : "次回から止める"}
                   </button>
                 ) : null}
               </div>

@@ -13,8 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 const sqlPath = path.join(root, "supabase/migrations/20261110123000_membership_payment_records.sql");
 const periodSqlPath = path.join(root, "supabase/migrations/20261111140000_membership_payment_periods.sql");
+const stoppedSqlPath = path.join(root, "supabase/migrations/20261111150000_membership_payment_stopped_at.sql");
 const sql = fs.readFileSync(sqlPath, "utf8");
-const periodSql = fs.readFileSync(periodSqlPath, "utf8");
+const periodSql = `${fs.readFileSync(periodSqlPath, "utf8")}\n${fs.readFileSync(stoppedSqlPath, "utf8")}`;
 
 function loadEnvLocal() {
   for (const name of [".env.local", ".env.production.local", ".env.prod.query", ".env.local.bak-before-vercel-run"]) {

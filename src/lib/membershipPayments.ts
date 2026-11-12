@@ -3,6 +3,7 @@ import { DateTime } from "luxon";
 import type { Database } from "@/types/database";
 import { pushPaymentLinkNotice } from "@/lib/paymentLinkNotify";
 import { allPaymentLinks, formatYen, type PaymentLinkItem } from "@/lib/paymentLinks";
+import { stripePost } from "@/lib/stripeTrainerPass";
 
 export type MembershipPaymentStatus = "guided" | "paid" | "failed";
 
@@ -22,6 +23,8 @@ export type MembershipPaymentRecord = {
   occurred_at: string;
   period_start: string | null;
   period_end: string | null;
+  stripe_subscription_id: string | null;
+  stopped_at: string | null;
 };
 
 export type MembershipPaymentSnapshot = {
@@ -59,6 +62,8 @@ type LedgerRow = {
   occurred_at: string;
   period_start?: string | null;
   period_end?: string | null;
+  stripe_subscription_id?: string | null;
+  stopped_at?: string | null;
 };
 
 type MemberMatch = {
@@ -81,7 +86,7 @@ function asLedgerError(error: LedgerError): MembershipLedgerError {
   return new MembershipLedgerError(message, unavailable);
 }
 
-const PERIOD_COLUMNS = ["period_start", "period_end", "stripe_subscription_id"] as const;
+const PERIOD_COLUMNS = ["period_start", "period_end", "stripe_subscription_id", "stopped_at"] as const;
 
 function missingPeriodColumn(message: string): boolean {
   return PERIOD_COLUMNS.some((column) => message.includes(column));
@@ -189,6 +194,8 @@ function toRecord(row: LedgerRow): MembershipPaymentRecord {
     occurred_at: row.occurred_at,
     period_start: row.period_start ?? null,
     period_end: row.period_end ?? null,
+    stripe_subscription_id: row.stripe_subscription_id ?? null,
+    stopped_at: row.stopped_at ?? null,
   };
 }
 
@@ -243,7 +250,7 @@ export async function listMembershipPayments(
     "id, member_code, member_name, email, store_name, plan_id, plan_name, price_yen, amount_yen, card_kind, status, reason, occurred_at";
   const withPeriod = await db
     .from("membership_payment_records")
-    .select(`${baseColumns}, period_start, period_end`)
+    .select(`${baseColumns}, period_start, period_end, stripe_subscription_id, stopped_at`)
     .order("occurred_at", { ascending: false })
     .limit(100);
   const recent =
@@ -314,10 +321,11 @@ export async function recordMembershipPaymentPaid(
     periodStart?: string | null;
     periodEnd?: string | null;
     subscriptionId?: string | null;
+    stopped?: boolean;
   }
 ): Promise<boolean> {
   if (!input.sessionId) return false;
-  return upsertLedger(supabase, {
+  const row: Record<string, unknown> = {
     member_id: input.memberId,
     member_code: input.memberCode,
     member_name: input.memberName,
@@ -334,7 +342,58 @@ export async function recordMembershipPaymentPaid(
     period_start: input.periodStart ?? null,
     period_end: input.periodEnd ?? null,
     occurred_at: input.occurredAt || new Date().toISOString(),
-  }, "stripe_session_id");
+  };
+  if (input.stopped) {
+    row.reason = "stopped";
+    row.stopped_at = new Date().toISOString();
+  }
+  return upsertLedger(supabase, row, "stripe_session_id");
+}
+
+export async function stopMembershipRenewal(
+  supabase: SupabaseClient<Database>,
+  recordId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const id = recordId.trim();
+  if (!id) return { ok: false, error: "決済が指定されていません" };
+  const db = ledger(supabase);
+  const found = await db
+    .from("membership_payment_records")
+    .select("id, status, stripe_subscription_id, reason, stopped_at")
+    .eq("id", id)
+    .maybeSingle();
+  if (found.error) {
+    if (missingPeriodColumn(String(found.error.message ?? ""))) {
+      return { ok: false, error: "継続の番号をまだ保存できないため、ここから止められません" };
+    }
+    return { ok: false, error: "決済を読み取れませんでした" };
+  }
+  const row = found.data as {
+    status?: string;
+    stripe_subscription_id?: string | null;
+    reason?: string | null;
+    stopped_at?: string | null;
+  } | null;
+  if (!row) return { ok: false, error: "決済が見つかりません" };
+  if (row.status !== "paid") return { ok: false, error: "成功した決済だけ止められます" };
+  if (row.reason === "stopped" || row.stopped_at) return { ok: true };
+  const subscriptionId = String(row.stripe_subscription_id ?? "").trim();
+  if (!subscriptionId) return { ok: false, error: "この決済の継続番号が無いため、ここから止められません" };
+  try {
+    await stripePost(`/subscriptions/${encodeURIComponent(subscriptionId)}`, { cancel_at_period_end: "true" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    return { ok: false, error: message ? `決済を止められませんでした。${message}` : "決済を止められませんでした" };
+  }
+  const stoppedAt = new Date().toISOString();
+  const updated = await db
+    .from("membership_payment_records")
+    .update({ reason: "stopped", stopped_at: stoppedAt })
+    .eq("id", id);
+  if (updated.error && missingPeriodColumn(String(updated.error.message ?? ""))) {
+    await db.from("membership_payment_records").update({ reason: "stopped" }).eq("id", id);
+  }
+  return { ok: true };
 }
 
 async function upsertLedger(

@@ -16,7 +16,16 @@ type CheckoutSession = {
   customer_details?: { email?: string | null; name?: string | null } | null;
   payment_link?: string | { id?: string; url?: string } | null;
   created?: number;
-  subscription?: string | { id?: string; current_period_start?: number; current_period_end?: number } | null;
+  subscription?:
+    | string
+    | {
+        id?: string;
+        status?: string;
+        cancel_at_period_end?: boolean;
+        current_period_start?: number;
+        current_period_end?: number;
+      }
+    | null;
 };
 
 export type PaymentSuccessReportInput = {
@@ -132,6 +141,7 @@ export async function reportMembershipPaymentLinkCheckout(
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
     subscriptionId: period.subscriptionId,
+    stopped: period.stopped,
   });
   const text = buildPaymentSuccessReport({
     planName: matched.item.name,
@@ -173,40 +183,131 @@ async function subscriptionPeriod(session: CheckoutSession): Promise<{
   subscriptionId: string;
   periodStart: string | null;
   periodEnd: string | null;
+  stopped: boolean;
 }> {
   const embedded = session.subscription;
   const subscriptionId = subscriptionIdOf(session);
   let start = embedded && typeof embedded === "object" ? embedded.current_period_start : undefined;
   let end = embedded && typeof embedded === "object" ? embedded.current_period_end : undefined;
-  if (subscriptionId && (start == null || end == null)) {
+  const knowsStop = Boolean(embedded && typeof embedded === "object" && "cancel_at_period_end" in embedded);
+  let stopped = Boolean(
+    embedded &&
+      typeof embedded === "object" &&
+      (embedded.cancel_at_period_end || embedded.status === "canceled")
+  );
+  if (subscriptionId && (start == null || end == null || !knowsStop)) {
     const loaded = await loadSubscription(subscriptionId);
     const item = loaded?.items?.data?.[0];
     start = start ?? loaded?.current_period_start ?? item?.current_period_start;
     end = end ?? loaded?.current_period_end ?? item?.current_period_end;
+    stopped =
+      stopped || Boolean(loaded?.cancel_at_period_end) || loaded?.status === "canceled" || loaded?.status === "incomplete_expired";
   }
   return {
     subscriptionId,
     periodStart: unixSecondsToIso(start),
     periodEnd: unixSecondsToIso(end),
+    stopped,
   };
+}
+
+async function collectKnownPaymentSessions(since: number): Promise<CheckoutSession[]> {
+  const found = new Map<string, CheckoutSession>();
+  let startingAfter = "";
+  for (let page = 0; page < 4; page += 1) {
+    const query = new URLSearchParams({ limit: "100" });
+    if (startingAfter) query.set("starting_after", startingAfter);
+    const list = await stripeGet(`/payment_links?${query.toString()}`);
+    const links = (list?.data ?? []) as Array<{ id?: string; url?: string }>;
+    for (const link of links) {
+      const url = String(link.url ?? "");
+      const id = String(link.id ?? "");
+      if (!id || !matchPaymentLinkUrl(url)) continue;
+      try {
+        const sessions = new URLSearchParams({
+          limit: "100",
+          payment_link: id,
+          "created[gte]": String(since),
+        });
+        sessions.append("expand[]", "data.subscription");
+        let pageSessions: { data?: CheckoutSession[] };
+        try {
+          pageSessions = await stripeGet(`/checkout/sessions?${sessions.toString()}`);
+        } catch {
+          sessions.delete("expand[]");
+          pageSessions = await stripeGet(`/checkout/sessions?${sessions.toString()}`);
+        }
+        for (const session of (pageSessions?.data ?? []) as CheckoutSession[]) {
+          if (!session.id) continue;
+          if (typeof session.payment_link === "string" || !session.payment_link) {
+            session.payment_link = { id, url };
+          }
+          found.set(session.id, session);
+        }
+      } catch (error) {
+        console.error("membership payment link sessions", error instanceof Error ? error.message : error);
+      }
+    }
+    if (!list?.has_more || links.length === 0) break;
+    startingAfter = String(links[links.length - 1]?.id ?? "");
+    if (!startingAfter) break;
+  }
+  return [...found.values()];
+}
+
+async function collectGuidedCustomerSessions(
+  supabase: SupabaseClient<Database>,
+  sinceIso: string
+): Promise<CheckoutSession[]> {
+  const db = supabase as unknown as SupabaseClient;
+  const guided = await db
+    .from("membership_payment_records")
+    .select("email")
+    .eq("status", "guided")
+    .gte("occurred_at", sinceIso)
+    .limit(40);
+  if (guided.error) return [];
+  const emails = [
+    ...new Set(
+      ((guided.data ?? []) as Array<{ email?: string | null }>)
+        .map((row) => String(row.email ?? "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  const found = new Map<string, CheckoutSession>();
+  for (const email of emails) {
+    const customers = await stripeGet(`/customers?email=${encodeURIComponent(email)}&limit=5`);
+    for (const customer of (customers?.data ?? []) as Array<{ id?: string }>) {
+      const customerId = String(customer.id ?? "");
+      if (!customerId) continue;
+      const sessions = await stripeGet(`/checkout/sessions?customer=${encodeURIComponent(customerId)}&limit=20`);
+      for (const session of (sessions?.data ?? []) as CheckoutSession[]) {
+        if (session.id) found.set(session.id, session);
+      }
+    }
+  }
+  return [...found.values()];
 }
 
 export async function importRecentMembershipCheckouts(supabase: SupabaseClient<Database>): Promise<number> {
   const since = Math.floor(Date.now() / 1000) - 45 * 24 * 60 * 60;
-  const query = new URLSearchParams({
-    limit: "100",
-    status: "complete",
-    "created[gte]": String(since),
-  });
-  query.append("expand[]", "data.payment_link");
-  let sessions: CheckoutSession[] = [];
+  const sinceIso = new Date(since * 1000).toISOString();
+  const byId = new Map<string, CheckoutSession>();
   try {
-    const list = await stripeGet(`/checkout/sessions?${query.toString()}`);
-    sessions = (list?.data ?? []) as CheckoutSession[];
+    for (const session of await collectKnownPaymentSessions(since)) {
+      if (session.id) byId.set(session.id, session);
+    }
   } catch (error) {
     console.error("membership checkout import", error instanceof Error ? error.message : error);
-    return 0;
   }
+  try {
+    for (const session of await collectGuidedCustomerSessions(supabase, sinceIso)) {
+      if (session.id) byId.set(session.id, session);
+    }
+  } catch (error) {
+    console.error("membership customer import", error instanceof Error ? error.message : error);
+  }
+  const sessions = [...byId.values()];
 
   const linkUrls = new Map<string, string>();
   let saved = 0;
@@ -238,6 +339,7 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
         periodStart: period.periodStart,
         periodEnd: period.periodEnd,
         subscriptionId: period.subscriptionId,
+        stopped: period.stopped,
       });
       if (ok) saved += 1;
     } catch (error) {
