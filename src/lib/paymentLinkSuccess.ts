@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
-import { recordMembershipPaymentPaid } from "@/lib/membershipPayments";
+import { identifyPlanByAmount, recordMembershipPaymentPaid } from "@/lib/membershipPayments";
 import { pushPaymentLinkNotice } from "@/lib/paymentLinkNotify";
-import { formatYen, matchPaymentLinkUrl, type PaymentLinkItem } from "@/lib/paymentLinks";
+import { allPaymentLinks, formatYen, matchPaymentLinkUrl, type PaymentLinkItem } from "@/lib/paymentLinks";
 import { loadSubscription, stripeGet } from "@/lib/stripeTrainerPass";
 import { unixSecondsToIso } from "@/lib/stripeWebhook";
 
@@ -16,6 +16,7 @@ type CheckoutSession = {
   customer_details?: { email?: string | null; name?: string | null } | null;
   payment_link?: string | { id?: string; url?: string } | null;
   created?: number;
+  payment_intent?: string | { id?: string } | null;
   subscription?:
     | string
     | {
@@ -289,8 +290,148 @@ async function collectGuidedCustomerSessions(
   return [...found.values()];
 }
 
+async function collectRecentCheckoutSessions(since: number): Promise<CheckoutSession[]> {
+  const query = new URLSearchParams({
+    limit: "100",
+    status: "complete",
+    "created[gte]": String(since),
+  });
+  query.append("expand[]", "data.payment_link");
+  try {
+    const list = await stripeGet(`/checkout/sessions?${query.toString()}`);
+    return (list?.data ?? []) as CheckoutSession[];
+  } catch (error) {
+    console.error("membership recent sessions", error instanceof Error ? error.message : error);
+    const plain = new URLSearchParams({
+      limit: "100",
+      status: "complete",
+      "created[gte]": String(since),
+    });
+    const list = await stripeGet(`/checkout/sessions?${plain.toString()}`);
+    return (list?.data ?? []) as CheckoutSession[];
+  }
+}
+
+function stripeIdOf(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "id" in value) return String((value as { id?: string }).id ?? "");
+  return "";
+}
+
+async function importRecentMembershipCharges(
+  supabase: SupabaseClient<Database>,
+  knownPaymentIntents: Set<string>
+): Promise<number> {
+  const since = Math.floor(Date.now() / 1000) - 5 * 24 * 60 * 60;
+  let charges: Array<Record<string, unknown>> = [];
+  try {
+    const query = new URLSearchParams({ limit: "100", "created[gte]": String(since) });
+    query.append("expand[]", "data.customer");
+    query.append("expand[]", "data.invoice");
+    const list = await stripeGet(`/charges?${query.toString()}`);
+    charges = (list?.data ?? []) as Array<Record<string, unknown>>;
+  } catch (error) {
+    console.error("membership charge import", error instanceof Error ? error.message : error);
+    try {
+      const list = await stripeGet(`/charges?limit=100&created[gte]=${since}`);
+      charges = (list?.data ?? []) as Array<Record<string, unknown>>;
+    } catch (retryError) {
+      console.error("membership charge import", retryError instanceof Error ? retryError.message : retryError);
+      return 0;
+    }
+  }
+
+  let saved = 0;
+  for (const charge of charges) {
+    try {
+      const paid = charge.paid === true || charge.status === "succeeded";
+      const amount = typeof charge.amount === "number" ? charge.amount : null;
+      if (!paid || amount == null) continue;
+      const paymentIntentId = stripeIdOf(charge.payment_intent);
+      if (paymentIntentId && knownPaymentIntents.has(paymentIntentId)) continue;
+      const plan = identifyPlanByAmount(amount);
+      if (!plan?.planId) continue;
+      const item = allPaymentLinks().find((row) => row.id === plan.planId);
+      if (!item) continue;
+      const billing = (charge.billing_details ?? {}) as { email?: string | null; name?: string | null };
+      const customer = charge.customer;
+      const customerObj = customer && typeof customer === "object" ? (customer as { email?: string | null; name?: string | null }) : null;
+      let email = String(charge.receipt_email ?? billing.email ?? customerObj?.email ?? "").trim();
+      const payerName = String(billing.name ?? customerObj?.name ?? "").trim();
+      if (!email && typeof customer === "string") {
+        const loaded = await stripeGet(`/customers/${encodeURIComponent(customer)}`);
+        email = String(loaded?.email ?? "").trim();
+      }
+      const membersByEmail = await findMembersByEmail(supabase, email);
+      const members =
+        membersByEmail.length === 1
+          ? membersByEmail
+          : payerName
+            ? await findMembersByName(supabase, payerName)
+            : [];
+      const member = members.length === 1 ? members[0] : null;
+      if (!member && !email) continue;
+      const invoice = charge.invoice;
+      const invoiceObj = invoice && typeof invoice === "object" ? (invoice as Record<string, unknown>) : null;
+      let periodStart: number | undefined;
+      let periodEnd: number | undefined;
+      let subscriptionId = stripeIdOf(invoiceObj?.subscription);
+      const line = ((invoiceObj?.lines as { data?: Array<{ period?: { start?: number; end?: number } }> } | undefined)?.data ?? [])[0];
+      periodStart = line?.period?.start;
+      periodEnd = line?.period?.end;
+      if ((!periodStart || !periodEnd || !subscriptionId) && typeof invoice === "string") {
+        const loaded = await stripeGet(`/invoices/${encodeURIComponent(invoice)}`);
+        subscriptionId = subscriptionId || stripeIdOf(loaded?.subscription);
+        const loadedLine = loaded?.lines?.data?.[0];
+        periodStart = periodStart ?? loadedLine?.period?.start;
+        periodEnd = periodEnd ?? loadedLine?.period?.end;
+      }
+      let storeName: string | null = null;
+      if (member?.store_id) {
+        const { data: store } = await supabase.from("stores").select("name").eq("id", member.store_id).maybeSingle();
+        storeName = store?.name ?? null;
+      }
+      const sessionId = paymentIntentId || `ch_${String(charge.id ?? "")}`;
+      if (!sessionId || sessionId === "ch_") continue;
+      const namedItem = plan.planName === item.name ? item : { ...item, name: plan.planName };
+      const ok = await recordMembershipPaymentPaid(supabase, {
+        sessionId,
+        memberId: member?.id ?? null,
+        memberCode: member?.member_code ?? null,
+        memberName: member ? (member.name ?? payerName) || null : payerName || null,
+        email,
+        storeName,
+        item: namedItem,
+        card: "standard",
+        amountYen: amount,
+        occurredAt: unixSecondsToIso(charge.created),
+        periodStart: unixSecondsToIso(periodStart),
+        periodEnd: unixSecondsToIso(periodEnd),
+        subscriptionId,
+      });
+      if (ok) saved += 1;
+    } catch (error) {
+      console.error("membership charge row", error instanceof Error ? error.message : error);
+    }
+  }
+  return saved;
+}
+
+async function findMembersByName(supabase: SupabaseClient<Database>, name: string) {
+  const query = name.replace(/\s+/g, "").trim();
+  if (query.length < 2) return [];
+  const { data, error } = await supabase
+    .from("members")
+    .select("id, member_code, name, store_id")
+    .ilike("name", `%${escapeIlike(query)}%`)
+    .limit(5);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 export async function importRecentMembershipCheckouts(supabase: SupabaseClient<Database>): Promise<number> {
   const since = Math.floor(Date.now() / 1000) - 45 * 24 * 60 * 60;
+  const recentSince = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
   const sinceIso = new Date(since * 1000).toISOString();
   const byId = new Map<string, CheckoutSession>();
   try {
@@ -299,6 +440,13 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
     }
   } catch (error) {
     console.error("membership checkout import", error instanceof Error ? error.message : error);
+  }
+  try {
+    for (const session of await collectRecentCheckoutSessions(recentSince)) {
+      if (session.id) byId.set(session.id, session);
+    }
+  } catch (error) {
+    console.error("membership recent checkout import", error instanceof Error ? error.message : error);
   }
   try {
     for (const session of await collectGuidedCustomerSessions(supabase, sinceIso)) {
@@ -310,8 +458,11 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
   const sessions = [...byId.values()];
 
   const linkUrls = new Map<string, string>();
+  const paymentIntents = new Set<string>();
   let saved = 0;
   for (const session of sessions) {
+    const paymentIntentId = stripeIdOf(session.payment_intent);
+    if (paymentIntentId) paymentIntents.add(paymentIntentId);
     try {
       const matched = matchPaymentLinkUrl(await paymentLinkUrlFor(session, linkUrls));
       if (!matched || !checkoutPaid(session) || !session.id) continue;
@@ -345,6 +496,11 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
     } catch (error) {
       console.error("membership checkout import row", error instanceof Error ? error.message : error);
     }
+  }
+  try {
+    saved += await importRecentMembershipCharges(supabase, paymentIntents);
+  } catch (error) {
+    console.error("membership charge import", error instanceof Error ? error.message : error);
   }
   return saved;
 }
