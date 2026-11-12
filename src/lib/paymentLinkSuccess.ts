@@ -351,6 +351,17 @@ async function importRecentMembershipCharges(
     startingAfter = String(rows[rows.length - 1]?.id ?? "");
     if (!startingAfter) break;
   }
+  try {
+    const found = await stripeGet(`/charges/search?query=${encodeURIComponent("amount:15400")}&limit=10`);
+    const seen = new Set(charges.map((charge) => String(charge.id ?? "")));
+    for (const charge of (found?.data ?? []) as Array<Record<string, unknown>>) {
+      const id = String(charge.id ?? "");
+      if (!id || seen.has(id)) continue;
+      charges.push(charge);
+    }
+  } catch (error) {
+    console.error("membership 15400 search", error instanceof Error ? error.message : error);
+  }
 
   let saved = 0;
   const amounts = charges.map((charge) => (typeof charge.amount === "number" ? charge.amount : 0));
@@ -444,7 +455,8 @@ async function findMembersByName(supabase: SupabaseClient<Database>, name: strin
 export async function probeMembershipStripeAccount(supabase: SupabaseClient<Database>): Promise<{
   fukuoka_link: boolean;
   matched_links: number;
-  charge_15400: number;
+    charge_15400: number;
+    charge_15400_rows: Array<{ paid_on: string | null; name: string | null; status: string | null }>;
   customer_found: boolean;
   customer_charges: number;
   note: string | null;
@@ -472,10 +484,17 @@ export async function probeMembershipStripeAccount(supabase: SupabaseClient<Data
     note = error instanceof Error ? error.message : "payment_links";
   }
 
-  let charge15400 = 0;
+  const charge15400Rows: Array<{ paid_on: string | null; name: string | null; status: string | null }> = [];
   try {
     const found = await stripeGet(`/charges/search?query=${encodeURIComponent("amount:15400")}&limit=10`);
-    charge15400 = Array.isArray(found?.data) ? found.data.length : 0;
+    for (const charge of (found?.data ?? []) as Array<Record<string, unknown>>) {
+      const billing = (charge.billing_details ?? {}) as { name?: string | null };
+      charge15400Rows.push({
+        paid_on: unixSecondsToIso(charge.created),
+        name: String(billing.name ?? "").trim() || null,
+        status: String(charge.status ?? "") || null,
+      });
+    }
   } catch (error) {
     note = [note, error instanceof Error ? error.message : "charges_search"].filter(Boolean).join(" / ");
   }
@@ -507,7 +526,8 @@ export async function probeMembershipStripeAccount(supabase: SupabaseClient<Data
   return {
     fukuoka_link: fukuoka,
     matched_links: matched,
-    charge_15400: charge15400,
+    charge_15400: charge15400Rows.length,
+    charge_15400_rows: charge15400Rows,
     customer_found: customerFound,
     customer_charges: customerCharges,
     note,
