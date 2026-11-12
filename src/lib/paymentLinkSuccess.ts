@@ -441,6 +441,79 @@ async function findMembersByName(supabase: SupabaseClient<Database>, name: strin
   return data ?? [];
 }
 
+export async function probeMembershipStripeAccount(supabase: SupabaseClient<Database>): Promise<{
+  fukuoka_link: boolean;
+  matched_links: number;
+  charge_15400: number;
+  customer_found: boolean;
+  customer_charges: number;
+  note: string | null;
+}> {
+  let fukuoka = false;
+  let matched = 0;
+  let note: string | null = null;
+  try {
+    let startingAfter = "";
+    for (let page = 0; page < 4; page += 1) {
+      const query = new URLSearchParams({ limit: "100" });
+      if (startingAfter) query.set("starting_after", startingAfter);
+      const list = await stripeGet(`/payment_links?${query.toString()}`);
+      const links = (list?.data ?? []) as Array<{ id?: string; url?: string }>;
+      for (const link of links) {
+        const url = String(link.url ?? "");
+        if (url.includes("fZu4gz3bI1CN6U53MZcEw02")) fukuoka = true;
+        if (matchPaymentLinkUrl(url)) matched += 1;
+      }
+      if (!list?.has_more || links.length === 0) break;
+      startingAfter = String(links[links.length - 1]?.id ?? "");
+      if (!startingAfter) break;
+    }
+  } catch (error) {
+    note = error instanceof Error ? error.message : "payment_links";
+  }
+
+  let charge15400 = 0;
+  try {
+    const found = await stripeGet(`/charges/search?query=${encodeURIComponent("amount:15400")}&limit=10`);
+    charge15400 = Array.isArray(found?.data) ? found.data.length : 0;
+  } catch (error) {
+    note = [note, error instanceof Error ? error.message : "charges_search"].filter(Boolean).join(" / ");
+  }
+
+  let customerFound = false;
+  let customerCharges = 0;
+  try {
+    const { data: member } = await supabase
+      .from("members")
+      .select("email")
+      .eq("member_code", "FUK015")
+      .maybeSingle();
+    const email = String(member?.email ?? "").trim();
+    if (email) {
+      const customers = await stripeGet(`/customers?email=${encodeURIComponent(email)}&limit=5`);
+      const rows = (customers?.data ?? []) as Array<{ id?: string }>;
+      customerFound = rows.length > 0;
+      for (const customer of rows) {
+        const id = String(customer.id ?? "");
+        if (!id) continue;
+        const charges = await stripeGet(`/charges?customer=${encodeURIComponent(id)}&limit=20`);
+        customerCharges += Array.isArray(charges?.data) ? charges.data.length : 0;
+      }
+    }
+  } catch (error) {
+    note = [note, error instanceof Error ? error.message : "customer"].filter(Boolean).join(" / ");
+  }
+
+  return {
+    fukuoka_link: fukuoka,
+    matched_links: matched,
+    charge_15400: charge15400,
+    customer_found: customerFound,
+    customer_charges: customerCharges,
+    note,
+  };
+}
+
 export async function importRecentMembershipCheckouts(
   supabase: SupabaseClient<Database>
 ): Promise<{ saved: number; chargeAmounts: number[] }> {
