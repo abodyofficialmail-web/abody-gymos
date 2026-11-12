@@ -321,7 +321,7 @@ function stripeIdOf(value: unknown): string {
 async function importRecentMembershipCharges(
   supabase: SupabaseClient<Database>,
   knownPaymentIntents: Set<string>
-): Promise<number> {
+): Promise<{ saved: number; amounts: number[] }> {
   const since = Math.floor(Date.now() / 1000) - 5 * 24 * 60 * 60;
   const charges: Array<Record<string, unknown>> = [];
   let startingAfter = "";
@@ -342,7 +342,7 @@ async function importRecentMembershipCharges(
         list = await stripeGet(`/charges?${plain.toString()}`);
       } catch (retryError) {
         console.error("membership charge import", retryError instanceof Error ? retryError.message : retryError);
-        return 0;
+        return { saved: 0, amounts: [] };
       }
     }
     const rows = list?.data ?? [];
@@ -353,6 +353,7 @@ async function importRecentMembershipCharges(
   }
 
   let saved = 0;
+  const amounts = charges.map((charge) => (typeof charge.amount === "number" ? charge.amount : 0));
   for (const charge of charges) {
     try {
       const paid = charge.paid === true || charge.status === "succeeded";
@@ -425,7 +426,7 @@ async function importRecentMembershipCharges(
       console.error("membership charge row", error instanceof Error ? error.message : error);
     }
   }
-  return saved;
+  return { saved, amounts };
 }
 
 async function findMembersByName(supabase: SupabaseClient<Database>, name: string) {
@@ -440,7 +441,9 @@ async function findMembersByName(supabase: SupabaseClient<Database>, name: strin
   return data ?? [];
 }
 
-export async function importRecentMembershipCheckouts(supabase: SupabaseClient<Database>): Promise<number> {
+export async function importRecentMembershipCheckouts(
+  supabase: SupabaseClient<Database>
+): Promise<{ saved: number; chargeAmounts: number[] }> {
   const since = Math.floor(Date.now() / 1000) - 45 * 24 * 60 * 60;
   const recentSince = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
   const sinceIso = new Date(since * 1000).toISOString();
@@ -523,10 +526,13 @@ export async function importRecentMembershipCheckouts(supabase: SupabaseClient<D
       console.error("membership checkout import row", error instanceof Error ? error.message : error);
     }
   }
+  let chargeAmounts: number[] = [];
   try {
-    saved += await importRecentMembershipCharges(supabase, paymentIntents);
+    const charges = await importRecentMembershipCharges(supabase, paymentIntents);
+    saved += charges.saved;
+    chargeAmounts = charges.amounts;
   } catch (error) {
     console.error("membership charge import", error instanceof Error ? error.message : error);
   }
-  return saved;
+  return { saved, chargeAmounts };
 }
