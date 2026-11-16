@@ -9,6 +9,7 @@ import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChann
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import { buildStaffSameDayCancel, CONSUMED_CANCEL_KIND } from "@/lib/karteConsumedCancel";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -23,6 +24,7 @@ const patchSchema = z.object({
   start_at: z.string().min(1).optional(),
   end_at: z.string().min(1).optional(),
   session_type: z.enum(["store", "online"]).optional(),
+  cancel_kind: z.enum(["no_show", "same_day"]).optional(),
 });
 
 function lineTokenForMember(
@@ -115,6 +117,7 @@ type ReservationRowForAdmin = {
   end_at: string;
   session_type: string | null;
   status: string | null;
+  notes: string | null;
 };
 
 function isMissingColumnError(e: any, column: string): boolean {
@@ -129,10 +132,13 @@ async function fetchReservationForAdmin(
   // 新旧スキーマ差（blocks_capacity など）を吸収する
   const qA = await (supabase as any)
     .from("reservations")
-    .select("id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status")
+    .select("id, store_id, member_id, trainer_id, guest_name, blocks_capacity, start_at, end_at, session_type, status, notes")
     .eq("id", id)
     .maybeSingle();
-  if (!qA?.error) return { data: qA.data ?? null, error: null };
+  if (!qA?.error) {
+    if (!qA.data) return { data: null, error: null };
+    return { data: { ...qA.data, notes: qA.data.notes ?? null }, error: null };
+  }
 
   // guest_name / blocks_capacity のどちらか（または両方）が無い環境向けフォールバック
   if (isMissingColumnError(qA.error, "blocks_capacity") || isMissingColumnError(qA.error, "guest_name")) {
@@ -160,6 +166,55 @@ async function fetchReservationForAdmin(
   }
 
   return { data: null, error: qA.error };
+}
+
+async function updateCancelledReservation(
+  supabase: SupabaseClient<Database>,
+  id: string,
+  row: Record<string, unknown>
+): Promise<{ data: any | null; error: { message: string } | null }> {
+  const selectFull = "id, store_id, member_id, trainer_id, guest_name, start_at, end_at, session_type, status";
+  const selectNoGuest = "id, store_id, member_id, trainer_id, start_at, end_at, session_type, status";
+  const run = (payload: Record<string, unknown>, columns: string) =>
+    (supabase as any).from("reservations").update(payload).eq("id", id).select(columns).maybeSingle();
+
+  let payload = { ...row };
+  let res = await run(payload, selectFull);
+  if (res.error && isMissingColumnError(res.error, "quota_consumed")) {
+    delete payload.quota_consumed;
+    res = await run(payload, selectFull);
+  }
+  if (res.error && isMissingColumnError(res.error, "notes")) {
+    delete payload.notes;
+    res = await run(payload, selectFull);
+  }
+  if (res.error && isMissingColumnError(res.error, "guest_name")) {
+    res = await run(payload, selectNoGuest);
+    if (!res.error && res.data) return { data: { ...res.data, guest_name: null }, error: null };
+  }
+  return { data: res.data ?? null, error: res.error ?? null };
+}
+
+async function insertConsumedCancelNote(
+  supabase: SupabaseClient<Database>,
+  params: { memberId: string; storeId: string; trainerId: string; date: string; content: string }
+): Promise<{ ok: boolean; error?: string }> {
+  const row = {
+    member_id: params.memberId,
+    store_id: params.storeId,
+    trainer_id: params.trainerId,
+    date: params.date,
+    content: params.content,
+    note_kind: CONSUMED_CANCEL_KIND,
+  };
+  let res = await (supabase as any).from("client_notes").insert(row);
+  if (res.error && /note_kind|column|schema cache|Could not find/i.test(String(res.error.message ?? ""))) {
+    const rest = { ...row };
+    delete (rest as { note_kind?: string }).note_kind;
+    res = await (supabase as any).from("client_notes").insert(rest);
+  }
+  if (res.error) return { ok: false, error: String(res.error.message ?? "") };
+  return { ok: true };
 }
 
 async function fetchShiftsForCapacityCheck(params: {
@@ -300,44 +355,40 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
     }
 
     if (parsed.data.action === "cancel") {
-      const { data: cancelled, error: upErr } = await (supabase as any)
-        .from("reservations")
-        .update({ status: "cancelled", updated_at: new Date().toISOString() })
-        .eq("id", ctx.params.reservationId)
-        .select("id, store_id, member_id, trainer_id, guest_name, start_at, end_at, session_type, status")
-        .maybeSingle();
-      if (upErr) {
-        // guest_name が無いDB向けフォールバック
-        if (isMissingColumnError(upErr, "guest_name")) {
-          const q2 = await (supabase as any)
-            .from("reservations")
-            .update({ status: "cancelled", updated_at: new Date().toISOString() })
-            .eq("id", ctx.params.reservationId)
-            .select("id, store_id, member_id, trainer_id, start_at, end_at, session_type, status")
-            .maybeSingle();
-          if (q2?.error) return jsonResponse({ error: "キャンセルに失敗しました", detail: q2.error.message }, 500);
-          if (!q2?.data) return jsonResponse({ error: "予約が見つかりません" }, 404);
-
-          const cancelled2 = { ...(q2.data ?? {}), guest_name: null } as any;
-
-          try {
-            const lineUserId = (member as any)?.line_user_id as string | null | undefined;
-            if (lineUserId) {
-              const { data: store } = await (supabase as any).from("stores").select("id, name").eq("id", cancelled2.store_id).maybeSingle();
-              const line = lineTokenForMember(member, store?.name ?? "");
-              const text = messageForAdminCancel({ storeName: store?.name ?? "", startAtUtcIso: cancelled2.start_at, endAtUtcIso: cancelled2.end_at });
-              await pushLineMessage({ to: lineUserId, text, token: line.token, debug: { storeName: store?.name ?? "", memberCode: member?.member_code ?? "", lineChannelSource: line.source, lineChannelKey: line.channelKey, hasToken: Boolean(line.token) } });
-            }
-          } catch (e) {
-            console.error("LINE push unexpected error", e);
-          }
-
-          return jsonResponse({ reservation: cancelled2 }, 200);
-        }
-
-        return jsonResponse({ error: "キャンセルに失敗しました", detail: upErr.message }, 500);
+      const nowIso = new Date().toISOString();
+      const plan = buildStaffSameDayCancel({
+        nowIso,
+        startAt: String(cur.start_at),
+        endAt: String(cur.end_at),
+        memberId: cur.member_id,
+        notes: cur.notes,
+        reason: parsed.data.cancel_kind ?? null,
+      });
+      const updateRow: Record<string, unknown> = { status: "cancelled", updated_at: nowIso };
+      if (plan.consumeQuota) updateRow.quota_consumed = true;
+      if (plan.notes != null) updateRow.notes = plan.notes;
+      const cancelledResult = await updateCancelledReservation(supabase, ctx.params.reservationId, updateRow);
+      if (cancelledResult.error) {
+        return jsonResponse({ error: "キャンセルに失敗しました", detail: cancelledResult.error.message }, 500);
       }
-      if (!cancelled) return jsonResponse({ error: "予約が見つかりません" }, 404);
+      if (!cancelledResult.data) return jsonResponse({ error: "予約が見つかりません" }, 404);
+      const cancelled = cancelledResult.data;
+
+      let karteWarning: string | null = null;
+      const trainerId = String(cancelled.trainer_id ?? cur.trainer_id ?? "");
+      if (plan.karte && cur.member_id && plan.karte.date && trainerId) {
+        const recorded = await insertConsumedCancelNote(supabase, {
+          memberId: cur.member_id,
+          storeId: String(cur.store_id),
+          trainerId,
+          date: plan.karte.date,
+          content: plan.karte.content,
+        });
+        if (!recorded.ok) {
+          console.error("consumed cancel karte insert failed", recorded.error);
+          karteWarning = "予約はキャンセルしましたが、カルテへの消化記録が保存できませんでした";
+        }
+      }
 
       try {
         const lineUserId = (member as any)?.line_user_id as string | null | undefined;
@@ -351,7 +402,7 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         console.error("LINE push unexpected error", e);
       }
 
-      return jsonResponse({ reservation: cancelled }, 200);
+      return jsonResponse({ reservation: cancelled, karte_warning: karteWarning }, 200);
     }
 
     // reschedule

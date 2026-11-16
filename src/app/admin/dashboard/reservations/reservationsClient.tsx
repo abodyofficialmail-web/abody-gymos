@@ -269,6 +269,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
 
   // キャンセルモーダル
   const [cancelTarget, setCancelTarget] = useState<ReservationRow | null>(null);
+  const [cancelKind, setCancelKind] = useState<"no_show" | "same_day" | "standard">("standard");
   const [cancelErr, setCancelErr] = useState<string | null>(null);
 
   // 休憩追加モーダル
@@ -844,14 +845,24 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
     }
   };
 
+  const openCancel = (row: ReservationRow, kind: "no_show" | "same_day" | "standard") => {
+    setCancelErr(null);
+    setCancelKind(kind);
+    setCancelTarget(row);
+  };
+
   const confirmCancel = async () => {
     if (!cancelTarget) return;
     setCancelErr(null);
     setBusy(true);
     try {
-      await apiPatch(`/api/admin/reservations/${cancelTarget.id}`, { action: "cancel" });
+      const result = await apiPatch<{ karte_warning?: string | null }>(`/api/admin/reservations/${cancelTarget.id}`, {
+        action: "cancel",
+        ...(cancelKind === "standard" ? {} : { cancel_kind: cancelKind }),
+      });
       await refreshRows();
       setCancelTarget(null);
+      if (result.karte_warning) setErr(result.karte_warning);
     } catch (e: any) {
       setCancelErr(String(e?.message ?? "キャンセルに失敗しました"));
     } finally {
@@ -1384,17 +1395,35 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                       >
                         予約変更
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCancelErr(null);
-                          setCancelTarget(r);
-                        }}
-                        className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 hover:bg-red-50"
-                        disabled={busy}
-                      >
-                        キャンセル
-                      </button>
+                      {DateTime.fromISO(r.start_at).setZone(TZ).toISODate() === DateTime.now().setZone(TZ).toISODate() ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openCancel(r, "same_day")}
+                            className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 hover:bg-red-50"
+                            disabled={busy}
+                          >
+                            当日キャンセル
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openCancel(r, "no_show")}
+                            className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-amber-200 bg-white px-4 text-sm font-semibold text-amber-800 hover:bg-amber-50"
+                            disabled={busy}
+                          >
+                            未来店
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openCancel(r, "standard")}
+                          className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 hover:bg-red-50"
+                          disabled={busy}
+                        >
+                          キャンセル
+                        </button>
+                      )}
                       {r.member_id ? (
                         <a
                           href={`/admin/dashboard/members/${r.member_id}`}
@@ -2055,7 +2084,9 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-lg space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-bold text-slate-900">予約のキャンセル</div>
+              <div className="text-sm font-bold text-slate-900">
+                {cancelKind === "no_show" ? "未来店" : "予約のキャンセル"}
+              </div>
               <button
                 type="button"
                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
@@ -2080,7 +2111,13 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                 {cancelTarget.member_code || cancelTarget.member_id}
                 {cancelTarget.member_name ? `（${cancelTarget.member_name}）` : ""}
               </div>
-              <div className="mt-2 text-xs text-slate-600">この予約をキャンセルしますか？</div>
+              <div className="mt-2 text-xs text-slate-600">
+                {cancelKind === "no_show"
+                  ? "未来店として記録します。予約は消化扱いになり、カルテ送信率の分母には入りません。"
+                  : cancelKind === "same_day"
+                    ? "当日キャンセルとして記録します。予約は消化扱いになり、カルテ送信率の分母には入りません。"
+                    : "この予約をキャンセルしますか？"}
+              </div>
             </div>
 
             {cancelErr ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{cancelErr}</div> : null}
@@ -2100,7 +2137,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                 className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-red-200 bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700"
                 disabled={busy}
               >
-                キャンセル確定
+                {cancelKind === "no_show" ? "未来店として記録" : cancelKind === "same_day" ? "当日キャンセルとして記録" : "キャンセル確定"}
               </button>
             </div>
           </div>

@@ -13,6 +13,7 @@ import { fetchTrainerVisibilityPassForMemberId, trainerVisibilityPassPriceLabel 
 import { fetchOnShiftTrainerNamesBySlots } from "@/lib/onShiftTrainers";
 import { canBookOrLogin } from "@/lib/memberMembershipStatus";
 import { remainingBookableKoma } from "@/lib/booking/memberBookingRules";
+import { isConsumedCancelNote } from "@/lib/karteConsumedCancel";
 import { loadMemberBookingRuleContext, snapshotFromContext } from "@/lib/booking/memberBookingRulesDb";
 import {
   isMissingWeightReminderColumn,
@@ -301,7 +302,7 @@ export async function GET() {
           on_shift_trainer_names: onShiftNames[i] || "",
           status: r.status,
         })),
-        notes: (notes ?? []).map((n: any) => ({
+        notes: (notes ?? []).filter((n: any) => !isConsumedCancelNote(n)).map((n: any) => ({
           id: n.id,
           date: n.date,
           store_id: n.store_id,

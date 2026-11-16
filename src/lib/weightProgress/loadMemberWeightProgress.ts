@@ -8,6 +8,7 @@ import {
 } from "@/lib/weightProgress/buildWeightProgress";
 import { generateWeightAiComments } from "@/lib/weightProgress/generateWeightAiComments";
 import type { WeightPredictSex } from "@/lib/weightProgress/predictNextMax";
+import { isConsumedCancelNote } from "@/lib/karteConsumedCancel";
 
 const TZ = "Asia/Tokyo";
 
@@ -36,7 +37,7 @@ async function loadHearingAndNotes(memberId: string) {
   const hearing = hearingRes.error ? null : hearingRes.data;
   return {
     supabase,
-    notes: (notes ?? []) as WeightProgressNote[],
+    notes: ((notes ?? []) as WeightProgressNote[]).filter((note) => !isConsumedCancelNote(note)),
     hearing,
   };
 }

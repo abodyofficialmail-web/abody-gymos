@@ -18,6 +18,7 @@ import { BookingStopGlanceMark } from "@/components/karte/BookingStopGlanceMark"
 import { MemberBookingPlanSection } from "@/components/karte/MemberBookingPlanSection";
 import { bookingStopGlanceLabel, summarizeBookingStopCounts, type BookingStopGlance } from "@/lib/booking/bookingStopGlance";
 import { MemberCoachingPanel } from "@/components/karte/MemberCoachingPanel";
+import { isConsumedCancelNote } from "@/lib/karteConsumedCancel";
 import type { MembershipPlan } from "@/lib/memberPlans";
 import {
   formatPreSessionSurveyDetailLines,
@@ -228,6 +229,7 @@ type ClientNoteRow = {
   trainer_name?: string;
   date: string; // YYYY-MM-DD
   content: string;
+  note_kind?: string | null;
   created_at: string;
 };
 
@@ -2224,7 +2226,9 @@ export function MemberDetailClient({
         notes={
           notes === null
             ? null
-            : sessionNotes.map((n) => ({
+            : sessionNotes
+                .filter((n) => !isConsumedCancelNote(n))
+                .map((n) => ({
                 id: n.id,
                 date: n.date,
                 trainerName: n.trainer_name || "",
@@ -2387,6 +2391,11 @@ export function MemberDetailClient({
                   <div key={n.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm space-y-2">
                     <div className="font-semibold">
                       {n.date} {n.store_name || n.store_id}（{n.trainer_name || n.trainer_id}）
+                      {isConsumedCancelNote(n) ? (
+                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                          予約消化・送信カウント外
+                        </span>
+                      ) : null}
                     </div>
                     <div className="whitespace-pre-wrap text-slate-800">{n.content}</div>
                     {preSession ? (

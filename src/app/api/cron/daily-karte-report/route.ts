@@ -1,13 +1,12 @@
 import { DateTime } from "luxon";
 import { jsonResponse } from "@/app/api/booking-v2/_cors";
-import { dailyReportChannelToken } from "@/lib/dailyLineRecipients";
 import {
   claimDailyKarteReport,
   formatDailyKarteReport,
   loadDailyKarteReport,
   releaseDailyKarteReport,
 } from "@/lib/dailyKarteReport";
-import { pushLineTextAsChunks } from "@/lib/lineMessagingPush";
+import { pushOpsLineNotice } from "@/lib/paymentLinkNotify";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
 export const maxDuration = 60;
@@ -16,8 +15,8 @@ const TZ = "Asia/Tokyo";
 
 /**
  * 毎日 22:30 JST（vercel.json は 13:30 UTC）。
- * 終了済みセッションについて、店舗ごとのトレーナー別セッション数とカルテ送信率をゆうとへ送る。
- * カルテ送信は、その会員・担当トレーナーの当日カルテ（client_notes）があること。
+ * 終了済みセッションについて、店舗ごとのトレーナー別カルテ送信率と、未来店率・当日キャンセル率を
+ * ゆうととテストアカウントへ送る。未来店は送信率の分母に入れない。
  */
 function mustCronAuth(req: Request): boolean {
   const reportSecret = process.env.REPORT_CRON_SECRET?.trim();
@@ -51,33 +50,11 @@ export async function GET(req: Request) {
       sessions: report.summary.sessions,
       karte_sent: report.summary.sent,
       karte_unsent: report.summary.unsent,
-      recipient: report.recipient?.displayName ?? null,
+      karte_consumed: report.summary.consumed,
     };
 
     if (dryRun) {
       return jsonResponse({ ok: true, dry_run: true, ...summary, preview: text }, 200);
-    }
-
-    if (!report.recipient) {
-      return jsonResponse(
-        {
-          error: "missing_recipient",
-          detail: "トレーナー「ゆうと」のLINE連携がありません",
-          ...summary,
-        },
-        500
-      );
-    }
-
-    const token = dailyReportChannelToken();
-    if (!token) {
-      return jsonResponse(
-        {
-          error: "missing_token",
-          detail: "LINE_DAILY_REPORT_CHANNEL_TOKEN または LINE_CHANNEL_ACCESS_TOKEN を設定してください",
-        },
-        500
-      );
     }
 
     if (force) await releaseDailyKarteReport(supabase, dateYmd);
@@ -86,17 +63,23 @@ export async function GET(req: Request) {
       return jsonResponse({ ok: true, skipped: "already_sent", ...summary }, 200);
     }
 
-    const pushed = await pushLineTextAsChunks(token, report.recipient.lineUserId, text);
-    if (!pushed.ok) {
+    const pushed = await pushOpsLineNotice(supabase, text);
+    if (pushed.sent.length === 0) {
       if (claim === "claimed") {
         await releaseDailyKarteReport(supabase, dateYmd).catch((e) => {
           console.error("[dailyKarteReport] release failed", e);
         });
       }
-      return jsonResponse({ error: "push_failed", detail: pushed.body ?? null, ...summary }, 502);
+      return jsonResponse({ error: "push_failed", sent: pushed.sent, missed: pushed.missed, ...summary }, 502);
     }
 
-    return jsonResponse({ ok: true, deduped: claim === "claimed", ...summary }, 200);
+    if (pushed.missed.length > 0) {
+      console.error("[dailyKarteReport] partial send", pushed);
+    }
+    return jsonResponse(
+      { ok: pushed.missed.length === 0, deduped: claim === "claimed", sent: pushed.sent, missed: pushed.missed, ...summary },
+      200
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "unexpected_error", detail: message }, 500);

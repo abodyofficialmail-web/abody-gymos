@@ -45,6 +45,13 @@ describe("isKarteSent", () => {
     assert.equal(isKarteSent({ memberId: "m1", trainerId: "t1" }, [{ memberId: "m1", trainerId: null }]), true);
     assert.equal(isKarteSent({ memberId: "m1", trainerId: null }, [{ memberId: "m1", trainerId: "t2" }]), true);
   });
+
+  it("does not count a consumed-cancel note as a send", () => {
+    assert.equal(
+      isKarteSent({ memberId: "m1", trainerId: "t1" }, [{ memberId: "m1", trainerId: "t1", consumedCancel: true }]),
+      false
+    );
+  });
 });
 
 describe("sessionIsReportable", () => {
@@ -182,13 +189,43 @@ describe("formatDailyKarteReport", () => {
     assert.match(text, /合計　1件　送信100%（1\/1）$/);
   });
 
+  it("lists consumed cancels apart from the send rate", () => {
+    const text = formatDailyKarteReport({
+      dateYmd: "2026-10-30",
+      stores,
+      sessions: [
+        session({
+          storeId: "ebisu",
+          startAt: "2026-10-30T03:00:00.000Z",
+          sent: true,
+        }),
+      ],
+      consumedSessions: [
+        session({
+          storeId: "ebisu",
+          startAt: "2026-10-30T09:00:00.000Z",
+          memberId: "m9",
+          memberCode: "EBI009",
+          memberName: "未来",
+          sent: false,
+          consumedLabel: "未来店",
+        }),
+      ],
+    });
+    assert.match(text, /送信100%（1\/1）/);
+    assert.match(text, /消化（送信対象外）　1件/);
+    assert.match(text, /・18:00 未来（EBI009）　未来店/);
+    assert.doesNotMatch(text, /未送信/);
+    assert.match(text, /合計　1件　送信100%（1\/1）\n消化（送信対象外）　1件$/);
+  });
+
   it("adds shifts, reservation counts, open slots, and same-day cancels", () => {
     const text = formatDailyKarteReport({
       dateYmd: "2026-10-30",
       stores,
       sessions: [],
       factsByStoreId: {
-        ebisu: { shifts: [], reservations: 0, openSlots: 0, sameDayCancels: 0 },
+        ebisu: { shifts: [], reservations: 0, openSlots: 0, sameDayCancels: 0, noShows: 0 },
         ueno: {
           shifts: [
             { trainerName: "ひろむ", ranges: ["10:00–18:00"] },
@@ -197,15 +234,16 @@ describe("formatDailyKarteReport", () => {
           reservations: 14,
           openSlots: 3,
           sameDayCancels: 1,
+          noShows: 1,
         },
       },
     });
-    assert.match(text, /━━ 恵比寿 ━━\nシフトなし\n予約 0　空き 0　当日キャンセル 0\nセッションなし/);
+    assert.match(text, /━━ 恵比寿 ━━\nシフトなし\n予約 0　空き 0　当日キャンセル 0（0%）　未来店 0（0%）\nセッションなし/);
     assert.match(
       text,
-      /━━ 上野 ━━\nシフト\nひろむ 10:00–18:00\nせいや 10:00–14:00・17:00–22:00\n予約 14　空き 3　当日キャンセル 1\nセッションなし/
+      /━━ 上野 ━━\nシフト\nひろむ 10:00–18:00\nせいや 10:00–14:00・17:00–22:00\n予約 14　空き 3　当日キャンセル 1（6%）　未来店 1（6%）\nセッションなし/
     );
-    assert.match(text, /予約 14　空き 3　当日キャンセル 1$/);
+    assert.match(text, /予約 14　空き 3　当日キャンセル 1（6%）　未来店 1（6%）$/);
   });
 });
 
@@ -327,7 +365,8 @@ describe("buildStoreDayFacts", () => {
     });
     assert.deepEqual(facts.ueno.shifts, [{ trainerName: "ひろむ", ranges: ["10:00–11:00", "18:00–19:00"] }]);
     assert.equal(facts.ueno.reservations, 1);
-    assert.equal(facts.ueno.sameDayCancels, 1);
+    assert.equal(facts.ueno.sameDayCancels, 0);
+    assert.equal(facts.ueno.noShows, 1);
     assert.equal(facts.ueno.openSlots, 1);
   });
 });

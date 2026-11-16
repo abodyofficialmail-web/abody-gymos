@@ -104,6 +104,7 @@ export async function GET(request: Request) {
           trainer_id,
           date,
           content,
+          note_kind,
           created_at,
           stores(
             id,
@@ -121,7 +122,37 @@ export async function GET(request: Request) {
 
     if (store_id) q = q.eq("store_id", store_id);
 
-    const { data, error } = await q;
+    let { data, error } = await q;
+    if (error && /note_kind|column|schema cache|Could not find/i.test(String(error.message ?? ""))) {
+      let fallback = (supabase as any)
+        .from("client_notes")
+        .select(
+          `
+          id,
+          member_id,
+          store_id,
+          trainer_id,
+          date,
+          content,
+          created_at,
+          stores(
+            id,
+            name
+          ),
+          trainers(
+            id,
+            display_name
+          )
+        `
+        )
+        .eq("member_id", member_id)
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false });
+      if (store_id) fallback = fallback.eq("store_id", store_id);
+      const retry = await fallback;
+      data = retry.data;
+      error = retry.error;
+    }
     if (error) {
       return jsonResponse({ error: "カルテの取得に失敗しました", detail: error.message }, 500);
     }
@@ -134,6 +165,7 @@ export async function GET(request: Request) {
       trainer_id: r.trainer_id,
       date: r.date,
       content: r.content,
+      note_kind: r.note_kind ?? null,
       created_at: r.created_at,
       store_name: r.stores?.name ?? "",
       trainer_name: r.trainers?.display_name ?? "",

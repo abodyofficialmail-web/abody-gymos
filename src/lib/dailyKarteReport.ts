@@ -1,6 +1,11 @@
 import { DateTime } from "luxon";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { effectiveBookingCapacity } from "@/lib/bookingStoreCapacity";
+import {
+  consumedCancelLabelFromNotes,
+  consumedCancelReasonFromNotes,
+  isConsumedCancelNote,
+} from "@/lib/karteConsumedCancel";
 
 const TZ = "Asia/Tokyo";
 const YUTO_NAME = "ゆうと";
@@ -18,9 +23,11 @@ export type DailyKarteSession = {
   memberName: string;
   startAt: string;
   sent: boolean;
+  /** 当日キャンセルの消化。送信率の分母に入れない */
+  consumedLabel?: string | null;
 };
 
-export type KarteNote = { memberId: string; trainerId: string | null };
+export type KarteNote = { memberId: string; trainerId: string | null; consumedCancel?: boolean };
 
 export type YutoLineRecipient = {
   trainerId: string;
@@ -34,7 +41,8 @@ export type DailyKarteReportData = {
   sessions: DailyKarteSession[];
   factsByStoreId: Record<string, StoreDayFacts>;
   recipient: YutoLineRecipient | null;
-  summary: { sessions: number; sent: number; unsent: number };
+  consumedSessions: DailyKarteSession[];
+  summary: { sessions: number; sent: number; unsent: number; consumed: number };
 };
 
 type Db = SupabaseClient<any>;
@@ -58,6 +66,7 @@ export function isKarteSent(
   notes: KarteNote[]
 ): boolean {
   return notes.some((note) => {
+    if (note.consumedCancel) return false;
     if (note.memberId !== session.memberId) return false;
     if (!session.trainerId || !note.trainerId) return true;
     return note.trainerId === session.trainerId;
@@ -129,6 +138,7 @@ export type StoreDayFacts = {
   reservations: number;
   openSlots: number;
   sameDayCancels: number;
+  noShows: number;
 };
 
 export type OpenSlotShift = {
@@ -197,7 +207,9 @@ export function isSameDayCancellation(input: {
   if (!isCancelledStatus(input.status)) return false;
   const start = DateTime.fromISO(input.startAt).setZone(TZ);
   if (!start.isValid || start.toISODate() !== input.dateYmd) return false;
-  if (/same_day_cancel=(no_show|after_visit)/.test(String(input.notes ?? ""))) return true;
+  if (/same_day_cancel=(no_show|after_visit)|karte_consumed_cancel=(no_show|same_day)/.test(String(input.notes ?? ""))) {
+    return true;
+  }
   if (!input.updatedAt) return false;
   const updated = DateTime.fromISO(input.updatedAt).setZone(TZ);
   return updated.isValid && updated.toISODate() === input.dateYmd;
@@ -252,11 +264,20 @@ export function buildStoreDayFacts(input: {
 }): Record<string, StoreDayFacts> {
   const workShifts = input.shiftRows.filter((row) => row.is_break !== true && row.store_id && row.trainer_id);
   const cancelIds = new Set<string>();
-  const cancelsByStore = new Map<string, number>();
-  const addCancel = (storeId: string, reservationId: string) => {
+  const cancelsByStore = new Map<string, { sameDay: number; noShow: number }>();
+  const reasonByReservation = new Map<string, "no_show" | "same_day">();
+  for (const row of input.reservationRows) {
+    const id = String(row.id ?? "");
+    if (!id) continue;
+    reasonByReservation.set(id, consumedCancelReasonFromNotes(row.notes) ?? "same_day");
+  }
+  const addCancel = (storeId: string, reservationId: string, kind: "no_show" | "same_day") => {
     if (!storeId || !reservationId || cancelIds.has(reservationId)) return;
     cancelIds.add(reservationId);
-    cancelsByStore.set(storeId, (cancelsByStore.get(storeId) ?? 0) + 1);
+    const cur = cancelsByStore.get(storeId) ?? { sameDay: 0, noShow: 0 };
+    if (kind === "no_show") cur.noShow += 1;
+    else cur.sameDay += 1;
+    cancelsByStore.set(storeId, cur);
   };
   for (const row of input.reservationRows) {
     if (
@@ -270,14 +291,23 @@ export function buildStoreDayFacts(input: {
     ) {
       continue;
     }
-    addCancel(String(row.store_id ?? ""), String(row.id ?? ""));
+    addCancel(
+      String(row.store_id ?? ""),
+      String(row.id ?? ""),
+      consumedCancelReasonFromNotes(row.notes) ?? "same_day"
+    );
   }
   for (const log of input.cancelLogs) {
     const start = DateTime.fromISO(String(log.before_start_at ?? "")).setZone(TZ);
     const created = DateTime.fromISO(String(log.created_at ?? "")).setZone(TZ);
     if (!start.isValid || !created.isValid) continue;
     if (start.toISODate() !== input.dateYmd || created.toISODate() !== input.dateYmd) continue;
-    addCancel(String(log.before_store_id ?? ""), String(log.reservation_id ?? ""));
+    const reservationId = String(log.reservation_id ?? "");
+    addCancel(
+      String(log.before_store_id ?? ""),
+      reservationId,
+      reasonByReservation.get(reservationId) ?? "same_day"
+    );
   }
 
   const facts: Record<string, StoreDayFacts> = {};
@@ -346,7 +376,8 @@ export function buildStoreDayFacts(input: {
         reservations: openReservations,
         events,
       }),
-      sameDayCancels: cancelsByStore.get(store.id) ?? 0,
+      sameDayCancels: cancelsByStore.get(store.id)?.sameDay ?? 0,
+      noShows: cancelsByStore.get(store.id)?.noShow ?? 0,
     };
   }
   return facts;
@@ -400,8 +431,25 @@ function formatStoreFacts(facts: StoreDayFacts): string[] {
     lines.push("シフト");
     for (const shift of facts.shifts) lines.push(`${shift.trainerName} ${shift.ranges.join("・")}`);
   }
-  lines.push(`予約 ${facts.reservations}　空き ${facts.openSlots}　当日キャンセル ${facts.sameDayCancels}`);
+  lines.push(formatBookingOutcomeLine(facts));
   return lines;
+}
+
+function formatCountRate(count: number, base: number): string {
+  if (base <= 0) return `${count}（0%）`;
+  return `${count}（${Math.round((count / base) * 100)}%）`;
+}
+
+/** 率の分母は、残っている予約・当日キャンセル・未来店。カルテ送信率の分母には入れない。 */
+export function formatBookingOutcomeLine(facts: {
+  reservations: number;
+  openSlots: number;
+  sameDayCancels: number;
+  noShows?: number;
+}): string {
+  const noShows = facts.noShows ?? 0;
+  const base = facts.reservations + facts.sameDayCancels + noShows;
+  return `予約 ${facts.reservations}　空き ${facts.openSlots}　当日キャンセル ${formatCountRate(facts.sameDayCancels, base)}　未来店 ${formatCountRate(noShows, base)}`;
 }
 
 export function formatDailyKarteReport(input: {
@@ -409,6 +457,7 @@ export function formatDailyKarteReport(input: {
   stores: DailyKarteStore[];
   sessions: DailyKarteSession[];
   factsByStoreId?: Record<string, StoreDayFacts>;
+  consumedSessions?: DailyKarteSession[];
 }): string {
   const dateLabel = DateTime.fromISO(input.dateYmd, { zone: TZ }).setLocale("ja").toFormat("yyyy年M月d日（ccc）");
   const lines: string[] = [`【日報】${dateLabel}`, ""];
@@ -417,7 +466,10 @@ export function formatDailyKarteReport(input: {
   let reservations = 0;
   let openSlots = 0;
   let sameDayCancels = 0;
+  let noShows = 0;
+  let consumedTotal = 0;
   let sawFacts = false;
+  const consumedAll = input.consumedSessions ?? [];
 
   for (const store of sortStores(input.stores)) {
     lines.push(`━━ ${store.name} ━━`);
@@ -427,13 +479,16 @@ export function formatDailyKarteReport(input: {
       reservations += facts.reservations;
       openSlots += facts.openSlots;
       sameDayCancels += facts.sameDayCancels;
+      noShows += facts.noShows ?? 0;
       lines.push(...formatStoreFacts(facts));
     }
     const sessions = input.sessions.filter((s) => s.storeId === store.id);
-    if (sessions.length === 0) {
+    const consumed = consumedAll.filter((s) => s.storeId === store.id);
+    if (sessions.length === 0 && consumed.length === 0) {
       lines.push("セッションなし", "");
       continue;
     }
+    if (sessions.length > 0) {
     const byTrainer = new Map<string, DailyKarteSession[]>();
     for (const session of sessions) {
       const key = session.trainerId ?? "";
@@ -451,15 +506,36 @@ export function formatDailyKarteReport(input: {
     for (const group of groups) {
       const name = group[0]?.trainerName?.trim() || "担当未設定";
       const sentN = group.filter((s) => s.sent).length;
+      const trainerKey = group[0]?.trainerId ?? "";
+      const trainerConsumed = consumed.filter((session) => (session.trainerId ?? "") === trainerKey);
+      const trainerNoShows = trainerConsumed.filter((session) => session.consumedLabel === "未来店").length;
+      const trainerCancels = trainerConsumed.filter((session) => session.consumedLabel === "当日キャンセル").length;
       total += group.length;
       sent += sentN;
       lines.push(`${name}　${group.length}件　送信${formatRate(sentN, group.length)}`);
+      if (trainerNoShows > 0 || trainerCancels > 0) {
+        const base = group.length + trainerNoShows + trainerCancels;
+        lines.push(
+          `当日キャンセル ${formatCountRate(trainerCancels, base)}　未来店 ${formatCountRate(trainerNoShows, base)}（送信分母外）`
+        );
+      }
       const missing = group.filter((s) => !s.sent).sort((a, b) => a.startAt.localeCompare(b.startAt));
       if (missing.length > 0) {
         lines.push(`未送信 ${missing.length}件`);
         for (const session of missing) {
           lines.push(`・${formatTime(session.startAt)} ${memberLabel(session)}`);
         }
+      }
+      lines.push("");
+    }
+    }
+    if (consumed.length > 0) {
+      consumedTotal += consumed.length;
+      lines.push(`消化（送信対象外）　${consumed.length}件`);
+      const sorted = consumed.slice().sort((a, b) => a.startAt.localeCompare(b.startAt));
+      for (const session of sorted) {
+        const label = session.consumedLabel?.trim() || "予約消化";
+        lines.push(`・${formatTime(session.startAt)} ${memberLabel(session)}　${label}`);
       }
       lines.push("");
     }
@@ -472,7 +548,17 @@ export function formatDailyKarteReport(input: {
     const unsent = total - sent;
     if (unsent > 0) lines.push(`未送信 ${unsent}件`);
   }
-  if (sawFacts) lines.push(`予約 ${reservations}　空き ${openSlots}　当日キャンセル ${sameDayCancels}`);
+  if (consumedTotal > 0) lines.push(`消化（送信対象外）　${consumedTotal}件`);
+  if (sawFacts) {
+    lines.push(
+      formatBookingOutcomeLine({
+        reservations,
+        openSlots,
+        sameDayCancels,
+        noShows,
+      })
+    );
+  }
   return lines.join("\n").trimEnd();
 }
 
@@ -567,6 +653,25 @@ export async function findYutoLineRecipient(supabase: Db): Promise<YutoLineRecip
   };
 }
 
+async function loadKarteNoteRows(supabase: Db, dateYmd: string): Promise<any[]> {
+  const run = (columns: string) =>
+    fetchPages((from, to) =>
+      supabase
+        .from("client_notes")
+        .select(columns)
+        .eq("date", dateYmd)
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+  try {
+    return await run("id, member_id, trainer_id, date, content, note_kind");
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!/note_kind|column|schema cache|Could not find/i.test(message)) throw e;
+    return await run("id, member_id, trainer_id, date, content");
+  }
+}
+
 export async function loadDailyKarteReport(
   supabase: Db,
   opts: { dateYmd: string; now: DateTime }
@@ -578,14 +683,7 @@ export async function loadDailyKarteReport(
   const [storeRows, reservationRows, noteRows, shiftRows, recipient] = await Promise.all([
     supabase.from("stores").select("id,name,is_active").order("name", { ascending: true }),
     loadReservationRows(supabase, dayStart.toISO()!, dayEnd.toISO()!),
-    fetchPages((from, to) =>
-      supabase
-        .from("client_notes")
-        .select("id, member_id, trainer_id, date")
-        .eq("date", dateYmd)
-        .order("id", { ascending: true })
-        .range(from, to)
-    ),
+    loadKarteNoteRows(supabase, dateYmd),
     loadShiftRows(supabase, dateYmd),
     findYutoLineRecipient(supabase),
   ]);
@@ -598,17 +696,26 @@ export async function loadDailyKarteReport(
     .filter((store) => store.is_active)
     .map((store) => ({ id: String(store.id), name: String(store.name ?? "") }));
 
-  const reservations = (reservationRows as any[]).filter((row) => {
+    const reservations = (reservationRows as any[]).filter((row) => {
     if (isCancelledStatus(row.status)) return false;
     if (!row.member_id) return false;
+    if (consumedCancelReasonFromNotes(row.notes) === "no_show") return false;
     return sessionIsReportable(
       { startAt: String(row.start_at), endAt: String(row.end_at ?? "") },
       now,
       dateYmd
     );
   });
+  const today = now.setZone(TZ).toISODate();
+  const consumedRows = (reservationRows as any[]).filter((row) => {
+    if (!isCancelledStatus(row.status) || !row.member_id) return false;
+    if (!consumedCancelLabelFromNotes(row.notes)) return false;
+    const start = DateTime.fromISO(String(row.start_at ?? "")).setZone(TZ);
+    if (!start.isValid || start.toISODate() !== dateYmd) return false;
+    return Boolean(today && dateYmd <= today);
+  });
 
-  for (const row of reservations) {
+  for (const row of [...reservations, ...consumedRows]) {
     const storeId = String(row.store_id);
     if (!stores.some((store) => store.id === storeId)) {
       stores.push({ id: storeId, name: storeNameById.get(storeId) || "店舗" });
@@ -620,9 +727,11 @@ export async function loadDailyKarteReport(
     .map((row) => ({
       memberId: String(row.member_id ?? ""),
       trainerId: row.trainer_id ? String(row.trainer_id) : null,
+      consumedCancel: isConsumedCancelNote(row),
     }));
+  const sendNotes = notes.filter((note) => !note.consumedCancel);
   const noteTrainersByMember = new Map<string, string[]>();
-  for (const note of notes) {
+  for (const note of sendNotes) {
     if (!note.trainerId) continue;
     const list = noteTrainersByMember.get(note.memberId) ?? [];
     list.push(note.trainerId);
@@ -639,12 +748,15 @@ export async function loadDailyKarteReport(
     }))
     .filter((shift) => shift.storeId && shift.trainerId);
 
-  const memberIds = Array.from(new Set(reservations.map((row) => String(row.member_id))));
+  const memberIds = Array.from(
+    new Set([...reservations, ...consumedRows].map((row) => String(row.member_id)))
+  );
   const trainerIds = Array.from(
     new Set(
       [
         ...reservations.map((row) => String(row.trainer_id ?? "")),
-        ...notes.map((note) => note.trainerId ?? ""),
+        ...consumedRows.map((row) => String(row.trainer_id ?? "")),
+        ...sendNotes.map((note) => note.trainerId ?? ""),
         ...shifts.map((shift) => shift.trainerId),
       ].filter(Boolean)
     )
@@ -724,7 +836,7 @@ export async function loadDailyKarteReport(
     trainerNameById.set(String(row.id), String(row.display_name ?? ""));
   }
 
-  const sessions: DailyKarteSession[] = reservations.map((row) => {
+  const toSession = (row: any, consumedLabel: string | null): DailyKarteSession => {
     const memberId = String(row.member_id);
     const storeId = String(row.store_id);
     const startMin = tokyoMinutes(String(row.start_at));
@@ -751,9 +863,15 @@ export async function loadDailyKarteReport(
       memberCode: member?.code ?? "",
       memberName: member?.name ?? "",
       startAt: String(row.start_at),
-      sent: isKarteSent({ memberId, trainerId: null }, notes),
+      sent: consumedLabel ? false : isKarteSent({ memberId, trainerId: null }, sendNotes),
+      consumedLabel,
     };
-  });
+  };
+
+  const sessions: DailyKarteSession[] = reservations.map((row) => toSession(row, null));
+  const consumedSessions: DailyKarteSession[] = consumedRows.map((row) =>
+    toSession(row, consumedCancelLabelFromNotes(row.notes) ?? "予約消化")
+  );
 
   const sent = sessions.filter((session) => session.sent).length;
   const factsByStoreId = buildStoreDayFacts({
@@ -770,9 +888,15 @@ export async function loadDailyKarteReport(
     dateYmd,
     stores,
     sessions,
+    consumedSessions,
     factsByStoreId,
     recipient,
-    summary: { sessions: sessions.length, sent, unsent: sessions.length - sent },
+    summary: {
+      sessions: sessions.length,
+      sent,
+      unsent: sessions.length - sent,
+      consumed: consumedSessions.length,
+    },
   };
 }
 

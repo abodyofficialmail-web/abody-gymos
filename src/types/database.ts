@@ -236,6 +236,7 @@ export interface Database {
           trainer_id: string;
           date: string;
           content: string;
+          note_kind?: string;
           created_at: string;
         };
         Insert: {
@@ -245,6 +246,7 @@ export interface Database {
           trainer_id: string;
           date: string;
           content: string;
+          note_kind?: string;
           created_at?: string;
         };
         Update: {
@@ -254,6 +256,7 @@ export interface Database {
           trainer_id?: string;
           date?: string;
           content?: string;
+          note_kind?: string;
           created_at?: string;
         };
         Relationships: [];
