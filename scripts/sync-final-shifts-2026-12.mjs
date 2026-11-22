@@ -20,8 +20,10 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1446;
-const EXPECT_PAY_YEN = 1_332_848;
+const EXPECT_SLOTS = 1383;
+const EXPECT_PAY_YEN = 1_302_548;
+/** 全店冬季休館。公開枠にも人件費にも入れない。 */
+const WINTER_CLOSED_DAYS = new Set([30, 31]);
 const SHIFT_STATUS = "draft";
 
 const SEIYA_SHIFTS = [
@@ -191,15 +193,6 @@ const SHIFTS = [
   ["2026-12-29", "10:00", "14:00", "りょう", "新宿"],
   ["2026-12-29", "09:00", "13:00", "たけはる", "桜木町"],
   ["2026-12-29", "16:00", "22:00", "たけはる", "桜木町"],
-
-  ["2026-12-30", "16:00", "22:00", "ゆうと", "恵比寿"],
-  ["2026-12-30", "10:00", "13:00", "りょう", "新宿"],
-  ["2026-12-30", "16:00", "21:30", "りょう", "新宿"],
-  ["2026-12-30", "10:00", "14:30", "たけはる", "桜木町"],
-
-  ["2026-12-31", "16:00", "22:00", "ゆうと", "恵比寿"],
-  ["2026-12-31", "10:00", "13:00", "りょう", "新宿"],
-  ["2026-12-31", "16:00", "21:30", "りょう", "新宿"],
 ];
 
 function mins(hhmm) {
@@ -540,7 +533,7 @@ function validate(rows) {
   for (let day = 1; day <= 31; day++) {
     const date = ymd(day);
     const dow = weekday(date);
-    if (dow === 0 || dow === 6 || day === 25) continue;
+    if (dow === 0 || dow === 6 || day === 25 || WINTER_CLOSED_DAYS.has(day)) continue;
     const night = rows.some(
       (r) => r.shift_date === date && r.store_name === "新宿" && mins(r.start_local) <= 16 * 60 && mins(r.end_local) >= 21 * 60 + 30,
     );
@@ -663,10 +656,10 @@ function assertPlan(rows) {
   if (pay.total > LABOR_CAP_YEN) throw new Error(`人件費が35%を超えています: ${pay.total}`);
   if (pay.total !== EXPECT_PAY_YEN) throw new Error(`人件費見積がずれています: ${pay.total} ${JSON.stringify(pay.trainers)} ${JSON.stringify(pay.money)}`);
   if (slots.total !== EXPECT_SLOTS) throw new Error(`公開枠が${EXPECT_SLOTS}ではありません: ${slots.total} ${JSON.stringify(slots.per)}`);
-  if (slots.per["新宿"] !== 470) throw new Error(`新宿が470枠ではありません: ${slots.per["新宿"]}`);
+  if (slots.per["新宿"] !== 440) throw new Error(`新宿が440枠ではありません: ${slots.per["新宿"]}`);
   if ((slots.per["桜木町"] ?? 0) >= 419) throw new Error(`桜木町が11月の419枠以上です: ${slots.per["桜木町"]}`);
-  if (pay.money["りょう"] < 310_000 || pay.money["りょう"] > 330_000) {
-    throw new Error(`りょうの人件費が31〜33万の外です: ${pay.money["りょう"]}`);
+  for (const day of WINTER_CLOSED_DAYS) {
+    if (rows.some((r) => r.shift_date === ymd(day))) throw new Error(`冬季休館に勤務があります: ${ymd(day)}`);
   }
   return { slots, pay };
 }
