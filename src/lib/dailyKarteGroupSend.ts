@@ -1,57 +1,28 @@
-import { DateTime } from "luxon";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  claimDailyKarteReport,
-  formatDailyKarteReport,
-  loadDailyKarteReport,
-  releaseDailyKarteReport,
-} from "@/lib/dailyKarteReport";
 import { lineAccessTokenForChannelKey } from "@/lib/lineChannel";
 import { chunkLinePushText, pushLineTextChunks } from "@/lib/lineMessagingPush";
 
-const TZ = "Asia/Tokyo";
-/** 本送信（当日の日報）とは別の一度きりロック。1970-01-01 は実在の日報日ではない。 */
-const ONCE_LOCK_DATE = "1970-01-01";
+/** 試し送信で届いたトレーナーのグループ。環境変数があればそちらを使う。 */
+const DEFAULT_TRAINER_GROUP_ID = "Cbe51152d1c1f443040a4d23e643fa97e";
 
-/**
- * 福岡公式アカウントが入ったグループへ、昨日のカルテ日報を一度だけ送る。
- * 招待時のグループIDは保存されていないため、次のグループイベントで送る。
- */
-export async function sendYesterdayKarteReportToFukuokaGroup(
-  supabase: SupabaseClient<any>,
-  groupId: string
-): Promise<void> {
+export function karteReportGroupId(): string {
+  return process.env.LINE_KARTE_REPORT_GROUP_ID?.trim() || DEFAULT_TRAINER_GROUP_ID;
+}
+
+/** カルテ日報の本文を、福岡公式アカウントからトレーナーのグループへ送る。 */
+export async function pushKarteReportToTrainerGroup(text: string): Promise<{ ok: boolean; status?: number }> {
   const token = lineAccessTokenForChannelKey("fukuoka");
-  if (!token) {
-    console.error("[karte-group] fukuoka token missing");
-    return;
+  const groupId = karteReportGroupId();
+  if (!token || !groupId) {
+    console.error("[karte-group] missing token or group id");
+    return { ok: false };
   }
-
-  const claim = await claimDailyKarteReport(supabase, ONCE_LOCK_DATE);
-  if (claim === "already") return;
-
-  const now = DateTime.now().setZone(TZ);
-  const dateYmd = now.minus({ days: 1 }).toISODate();
-  if (!dateYmd) {
-    if (claim === "claimed") await releaseDailyKarteReport(supabase, ONCE_LOCK_DATE).catch(() => {});
-    return;
+  const chunks = chunkLinePushText(text);
+  const results = await pushLineTextChunks({ token, toUserId: groupId, chunks });
+  const ok = results.length > 0 && results.every((result) => result.ok);
+  if (!ok) {
+    const last = results[results.length - 1];
+    console.error("[karte-group] push failed", { status: last?.status, body: last?.body?.slice(0, 300) });
+    return { ok: false, status: last?.status };
   }
-
-  try {
-    const report = await loadDailyKarteReport(supabase, { dateYmd, now });
-    const text = `【試し送信】昨日の日報です。\n\n${formatDailyKarteReport(report)}`;
-    const chunks = chunkLinePushText(text);
-    const results = await pushLineTextChunks({ token, toUserId: groupId, chunks });
-    const ok = results.length > 0 && results.every((result) => result.ok);
-    if (!ok) {
-      const last = results[results.length - 1];
-      console.error("[karte-group] push failed", { status: last?.status, body: last?.body?.slice(0, 300) });
-      if (claim === "claimed") await releaseDailyKarteReport(supabase, ONCE_LOCK_DATE);
-      return;
-    }
-    console.log(JSON.stringify({ karteGroupSent: true, dateYmd, chunks: chunks.length }));
-  } catch (e) {
-    console.error("[karte-group]", e instanceof Error ? e.message : e);
-    if (claim === "claimed") await releaseDailyKarteReport(supabase, ONCE_LOCK_DATE).catch(() => {});
-  }
+  return { ok: true, status: results[results.length - 1]?.status };
 }

@@ -2,7 +2,6 @@ import { createClient } from "@supabase/supabase-js";
 import { createHmac, timingSafeEqual } from "crypto";
 import type { Database } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sendYesterdayKarteReportToFukuokaGroup } from "@/lib/dailyKarteGroupSend";
 import { sendGoalHearingInviteForMember } from "@/lib/goalHearingInviteSend";
 import { recordLineFollowEvent } from "@/lib/marketing/lineFollowEvents";
 import type { LineChannelKey } from "@/lib/lineChannel";
@@ -23,7 +22,6 @@ import {
 } from "@/lib/trainerLineLink";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 type LineWebhookBody = {
   destination?: string;
@@ -328,21 +326,6 @@ export async function POST(request: Request) {
     const groupId = event.source?.groupId?.trim() || "";
     const roomId = event.source?.roomId?.trim() || "";
     if (event.source?.type === "group" || event.source?.type === "room" || groupId || roomId) {
-      console.log(
-        JSON.stringify({
-          lineChat: event.source?.type ?? (groupId ? "group" : "room"),
-          channelKey,
-          eventType: event.type,
-          id: groupId || roomId,
-        })
-      );
-      if (channelKey === "fukuoka" && groupId) {
-        try {
-          await sendYesterdayKarteReportToFukuokaGroup(supabase, groupId);
-        } catch (e) {
-          console.error("[karte-group] unexpected", e instanceof Error ? e.message : e);
-        }
-      }
       continue;
     }
     if (event.type === "follow" || event.type === "unfollow") {
