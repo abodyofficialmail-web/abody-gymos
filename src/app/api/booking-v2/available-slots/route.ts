@@ -19,6 +19,7 @@ import {
   memberHasOctoberEarlyAccess,
 } from "@/lib/booking/octoberEarlyAccess";
 import { shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
+import { shouldIncludeDecemberDrafts } from "@/lib/booking/decemberEarlyAccess";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 export async function OPTIONS() {
@@ -295,12 +296,18 @@ export async function GET(request: Request) {
       }
     })();
     if (
-      await shouldIncludeNovemberDrafts({
+      (await shouldIncludeNovemberDrafts({
         supabase,
         storeName: storeRow.name,
         ymdOrMonth: date,
         memberId: earlyMemberId,
-      })
+      })) ||
+      (await shouldIncludeDecemberDrafts({
+        supabase,
+        ymdOrMonth: date,
+        memberId: earlyMemberId,
+        email,
+      }))
     ) {
       let draftQuery = supabase
         .from("trainer_shifts")

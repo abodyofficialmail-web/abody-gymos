@@ -1,0 +1,24 @@
+name: Send December early booking LINE
+
+on:
+  push:
+    branches:
+      - cursor/december-early-booking-7911
+    paths:
+      - ".github/workflows/send-december-early-booking-line.yml"
+      - "scripts/send-december-early-booking-line.mjs"
+
+jobs:
+  send:
+    if: contains(github.event.head_commit.message, '[send-december-early-line-confirm]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MEMBER_PLANS_API_URL: https://abody-gymos.vercel.app
+        run: node scripts/send-december-early-booking-line.mjs --confirm
