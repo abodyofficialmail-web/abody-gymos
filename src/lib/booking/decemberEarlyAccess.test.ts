@@ -40,14 +40,19 @@ describe("december early booking", () => {
     assert.equal(decemberBookingPhase(new Date(Number.NaN)), "hidden");
   });
 
-  it("keeps the 44 named members and leaves the removed names out", () => {
-    assert.equal(DECEMBER_EARLY_ACCESS_CODES.length, 44);
-    assert.equal(new Set(DECEMBER_EARLY_ACCESS_CODES).size, 44);
+  it("keeps the 39 named members and leaves the removed names out", () => {
+    assert.equal(DECEMBER_EARLY_ACCESS_CODES.length, 39);
+    assert.equal(new Set(DECEMBER_EARLY_ACCESS_CODES).size, 39);
     assert.equal(isDecemberEarlyAccessCode("uen013"), true);
     assert.equal(isDecemberEarlyAccessCode("SHI023"), true);
     assert.equal(isDecemberEarlyAccessCode("EBI027"), false);
     assert.equal(isDecemberEarlyAccessCode("UEN055"), false);
     assert.equal(isDecemberEarlyAccessCode("SAK051"), false);
+    assert.equal(isDecemberEarlyAccessCode("FUK001"), false);
+    assert.equal(isDecemberEarlyAccessCode("FUK006"), false);
+    assert.equal(isDecemberEarlyAccessCode("FUK007"), false);
+    assert.equal(isDecemberEarlyAccessCode("FUK008"), false);
+    assert.equal(isDecemberEarlyAccessCode("FUK009"), false);
     assert.equal(isDecemberEarlyAccessCode("FUK010"), false);
     assert.equal(isDecemberBookingMonth("2026-12"), true);
     assert.equal(isDecemberBookingMonth("2026-12-01"), true);

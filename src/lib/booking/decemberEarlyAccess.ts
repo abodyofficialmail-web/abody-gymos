@@ -10,13 +10,12 @@ export const DECEMBER_BOOKING_MONTH = "2026-12";
 export const DECEMBER_EARLY_AT_ISO = "2026-11-26T21:00:00+09:00";
 export const DECEMBER_EARLY_AT_MS = Date.parse(DECEMBER_EARLY_AT_ISO);
 
-/** 11月の予約が8コマ以下の在籍者から、休会・退会・11月入会・個別除外を引いた44名。 */
+/** 11月の予約が8コマ以下の在籍者から、休会・退会・11月入会・福岡店・個別除外を引いた39名。 */
 export const DECEMBER_EARLY_ACCESS_CODES = [
   "UEN013",
   "SAK063",
   "SHI003",
   "SHI032",
-  "FUK001",
   "EBI034",
   "UEN038",
   "EBI016",
@@ -28,7 +27,6 @@ export const DECEMBER_EARLY_ACCESS_CODES = [
   "SAK065",
   "SAK036",
   "EBI009",
-  "FUK009",
   "EBI008",
   "UEN033",
   "UEN039",
@@ -46,7 +44,6 @@ export const DECEMBER_EARLY_ACCESS_CODES = [
   "SHI023",
   "SHI024",
   "SHI029",
-  "FUK006",
   "EBI005",
   "UEN001",
   "UEN003",
@@ -54,8 +51,6 @@ export const DECEMBER_EARLY_ACCESS_CODES = [
   "UEN040",
   "SAK061",
   "SHI020",
-  "FUK007",
-  "FUK008",
 ] as const;
 
 const CODE_SET = new Set<string>(DECEMBER_EARLY_ACCESS_CODES);
