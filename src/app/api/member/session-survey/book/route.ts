@@ -10,6 +10,7 @@ import {
 } from "@/lib/sessionSurveyNextBooking";
 import { lineMessageWithReservationDetails } from "@/lib/lineReservationMessage";
 import { linePushTokenForMember, normalizeLineChannelKey } from "@/lib/lineChannel";
+import { decemberBookingOpenForMember } from "@/lib/booking/decemberEarlyAccess";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -105,6 +106,14 @@ export async function POST(request: Request) {
       .order("start_at", { ascending: true })
       .limit(1);
     const sessionType = todayRows?.[0]?.session_type === "online" ? "online" : "store";
+
+    const bookingYmd = DateTime.fromISO(parsed.data.start_at).setZone("Asia/Tokyo").toISODate() ?? "";
+    const decemberOpen = await decemberBookingOpenForMember({
+      supabase,
+      ymd: bookingYmd,
+      memberId: ctx.member_id,
+    });
+    if (!decemberOpen) return json({ error: "12月のご予約はまだ公開前です" }, 400);
 
     const email = String(member.email ?? "").trim();
     let reservation: Record<string, unknown> | null = null;

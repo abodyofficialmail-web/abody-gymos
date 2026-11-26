@@ -29,6 +29,7 @@ import {
 import { bookingStopCountQueryRange, summarizeBookingStopCounts } from "@/lib/booking/bookingStopGlance";
 import { isOctoberEarlyAccessCode, isOctoberEarlyAccessDate } from "@/lib/booking/octoberEarlyAccess";
 import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
+import { decemberBookingOpenForMember, shouldIncludeDecemberDrafts } from "@/lib/booking/decemberEarlyAccess";
 import { fetchPreSessionHearingByReservationIds } from "@/lib/preSessionSurveyForKarte";
 
 dayjs.extend(utc);
@@ -135,10 +136,12 @@ async function fetchShiftsForCapacityCheck(params: {
   includeOctoberDraft?: boolean;
   /** 11月の公開ルールを満たす会員だけ、東京4店舗の下書きも容量に含める */
   includeNovemberDraft?: boolean;
+  /** 12月先行の一覧会員だけ、下書きも容量に含める */
+  includeDecemberDraft?: boolean;
 }): Promise<
   Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>
 > {
-  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft, includeDecemberDraft } = params;
   // shift_date が date 型 or timestamp 系どちらでも動くように
   // まず date 文字列で一致（date型に強い）→ 0件なら timestamp 範囲（timestamp型に強い）へフォールバック
   const dayStartTs = `${dateYmd}T00:00:00`;
@@ -219,7 +222,7 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
-  if (includeOctoberDraft || includeNovemberDraft) {
+  if (includeOctoberDraft || includeNovemberDraft || includeDecemberDraft) {
     let draftQ = await (supabase as any)
       .from("trainer_shifts")
       .select("trainer_id, start_local, end_local, is_break, status, booking_visibility")
@@ -661,6 +664,14 @@ export async function POST(request: Request) {
       if (!novemberOpen) {
         return jsonResponse({ error: "11月のご予約はまだ公開前です" }, 400);
       }
+      const decemberOpen = await decemberBookingOpenForMember({
+        supabase,
+        ymd: bookingYmd,
+        memberId,
+      });
+      if (!decemberOpen) {
+        return jsonResponse({ error: "12月のご予約はまだ公開前です" }, 400);
+      }
     }
     // trainer_id は未指定でも予約を成立させる（将来的に管理画面で後から割当）
     // - trainer_id 指定がある場合のみ、そのトレーナーに対してバリデーション/重複チェックを行う
@@ -747,6 +758,11 @@ export async function POST(request: Request) {
           includeNovemberDraft: await shouldIncludeNovemberDrafts({
             supabase,
             storeName: storeRow.name,
+            ymdOrMonth: targetDate,
+            memberId,
+          }),
+          includeDecemberDraft: await shouldIncludeDecemberDrafts({
+            supabase,
             ymdOrMonth: targetDate,
             memberId,
           }),

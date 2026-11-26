@@ -18,6 +18,7 @@ import {
   memberHasOctoberEarlyAccess,
 } from "@/lib/booking/octoberEarlyAccess";
 import { shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
+import { shouldIncludeDecemberDrafts } from "@/lib/booking/decemberEarlyAccess";
 export async function OPTIONS() {
   return jsonResponse({}, 200);
 }
@@ -217,13 +218,20 @@ export async function GET(request: Request) {
       }
     })();
     if (
-      await shouldIncludeNovemberDrafts({
+      (await shouldIncludeNovemberDrafts({
         supabase,
         storeName: storeRow.name,
         ymdOrMonth: month,
         memberId: earlyMemberId,
         now: now.toJSDate(),
-      })
+      })) ||
+      (await shouldIncludeDecemberDrafts({
+        supabase,
+        ymdOrMonth: month,
+        memberId: earlyMemberId,
+        email,
+        now: now.toJSDate(),
+      }))
     ) {
       let draftQuery = supabase
         .from("trainer_shifts")
