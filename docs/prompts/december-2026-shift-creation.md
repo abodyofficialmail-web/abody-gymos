@@ -8,7 +8,7 @@ node --env-file=.env.local scripts/sync-final-shifts-2026-12.mjs --dry-run
 node --env-file=.env.local scripts/sync-final-shifts-2026-12.mjs --apply
 ```
 
-2026-11-26 20:00（日本時間）以降の `--apply` は `confirmed` で書く。それより前は下書き。東京4店舗の12月予約が1件でもあれば中止する。会員画面は下書きを出さない。
+`--apply` は下書きで書く。会員画面は下書きを出さない。11月の利用が8回以下の在籍会員だけが、先行公開のコードから12月を予約できる。東京4店舗の12月予約が1件でもあれば `--apply` は中止する。
 
 ## 確定の数字
 

@@ -5,8 +5,8 @@ import { pathToFileURL } from "node:url";
  * 2026-12 東京4店舗のシフト（恵比寿・上野・新宿・桜木町）
  *
  * 福岡は触らない。11月の正本は変えない。
- * 2026-11-26 20:00（日本時間）より前の --apply は status=draft。
- * その時刻以降の --apply は status=confirmed。会員画面は下書きを出さない。
+ * --apply は status=draft。会員画面は下書きを出さない。
+ * 11月の利用が8回以下の在籍会員だけが、予約画面の先行公開でこの下書きを予約できる。
  * 12月の東京4店舗に予約が1件でもあれば書き込まない。
  *
  *   node scripts/sync-final-shifts-2026-12.mjs
@@ -28,11 +28,8 @@ const EXPECT_PAY_YEN = 1_293_518;
 const LABOR_BUDGET_YEN = LABOR_CAP_YEN;
 /** 全店冬季休館。公開枠にも人件費にも入れない。 */
 const WINTER_CLOSED_DAYS = new Set([30, 31]);
-/** この時刻以降は確定で入れる。前は下書き。 */
-const DECEMBER_PUBLIC_AT_MS = Date.parse("2026-11-26T20:00:00+09:00");
-
-function shiftStatusForApply(nowMs = Date.now()) {
-  return nowMs >= DECEMBER_PUBLIC_AT_MS ? "confirmed" : "draft";
+function shiftStatusForApply() {
+  return "draft";
 }
 
 const SEIYA_SHIFTS = [
