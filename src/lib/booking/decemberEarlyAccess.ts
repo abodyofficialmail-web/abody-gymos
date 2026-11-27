@@ -1,16 +1,18 @@
 /**
  * 2026年12月の予約公開。
  *
- * 東京4店舗の12月シフトは下書き。会員画面は下書きを出さない。
+ * 東京4店舗の12月シフトは、11月27日18:00（日本時間）までは下書き。
  * 11月の利用が8回以下の在籍会員だけが、その下書きを予約できる。
- * 全体公開の時刻はまだ置いていない。福岡は対象外。
+ * 11月27日18:00以降は全員に開く。福岡は対象外。
  *
  * 回数は 2026-11-27 10:00（日本時間）より前に作られた11月予約だけ。取消は数えない。
  */
 
 export const DECEMBER_BOOKING_MONTH = "2026-12";
 export const DECEMBER_EARLY_AT_ISO = "2026-11-27T10:00:00+09:00";
+export const DECEMBER_PUBLIC_AT_ISO = "2026-11-27T18:00:00+09:00";
 export const DECEMBER_EARLY_AT_MS = Date.parse(DECEMBER_EARLY_AT_ISO);
+export const DECEMBER_PUBLIC_AT_MS = Date.parse(DECEMBER_PUBLIC_AT_ISO);
 export const NOVEMBER_USAGE_START_ISO = "2026-11-01T00:00:00+09:00";
 export const NOVEMBER_USAGE_END_ISO = "2026-12-01T00:00:00+09:00";
 export const DECEMBER_USAGE_CREATED_BEFORE_ISO = DECEMBER_EARLY_AT_ISO;
@@ -19,12 +21,20 @@ export const DECEMBER_LOW_USAGE_MAX = 8;
 export const TOKYO_DECEMBER_STORES = ["恵比寿", "上野", "新宿", "桜木町"] as const;
 const TOKYO_STORE_SET = new Set<string>(TOKYO_DECEMBER_STORES);
 
-export type DecemberBookingPhase = "hidden" | "early";
+export type DecemberBookingPhase = "hidden" | "early" | "public";
 
 export function decemberBookingPhase(now: Date): DecemberBookingPhase {
   const ms = now.getTime();
-  if (!Number.isFinite(ms) || !Number.isFinite(DECEMBER_EARLY_AT_MS) || ms < DECEMBER_EARLY_AT_MS) return "hidden";
-  return "early";
+  if (
+    !Number.isFinite(ms) ||
+    !Number.isFinite(DECEMBER_EARLY_AT_MS) ||
+    !Number.isFinite(DECEMBER_PUBLIC_AT_MS) ||
+    ms < DECEMBER_EARLY_AT_MS
+  ) {
+    return "hidden";
+  }
+  if (ms < DECEMBER_PUBLIC_AT_MS) return "early";
+  return "public";
 }
 
 export function isDecemberBookingMonth(ymdOrMonth: string): boolean {
@@ -105,6 +115,9 @@ export async function shouldIncludeDecemberDrafts(params: {
 }): Promise<boolean> {
   if (!isTokyoDecemberStore(params.storeName)) return false;
   if (!isDecemberBookingMonth(params.ymdOrMonth)) return false;
+  const phase = decemberBookingPhase(params.now ?? new Date());
+  if (phase === "hidden") return false;
+  if (phase === "public") return true;
   return memberHasDecemberLowUsageAccess(params.supabase, params.memberId, params.now ?? new Date());
 }
 
@@ -124,5 +137,8 @@ export async function decemberBookingOpenForMember(params: {
     storeName = String((data as { name?: string | null }).name ?? "");
   }
   if (!isTokyoDecemberStore(storeName)) return true;
+  const phase = decemberBookingPhase(params.now ?? new Date());
+  if (phase === "hidden") return false;
+  if (phase === "public") return true;
   return memberHasDecemberLowUsageAccess(params.supabase, params.memberId, params.now ?? new Date());
 }
