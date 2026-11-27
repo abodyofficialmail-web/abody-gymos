@@ -22,7 +22,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1368;
+const EXPECT_SLOTS = 1369;
 const EXPECT_PAY_YEN = 1_293_518;
 /** 35%上限。確定案はこの中に収める。 */
 const LABOR_BUDGET_YEN = LABOR_CAP_YEN;
@@ -275,8 +275,8 @@ function isTenToOne(start, end) {
 
 function breaksForShift(trainerName, start, end) {
   if (trainerName === "ひろむ") {
+    if (isTenToOne(start, end)) return [{ start: "11:30:00", end: "12:00:00" }];
     const breaks = [];
-    if (isTenToOne(start, end)) breaks.push({ start: "11:30:00", end: "12:00:00" });
     if (breakCovers(start, end, "12:30", "13:00")) breaks.push({ start: "12:30:00", end: "13:00:00" });
     if (breakCovers(start, end, "20:00", "20:30")) breaks.push({ start: "20:00:00", end: "20:30:00" });
     return breaks;
