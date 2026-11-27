@@ -1,8 +1,9 @@
 name: Count December public LINE recipients
 
-# 送信せず、低利用者以外の件数だけ出す。このファイルを変えた push で1回走る。
+# 送信せず、低利用者以外の件数と、すでに台帳へ書いた件数だけ出す。
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
