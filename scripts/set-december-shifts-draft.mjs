@@ -50,12 +50,40 @@ async function main() {
   const reservations = await fetchAllChecked(
     supabase,
     "reservations",
-    "id",
+    "id, store_id, member_id, start_at, end_at, status, guest_name",
     (q) => q.in("store_id", storeIds).gte("start_at", MONTH_START_ISO).lt("start_at", NEXT_MONTH_START).neq("status", "cancelled"),
     "reservations.2026-12",
   );
+  const memberIds = [...new Set(reservations.rows.map((r) => r.member_id).filter(Boolean))];
+  const members = memberIds.length
+    ? await fetchAllChecked(supabase, "members", "id, name, display_name", (q) => q.in("id", memberIds), "members.december")
+    : { rows: [] };
+  const storeName = new Map(stores.rows.map((s) => [s.id, s.name]));
+  const memberName = new Map(members.rows.map((m) => [m.id, m.display_name || m.name || ""]));
+  const listed = reservations.rows
+    .map((r) => {
+      const start = new Date(r.start_at);
+      const end = new Date(r.end_at);
+      const jst = (d) =>
+        new Intl.DateTimeFormat("sv-SE", {
+          timeZone: "Asia/Tokyo",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        }).format(d);
+      return {
+        date: jst(start).slice(0, 5),
+        store: storeName.get(r.store_id) ?? "",
+        time: `${jst(start).slice(6)}-${jst(end).slice(6)}`,
+        status: r.status,
+        name: memberName.get(r.member_id) || r.guest_name || "",
+      };
+    })
+    .sort((a, b) => `${a.date}${a.time}${a.store}`.localeCompare(`${b.date}${b.time}${b.store}`));
 
-  console.log(JSON.stringify({ updated: confirmedIds.length, byStatus, decemberReservations: reservations.count }, null, 2));
+  console.log(JSON.stringify({ updated: confirmedIds.length, byStatus, decemberReservations: reservations.count, reservations: listed }, null, 2));
 }
 
 const invokedDirectly = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

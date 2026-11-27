@@ -1,6 +1,6 @@
 name: Set December shifts back to draft
 
-# 東京4店舗の12月を下書きに戻す。このファイルを変えた push で1回走る。
+# 東京4店舗の12月を下書きに戻し、入っている予約の一覧を出す。このファイルを変えた push で1回走る。
 
 on:
   push:
