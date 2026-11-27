@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/december-booking-release",
       "schedule": "0 9-11 27 11 *"
+    },
+    {
+      "path": "/api/cron/december-public-line",
+      "schedule": "0 9-12 27 11 *"
     }
   ]
 }
