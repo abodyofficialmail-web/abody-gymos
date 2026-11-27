@@ -22,7 +22,7 @@ const STORE_NAMES = ["恵比寿", "上野", "新宿", "桜木町"];
 const SINGLE_BOOTH = new Set(["恵比寿", "新宿"]);
 const REVENUE_YEN = 3_870_000;
 const LABOR_CAP_YEN = 1_354_500;
-const EXPECT_SLOTS = 1369;
+const EXPECT_SLOTS = 1370;
 const EXPECT_PAY_YEN = 1_293_518;
 /** 35%上限。確定案はこの中に収める。 */
 const LABOR_BUDGET_YEN = LABOR_CAP_YEN;
@@ -282,7 +282,6 @@ function breaksForShift(trainerName, start, end) {
     return breaks;
   }
   if (trainerName === "ゆうと" || trainerName === "たけはる") {
-    if (isTenToOne(start, end)) return [{ start: "11:30:00", end: "12:00:00" }];
     if (hours(start, end) < 7) return [];
     return twoCenteredBreaks(start, end);
   }
@@ -479,7 +478,7 @@ function validate(rows) {
   }
   for (const r of rows) {
     if (r.trainer_name !== "ゆうと" && r.trainer_name !== "たけはる") continue;
-    const expected = hours(r.start_local, r.end_local) >= 7 ? 2 : isTenToOne(r.start_local.slice(0, 5), r.end_local.slice(0, 5)) ? 1 : 0;
+    const expected = hours(r.start_local, r.end_local) >= 7 ? 2 : 0;
     if ((r.breaks ?? []).length !== expected) {
       errors.push(`${r.trainer_name}の休憩回数が${expected}ではありません: ${r.shift_date} ${r.start_local} ${(r.breaks ?? []).length}`);
     }

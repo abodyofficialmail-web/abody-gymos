@@ -8,9 +8,9 @@ import { pathToFileURL } from "node:url";
  *   node --env-file=.env.local scripts/patch-december-1013-breaks.mjs
  */
 const TARGETS = [
-  { date: "2026-12-07", trainer: "ゆうと", store: "新宿" },
-  { date: "2026-12-28", trainer: "ひろむ", store: "新宿" },
-  { date: "2026-12-29", trainer: "りょう", store: "新宿" },
+  { date: "2026-12-07", trainer: "ゆうと", store: "新宿", keepBreak: false },
+  { date: "2026-12-28", trainer: "ひろむ", store: "新宿", keepBreak: true },
+  { date: "2026-12-29", trainer: "りょう", store: "新宿", keepBreak: true },
 ];
 const BREAK_START = "11:30:00";
 const BREAK_END = "12:00:00";
@@ -78,9 +78,10 @@ async function main() {
       (q) => q.eq("shift_id", shift.id),
       `breaks.${target.date}`,
     );
-    const has = existing.rows.some((b) => minutes(b.start_time) === 11 * 60 + 30 && minutes(b.end_time) === 12 * 60);
+    const matched = existing.rows.filter((b) => minutes(b.start_time) === 11 * 60 + 30 && minutes(b.end_time) === 12 * 60);
     let inserted = false;
-    if (!has) {
+    let removed = false;
+    if (target.keepBreak && matched.length === 0) {
       const { error } = await supabase.from("trainer_shift_breaks").insert({
         shift_id: shift.id,
         start_time: BREAK_START,
@@ -88,6 +89,11 @@ async function main() {
       });
       if (error) throw error;
       inserted = true;
+    }
+    if (!target.keepBreak && matched.length > 0) {
+      const { error } = await supabase.from("trainer_shift_breaks").delete().in("id", matched.map((b) => b.id));
+      if (error) throw error;
+      removed = true;
     }
     const after = await fetchAllChecked(
       supabase,
@@ -104,6 +110,7 @@ async function main() {
       trainer: target.trainer,
       store: target.store,
       inserted,
+      removed,
       breaks: after.rows.map((b) => `${String(b.start_time).slice(0, 5)}–${String(b.end_time).slice(0, 5)}`).sort(),
       breakMinutes,
     });
