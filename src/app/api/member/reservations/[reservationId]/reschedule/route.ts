@@ -21,6 +21,7 @@ import { memberBookingBlockedMessage } from "@/lib/booking/memberBookingRules";
 import { evaluateLoadedMemberBooking, loadMemberBookingRuleContext } from "@/lib/booking/memberBookingRulesDb";
 import { isOctoberEarlyAccessDate, memberHasOctoberEarlyAccess } from "@/lib/booking/octoberEarlyAccess";
 import { novemberBookingOpenForMember, shouldIncludeNovemberDrafts } from "@/lib/booking/novemberEarlyAccess";
+import { decemberBookingOpenForMember, shouldIncludeDecemberDrafts } from "@/lib/booking/decemberEarlyAccess";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -77,8 +78,9 @@ async function fetchShiftsForCapacityCheck(params: {
   dateYmd: string;
   includeOctoberDraft?: boolean;
   includeNovemberDraft?: boolean;
+  includeDecemberDraft?: boolean;
 }): Promise<Array<{ trainer_id: string; start_min: number; end_min: number; is_break?: boolean | null }>> {
-  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft } = params;
+  const { supabase, store_id, dateYmd, includeOctoberDraft, includeNovemberDraft, includeDecemberDraft } = params;
   const dayStartTs = `${dateYmd}T00:00:00`;
   const dayEndTs = `${dateYmd}T23:59:59`;
 
@@ -140,7 +142,7 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
-  if (includeOctoberDraft || includeNovemberDraft) {
+  if (includeOctoberDraft || includeNovemberDraft || includeDecemberDraft) {
     const draftQ = await (supabase as any)
       .from("trainer_shifts")
       .select("trainer_id, start_local, end_local, is_break, status")
@@ -252,6 +254,14 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         memberId: cur.member_id,
       });
       if (!novemberOpen) return json({ error: "11月のご予約はまだ公開前です" }, 400);
+      const decemberOpen = await decemberBookingOpenForMember({
+        supabase,
+        storeId: cur.store_id,
+        storeName: storeRow?.name,
+        ymd: dateYmd,
+        memberId: cur.member_id,
+      });
+      if (!decemberOpen) return json({ error: "12月のご予約は、11月の利用が8回以下の方から先に開いています" }, 400);
 
       const shifts = await fetchShiftsForCapacityCheck({
         supabase,
@@ -260,6 +270,12 @@ export async function PATCH(request: Request, ctx: { params: { reservationId: st
         includeOctoberDraft:
           isOctoberEarlyAccessDate(dateYmd) && (await memberHasOctoberEarlyAccess(supabase, cur.member_id)),
         includeNovemberDraft: await shouldIncludeNovemberDrafts({
+          supabase,
+          storeName: storeRow?.name,
+          ymdOrMonth: dateYmd,
+          memberId: cur.member_id,
+        }),
+        includeDecemberDraft: await shouldIncludeDecemberDrafts({
           supabase,
           storeName: storeRow?.name,
           ymdOrMonth: dateYmd,

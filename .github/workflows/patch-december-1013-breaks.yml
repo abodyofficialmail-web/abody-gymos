@@ -1,0 +1,37 @@
+name: Patch December 10-13 breaks
+
+# 10:00–13:00 の 11:30–12:00。ゆうとは外し、ひろむとりょうは残す。
+# このファイルを変えた push で1回走る。シフト全体は消さない。
+
+on:
+  push:
+    branches:
+      - cursor/december-tokyo-shifts-e10a
+    paths:
+      - .github/workflows/patch-december-1013-breaks.yml
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Patch breaks and list reservations
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/patch-december-1013-breaks.mjs

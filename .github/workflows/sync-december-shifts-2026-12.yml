@@ -1,0 +1,59 @@
+name: Sync December 2026 Tokyo shifts
+
+# 2026-11-26 20:00（日本時間）の確定反映。
+# このファイルを変えた push で1回走る。20:00前に始まった場合は時刻まで待つ。
+# 必要な Secrets: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+
+on:
+  push:
+    branches:
+      - cursor/december-tokyo-shifts-e10a
+    paths:
+      - .github/workflows/sync-december-shifts-2026-12.yml
+  workflow_dispatch:
+
+concurrency:
+  group: sync-december-shifts-2026-12
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Wait until 20:00 JST on 2026-11-26
+        run: |
+          python3 - << 'PY'
+          import time
+          from datetime import datetime, timezone, timedelta
+          target = datetime(2026, 11, 26, 20, 0, tzinfo=timezone(timedelta(hours=9)))
+          wait = (target - datetime.now(timezone.utc)).total_seconds()
+          if wait > 0:
+              print(f"waiting {int(wait)}s until 20:00 JST")
+              time.sleep(wait + 2)
+          else:
+              print("20:00 JST has passed")
+          PY
+
+      - name: Apply December shifts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${NEXT_PUBLIC_SUPABASE_URL:-}" || { echo "missing NEXT_PUBLIC_SUPABASE_URL"; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "missing SUPABASE_SERVICE_ROLE_KEY"; exit 1; }
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/sync-final-shifts-2026-12.mjs --apply
