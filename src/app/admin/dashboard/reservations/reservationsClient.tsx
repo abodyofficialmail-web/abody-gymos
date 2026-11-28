@@ -1282,7 +1282,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                               <div key={report.id} className="text-xs text-emerald-950">
                                 報告済み: {report.task_label}
                                 {report.operator_name ? `（${report.operator_name}）` : ""}
-                                {report.detail ? ` / ${report.detail}` : ""}
+                                {report.detail ? <span className="mt-1 block whitespace-pre-line">{report.detail}</span> : null}
                               </div>
                             ))}
                           </div>
@@ -1316,7 +1316,7 @@ export function ReservationsClient({ initialStores = [] }: { initialStores?: Sto
                       {report.operator_name || "担当"}
                       {report.member_label ? ` / ${report.member_label}` : ""}
                     </div>
-                    {report.detail ? <div className="mt-1 text-xs text-slate-700">{report.detail}</div> : null}
+                    {report.detail ? <div className="mt-1 whitespace-pre-line text-xs text-slate-700">{report.detail}</div> : null}
                   </div>
                 );
               }
