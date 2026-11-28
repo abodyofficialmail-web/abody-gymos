@@ -3,6 +3,8 @@
 import { DateTime } from "luxon";
 import { useEffect, useMemo, useState } from "react";
 import { OPEN_SLOT_TASKS, extendedReservationRange, type OpenSlotTaskKey } from "@/lib/openSlotTasks";
+import { isUenoStoreName } from "@/lib/uenoOpenSlotCleaning";
+import { UenoCleaningTaskForm, type UenoCleaningSubmit } from "./uenoCleaningTaskForm";
 
 const TZ = "Asia/Tokyo";
 
@@ -89,6 +91,7 @@ export function OpenSlotTaskPanel(props: {
   const [done, setDone] = useState<string | null>(null);
 
   const task = OPEN_SLOT_TASKS.find((item) => item.key === taskKey) ?? null;
+  const uenoCleaning = isUenoStoreName(props.storeName) && taskKey === "cleaning";
   const extendOptions = useMemo(() => {
     const slotStart = DateTime.fromISO(props.slot.start_at).toMillis();
     const slotEnd = DateTime.fromISO(props.slot.end_at).toMillis();
@@ -156,6 +159,7 @@ export function OpenSlotTaskPanel(props: {
     try {
       const result = await apiPost<{
         line?: { sent?: string[]; missed?: string[] };
+        photos?: { sent?: number; failed?: number };
         member_notified?: boolean | null;
       }>("/api/admin/open-slot-tasks", {
         store_id: props.storeId,
@@ -176,6 +180,7 @@ export function OpenSlotTaskPanel(props: {
       if (taskKey === "extend" && result.member_notified === false) {
         lines.push("会員への延長連絡は送れませんでした。");
       }
+      if ((result.photos?.failed ?? 0) > 0) lines.push("写真のLINE送信に失敗しました。");
       setDone(lines.join(""));
       props.onDone();
     } catch (e) {
@@ -189,6 +194,43 @@ export function OpenSlotTaskPanel(props: {
     } finally {
       setBusy(false);
     }
+  };
+
+  const submitUenoCleaning = async (input: UenoCleaningSubmit) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const result = await apiPost<{
+        line?: { sent?: string[]; missed?: string[] };
+        photos?: { failed?: number };
+        member_notified?: boolean | null;
+      }>("/api/admin/open-slot-tasks", {
+        store_id: props.storeId,
+        start_at: props.slot.start_at,
+        end_at: props.slot.end_at,
+        task_key: "cleaning",
+        cleaning: {
+          area_key: input.areaKey,
+          checks: input.checks,
+          photos: input.photos,
+          note: input.note,
+        },
+        operator_trainer_id: input.trainerId,
+        operator_password: input.password,
+      });
+      const missed = result.line?.missed ?? [];
+      const sent = result.line?.sent ?? [];
+      const lines = ["実行して報告しました。"];
+      if (sent.length > 0) lines.push(`${sent.join("と")}にLINEで送りました。`);
+      if (missed.length > 0) lines.push(`${missed.join("と")}にはLINEが届きませんでした。`);
+      if ((result.photos?.failed ?? 0) > 0) lines.push("写真のLINE送信に失敗しました。");
+      setDone(lines.join(""));
+      props.onDone();
+    } catch (e) {
+      setBusy(false);
+      throw e;
+    }
+    setBusy(false);
   };
 
   return (
@@ -318,61 +360,71 @@ export function OpenSlotTaskPanel(props: {
               </div>
             ) : null}
 
-            {task ? (
-              <div>
-                <div className="text-xs font-semibold text-slate-700">
-                  {taskKey === "other" ? "タスク内容" : "報告メモ"}
+            {uenoCleaning ? (
+              <UenoCleaningTaskForm
+                slotStart={props.slot.start_at}
+                trainers={props.trainers}
+                defaultTrainerId={trainerId}
+                busy={busy}
+                onSubmit={submitUenoCleaning}
+              />
+            ) : (
+              <>
+                {task ? (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-700">{taskKey === "other" ? "タスク内容" : "報告メモ"}</div>
+                    <textarea
+                      value={detail}
+                      onChange={(e) => setDetail(e.target.value)}
+                      rows={3}
+                      maxLength={400}
+                      placeholder={taskKey === "other" ? "何をしたか書いてください" : "あれば補足"}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  </div>
+                ) : null}
+
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">担当トレーナー</div>
+                  <select
+                    value={trainerId}
+                    onChange={(e) => {
+                      setTrainerId(e.target.value);
+                      setNeedPassword(false);
+                      setPassword("");
+                    }}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">選択してください</option>
+                    {props.trainers.map((trainer) => (
+                      <option key={trainer.id} value={trainer.id}>
+                        {trainer.display_name}
+                      </option>
+                    ))}
+                  </select>
+                  {needPassword ? (
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="パスワード"
+                      className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  ) : null}
                 </div>
-                <textarea
-                  value={detail}
-                  onChange={(e) => setDetail(e.target.value)}
-                  rows={3}
-                  maxLength={400}
-                  placeholder={taskKey === "other" ? "何をしたか書いてください" : "あれば補足"}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              </div>
-            ) : null}
 
-            <div>
-              <div className="text-xs font-semibold text-slate-700">担当トレーナー</div>
-              <select
-                value={trainerId}
-                onChange={(e) => {
-                  setTrainerId(e.target.value);
-                  setNeedPassword(false);
-                  setPassword("");
-                }}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              >
-                <option value="">選択してください</option>
-                {props.trainers.map((trainer) => (
-                  <option key={trainer.id} value={trainer.id}>
-                    {trainer.display_name}
-                  </option>
-                ))}
-              </select>
-              {needPassword ? (
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="パスワード"
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-              ) : null}
-            </div>
+                {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{err}</div> : null}
 
-            {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{err}</div> : null}
-
-            <button
-              type="button"
-              onClick={submit}
-              disabled={busy || !taskKey || !trainerId || (needPassword && !password)}
-              className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-            >
-              {busy ? "送信中…" : "実行して報告"}
-            </button>
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={busy || !taskKey || !trainerId || (needPassword && !password)}
+                  className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {busy ? "送信中…" : "実行して報告"}
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

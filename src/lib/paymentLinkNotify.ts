@@ -91,6 +91,51 @@ export async function pushOpsLineNotice(
   }
 }
 
+/** 運営LINEへ画像を送る。1回のpushは5枚まで。 */
+export async function pushOpsLineImages(
+  supabase: SupabaseClient<Database>,
+  imageUrls: string[]
+): Promise<{ ok: boolean; sent: string[]; missed: string[] }> {
+  const urls = imageUrls.map((url) => url.trim()).filter(Boolean);
+  const wanted = ["ゆうと", "テストアカウント"];
+  if (urls.length === 0) return { ok: true, sent: [], missed: [] };
+  try {
+    const token = dailyReportChannelToken();
+    const targets = await loadPaymentLinkNotifyTargets(supabase);
+    if (!token) return { ok: false, sent: [], missed: wanted };
+    const sent: string[] = [];
+    const missed = wanted.filter((label) => !targets.some((target) => target.label === label));
+    for (const target of groupNotifyTargets(targets)) {
+      let targetOk = true;
+      for (let index = 0; index < urls.length; index += 5) {
+        const messages = urls.slice(index, index + 5).map((url) => ({
+          type: "image",
+          originalContentUrl: url,
+          previewImageUrl: url,
+        }));
+        const res = await fetch("https://api.line.me/v2/bot/message/push", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ to: target.lineUserId, messages }),
+        });
+        if (!res.ok) {
+          targetOk = false;
+          break;
+        }
+      }
+      if (targetOk) sent.push(...target.labels);
+      else missed.push(...target.labels);
+    }
+    return { ok: missed.length === 0 && sent.length > 0, sent, missed };
+  } catch (e) {
+    console.error("[opsLineImages]", e instanceof Error ? e.message : e);
+    return { ok: false, sent: [], missed: wanted };
+  }
+}
+
 export async function pushPaymentLinkNotice(
   supabase: SupabaseClient<Database>,
   text: string

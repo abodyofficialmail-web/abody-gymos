@@ -13,7 +13,12 @@ import {
   openSlotTaskByKey,
   type OpenSlotTaskKey,
 } from "@/lib/openSlotTasks";
-import { pushOpsLineNotice } from "@/lib/paymentLinkNotify";
+import { pushOpsLineImages, pushOpsLineNotice } from "@/lib/paymentLinkNotify";
+import {
+  isUenoStoreName,
+  validateUenoCleaningSubmission,
+  type UenoCleaningPhotoSlot,
+} from "@/lib/uenoOpenSlotCleaning";
 import { insertReservationChangeLog, requestUserAgent } from "@/lib/reservationChangeLog";
 import { isProtectedTrainerName, verifyTrainerPassword } from "@/lib/trainerGate";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
@@ -22,17 +27,35 @@ const TZ = "Asia/Tokyo";
 
 const taskKeySchema = z.enum(["cleaning", "sns", "machine", "invite", "extend", "supplies", "other"]);
 
+const cleaningSchema = z.object({
+  area_key: z.enum(["booth", "pilates", "rest", "kitchen"]),
+  checks: z.array(z.object({ place_key: z.string().min(1).max(40), step_key: z.string().min(1).max(40), done: z.boolean() })).max(40),
+  photos: z
+    .array(
+      z.object({
+        place_key: z.string().min(1).max(40),
+        step_key: z.string().min(1).max(40),
+        data_base64: z.string().min(100).max(700_000),
+      })
+    )
+    .max(8),
+  note: z.string().max(400).optional(),
+});
+
 const postSchema = z.object({
   store_id: z.string().uuid(),
   start_at: z.string().min(1),
   end_at: z.string().min(1),
   task_key: taskKeySchema,
   detail: z.string().max(400).optional(),
+  cleaning: cleaningSchema.optional(),
   member_id: z.string().uuid().optional(),
   reservation_id: z.string().uuid().optional(),
   operator_trainer_id: z.string().uuid(),
   operator_password: z.string().optional(),
 });
+
+const OPEN_SLOT_PHOTO_BUCKET = "open-slot-task-photos";
 
 type SlotDto = { start_at: string; end_at: string };
 
@@ -179,13 +202,39 @@ export async function POST(request: Request) {
       memberNotified = extended.memberNotified;
     }
 
-    const detailParts = [execution, note].map((part) => part.trim()).filter(Boolean);
-    const detail = detailParts.join("\n") || null;
+    const uenoCleaning = body.task_key === "cleaning" && isUenoStoreName(storeName);
+    let taskLabel: string = task.label;
+    let detail = [execution, note].map((part) => part.trim()).filter(Boolean).join("\n") || null;
+    let cleaningPhotos: UenoCleaningPhotoSlot[] = [];
+    let photoUrls: string[] = [];
+    if (uenoCleaning) {
+      if (!body.cleaning) return jsonResponse({ error: "掃除の場所を選んでください" }, 400);
+      const cleaning = validateUenoCleaningSubmission({
+        areaKey: body.cleaning.area_key,
+        slotStart: slot.start_at,
+        checks: body.cleaning.checks.map((check) => ({ placeKey: check.place_key, stepKey: check.step_key, done: check.done })),
+        photos: body.cleaning.photos.map((photo) => ({ placeKey: photo.place_key, stepKey: photo.step_key })),
+        note: body.cleaning.note,
+      });
+      if (!cleaning.ok) return jsonResponse({ error: cleaning.error }, 400);
+      const uploaded = await uploadUenoCleaningPhotos(supabase, {
+        storeId: store.id,
+        slotStart: slot.start_at,
+        areaKey: body.cleaning.area_key,
+        photos: body.cleaning.photos,
+        slots: cleaning.slots,
+      });
+      if (!uploaded.ok) return jsonResponse({ error: uploaded.error }, uploaded.status);
+      taskLabel = cleaning.taskLabel;
+      detail = cleaning.detail;
+      cleaningPhotos = cleaning.slots;
+      photoUrls = uploaded.urls;
+    }
     const reportText = buildOpenSlotTaskReportText({
       storeName,
       startAt: slot.start_at,
       endAt: slot.end_at,
-      taskLabel: task.label,
+      taskLabel,
       operatorName: operator.displayName,
       detail,
       memberLabel: memberText,
@@ -198,7 +247,7 @@ export async function POST(request: Request) {
         slot_start_at: slot.start_at,
         slot_end_at: slot.end_at,
         task_key: task.key as OpenSlotTaskKey,
-        task_label: task.label,
+        task_label: taskLabel,
         detail,
         operator_trainer_id: operator.trainerId,
         operator_name: operator.displayName,
@@ -224,10 +273,12 @@ export async function POST(request: Request) {
     }
 
     const notice = await pushOpsLineNotice(supabase, reportText);
+    const images = photoUrls.length > 0 ? await pushOpsLineImages(supabase, photoUrls) : null;
     return jsonResponse(
       {
         report: saved,
         line: notice,
+        photos: images ? { sent: images.ok ? cleaningPhotos.length : 0, failed: images.ok ? 0 : cleaningPhotos.length } : undefined,
         member_notified: memberNotified,
       },
       200
@@ -430,6 +481,51 @@ async function trainerCoversRange(input: {
     const b = parseMinutes(String(row.end_local ?? ""));
     return Number.isFinite(a) && Number.isFinite(b) && a <= startMin && b >= endMin;
   });
+}
+
+function decodeJpeg(dataBase64: string): Buffer | null {
+  const cleaned = dataBase64.replace(/^data:image\/jpeg;base64,/i, "").replace(/\s/g, "");
+  const buf = Buffer.from(cleaned, "base64");
+  if (buf.length < 100 || buf.length > 1_500_000) return null;
+  if (buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  return buf;
+}
+
+async function uploadUenoCleaningPhotos(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  input: {
+    storeId: string;
+    slotStart: string;
+    areaKey: string;
+    photos: { place_key: string; step_key: string; data_base64: string }[];
+    slots: UenoCleaningPhotoSlot[];
+  }
+): Promise<{ ok: true; urls: string[] } | { ok: false; status: number; error: string }> {
+  const urls: string[] = [];
+  const stamp = DateTime.fromISO(input.slotStart).toUTC().toFormat("yyyyLLddHHmmss");
+  for (const slot of input.slots) {
+    const photo = input.photos.find((item) => item.place_key === slot.placeKey && item.step_key === slot.stepKey);
+    if (!photo) return { ok: false, status: 400, error: `${slot.label}の写真を付けてください` };
+    const bytes = decodeJpeg(photo.data_base64);
+    if (!bytes) return { ok: false, status: 400, error: `${slot.label}の写真を確認してください` };
+    const path = `${input.storeId}/${stamp}/${input.areaKey}/${slot.placeKey}-${slot.stepKey}.jpg`;
+    const { error } = await supabase.storage.from(OPEN_SLOT_PHOTO_BUCKET).upload(path, bytes, {
+      contentType: "image/jpeg",
+      upsert: true,
+    });
+    if (error) {
+      const missing = /bucket|not found|schema/i.test(error.message);
+      return {
+        ok: false,
+        status: 500,
+        error: missing ? "写真の保存先がまだありません。データベースの更新が必要です" : "写真の保存に失敗しました",
+      };
+    }
+    const signed = await supabase.storage.from(OPEN_SLOT_PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
+    if (signed.error || !signed.data?.signedUrl) return { ok: false, status: 500, error: "写真の送信準備に失敗しました" };
+    urls.push(signed.data.signedUrl);
+  }
+  return { ok: true, urls };
 }
 
 async function resolveOperator(
