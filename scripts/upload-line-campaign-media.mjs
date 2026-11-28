@@ -15,10 +15,11 @@ import fs from "fs";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
 import { execSync } from "child_process";
+import { google } from "googleapis";
 
 const BUCKET = "line-campaign-media";
 const SIGNED_TTL_SEC = 60 * 60 * 24 * 30;
-const CAMPAIGN_PREFIX = "sep-low-booking-2026-09";
+const DEFAULT_CAMPAIGN_PREFIX = "sep-low-booking-2026-09";
 /** Supabase bucket fileSizeLimit（既存バケットは20MBのことが多い） */
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
@@ -48,12 +49,57 @@ function arg(name) {
   return hit ? hit.slice(name.length + 3) : null;
 }
 
+function looksLikeHtml(buf) {
+  const head = buf.subarray(0, 300).toString("utf8").toLowerCase();
+  return head.includes("<!doctype") || head.includes("<html") || head.includes("accounts.google.com");
+}
+
+function driveFileIdFromUrl(url) {
+  const text = String(url ?? "");
+  const fromPath = text.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (fromPath) return fromPath[1];
+  const fromQuery = text.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return fromQuery ? fromQuery[1] : null;
+}
+
+function googleJwt() {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  let privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim() || "";
+  if (privateKey.startsWith('"') && privateKey.endsWith('"')) privateKey = privateKey.slice(1, -1).trim();
+  privateKey = privateKey.replace(/\r/g, "");
+  if (privateKey.includes("\\n")) privateKey = privateKey.replace(/\\n/g, "\n");
+  if (!email || !privateKey) return null;
+  return new google.auth.JWT({
+    email,
+    key: privateKey,
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+  });
+}
+
+async function readFromDriveApi(fileId) {
+  const auth = googleJwt();
+  if (!auth) throw new Error("Google Drive が非公開で、サービスアカウント認証もありません");
+  const drive = google.drive({ version: "v3", auth });
+  const res = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  const buf = Buffer.from(res.data);
+  const contentType = String(res.headers?.["content-type"] ?? "video/mp4");
+  console.log(`video: downloaded via Drive API (${(buf.length / (1024 * 1024)).toFixed(2)} MB, ${contentType})`);
+  return { buf, contentType };
+}
+
 async function readFromUrl(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`download failed ${res.status}: ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   const ct = res.headers.get("content-type") ?? "";
-  return { buf, contentType: ct };
+  if (!looksLikeHtml(buf) && !ct.includes("text/html")) return { buf, contentType: ct };
+
+  const fileId = driveFileIdFromUrl(url);
+  if (!fileId) {
+    throw new Error("ダウンロード結果がHTMLです。共有を「リンクを知っている全員」にしてください");
+  }
+  console.log(`video: public download returned HTML. trying Drive API fileId=${fileId}`);
+  return readFromDriveApi(fileId);
 }
 
 function readLocal(filePath) {
@@ -141,6 +187,7 @@ async function main() {
   const previewLocal = arg("preview");
   const videoUrl = arg("video-url");
   const previewUrl = arg("preview-url");
+  const campaignPrefix = arg("prefix") || DEFAULT_CAMPAIGN_PREFIX;
 
   if (!videoLocal && !videoUrl) {
     console.error(`usage:
@@ -204,13 +251,13 @@ async function main() {
 
     const videoUpload = await upload(
       supabase,
-      `${CAMPAIGN_PREFIX}/video.mp4`,
+      `${campaignPrefix}/video.mp4`,
       videoBuf,
       videoContentType,
     );
     const previewUpload = await upload(
       supabase,
-      `${CAMPAIGN_PREFIX}/preview.jpg`,
+      `${campaignPrefix}/preview.jpg`,
       previewBuf,
       previewContentType,
     );
