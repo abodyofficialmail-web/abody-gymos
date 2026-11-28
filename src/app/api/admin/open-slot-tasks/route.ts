@@ -14,16 +14,20 @@ import {
   type OpenSlotTaskKey,
 } from "@/lib/openSlotTasks";
 import { pushOpsLineImages, pushOpsLineNotice } from "@/lib/paymentLinkNotify";
+import { validateOpenSlotSupplies } from "@/lib/openSlotSupplies";
 import {
   isUenoStoreName,
   validateUenoCleaningSubmission,
   type UenoCleaningPhotoSlot,
 } from "@/lib/uenoOpenSlotCleaning";
 import { insertReservationChangeLog, requestUserAgent } from "@/lib/reservationChangeLog";
+import { listStoreLowBookingMembers } from "@/lib/storeLowBookingMembers";
 import { isProtectedTrainerName, verifyTrainerPassword } from "@/lib/trainerGate";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
 const TZ = "Asia/Tokyo";
+
+export const maxDuration = 60;
 
 const taskKeySchema = z.enum(["cleaning", "sns", "machine", "invite", "extend", "supplies", "other"]);
 
@@ -42,6 +46,19 @@ const cleaningSchema = z.object({
   note: z.string().max(400).optional(),
 });
 
+const suppliesSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        key: z.enum(["wet-wipes", "kitchen-paper", "tissue", "toilet-paper", "paper-cup", "sanitizer", "detergent", "cleaning", "other"]),
+        quantity: z.number().int().min(1).max(999),
+        note: z.string().max(80).optional(),
+      })
+    )
+    .max(9),
+  receipts: z.array(z.object({ data_base64: z.string().min(100).max(700_000) })).max(3),
+});
+
 const postSchema = z.object({
   store_id: z.string().uuid(),
   start_at: z.string().min(1),
@@ -49,10 +66,13 @@ const postSchema = z.object({
   task_key: taskKeySchema,
   detail: z.string().max(400).optional(),
   cleaning: cleaningSchema.optional(),
+  supplies: suppliesSchema.optional(),
   member_id: z.string().uuid().optional(),
   reservation_id: z.string().uuid().optional(),
   operator_trainer_id: z.string().uuid(),
   operator_password: z.string().optional(),
+  low_booking_member_ids: z.array(z.string().uuid()).max(200).optional(),
+  low_booking_max: z.number().int().min(0).max(31).optional(),
 });
 
 const OPEN_SLOT_PHOTO_BUCKET = "open-slot-task-photos";
@@ -149,7 +169,13 @@ export async function POST(request: Request) {
     const note = String(body.detail ?? "").trim();
     if (body.task_key === "other" && !note) return jsonResponse({ error: "その他タスクの内容を書いてください" }, 400);
     if (body.task_key === "invite" && !body.member_id) return jsonResponse({ error: "案内する会員を選んでください" }, 400);
-    if (body.task_key === "extend" && !body.reservation_id) return jsonResponse({ error: "延長する予約を選んでください" }, 400);
+    const broadcastIds = body.low_booking_member_ids ?? [];
+    if (body.task_key === "extend" && body.reservation_id && broadcastIds.length > 0) {
+      return jsonResponse({ error: "延長と一斉送信は分けて実行してください" }, 400);
+    }
+    if (body.task_key === "extend" && !body.reservation_id && broadcastIds.length === 0) {
+      return jsonResponse({ error: "延長する予約か、案内する会員を選んでください" }, 400);
+    }
 
     const supabase = createSupabaseServiceClient();
     const operator = await resolveOperator(supabase, body.operator_trainer_id, body.operator_password);
@@ -169,6 +195,7 @@ export async function POST(request: Request) {
     let reservationId: string | null = null;
     let execution = "";
     let memberNotified: boolean | null = null;
+    let taskLabel: string = task.label;
 
     if (body.task_key === "invite") {
       const sent = await sendMemberInvite(supabase, {
@@ -184,7 +211,23 @@ export async function POST(request: Request) {
       memberNotified = true;
     }
 
-    if (body.task_key === "extend") {
+    if (body.task_key === "extend" && broadcastIds.length > 0) {
+      const invited = await sendLowBookingSlotInvites(supabase, {
+        storeId: store.id,
+        storeName,
+        startAt: slot.start_at,
+        endAt: slot.end_at,
+        memberIds: broadcastIds,
+        maxCount: body.low_booking_max ?? 4,
+      });
+      if (!invited.ok) return jsonResponse({ error: invited.error }, invited.status);
+      memberText = invited.memberLabel;
+      execution = invited.summary;
+      memberNotified = true;
+      taskLabel = "予約が少ない会員へ案内";
+    }
+
+    if (body.task_key === "extend" && broadcastIds.length === 0) {
       const extended = await extendMemberSession({
         supabase,
         request,
@@ -203,10 +246,29 @@ export async function POST(request: Request) {
     }
 
     const uenoCleaning = body.task_key === "cleaning" && isUenoStoreName(storeName);
-    let taskLabel: string = task.label;
     let detail = [execution, note].map((part) => part.trim()).filter(Boolean).join("\n") || null;
-    let cleaningPhotos: UenoCleaningPhotoSlot[] = [];
+    let photoCount = 0;
     let photoUrls: string[] = [];
+    if (body.task_key === "supplies") {
+      if (!body.supplies) return jsonResponse({ error: "品目を選んでください" }, 400);
+      const supplies = validateOpenSlotSupplies({
+        items: body.supplies.items.map((item) => ({ key: item.key, quantity: item.quantity, note: item.note })),
+        receiptCount: body.supplies.receipts.length,
+      });
+      if (!supplies.ok) return jsonResponse({ error: supplies.error }, 400);
+      const uploaded = await uploadOpenSlotJpegs(
+        supabase,
+        body.supplies.receipts.map((receipt, index) => ({
+          path: `${store.id}/${DateTime.fromISO(slot.start_at).toUTC().toFormat("yyyyLLddHHmmss")}/supplies/receipt-${index + 1}.jpg`,
+          dataBase64: receipt.data_base64,
+          label: `領収書${index + 1}`,
+        }))
+      );
+      if (!uploaded.ok) return jsonResponse({ error: uploaded.error }, uploaded.status);
+      detail = supplies.detail;
+      photoUrls = uploaded.urls;
+      photoCount = uploaded.urls.length;
+    }
     if (uenoCleaning) {
       if (!body.cleaning) return jsonResponse({ error: "掃除の場所を選んでください" }, 400);
       const cleaning = validateUenoCleaningSubmission({
@@ -227,8 +289,8 @@ export async function POST(request: Request) {
       if (!uploaded.ok) return jsonResponse({ error: uploaded.error }, uploaded.status);
       taskLabel = cleaning.taskLabel;
       detail = cleaning.detail;
-      cleaningPhotos = cleaning.slots;
       photoUrls = uploaded.urls;
+      photoCount = uploaded.urls.length;
     }
     const reportText = buildOpenSlotTaskReportText({
       storeName,
@@ -278,7 +340,7 @@ export async function POST(request: Request) {
       {
         report: saved,
         line: notice,
-        photos: images ? { sent: images.ok ? cleaningPhotos.length : 0, failed: images.ok ? 0 : cleaningPhotos.length } : undefined,
+        photos: images ? { sent: images.ok ? photoCount : 0, failed: images.ok ? 0 : photoCount } : undefined,
         member_notified: memberNotified,
       },
       200
@@ -287,6 +349,50 @@ export async function POST(request: Request) {
     const message = e instanceof Error ? e.message : String(e);
     return jsonResponse({ error: "タスクの実行に失敗しました", detail: message }, 500);
   }
+}
+
+async function sendLowBookingSlotInvites(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  input: { storeId: string; storeName: string; startAt: string; endAt: string; memberIds: string[]; maxCount: number }
+): Promise<
+  | { ok: true; summary: string; memberLabel: string }
+  | { ok: false; status: number; error: string }
+> {
+  const listed = await listStoreLowBookingMembers(supabase, input.storeId);
+  const wanted = new Set(input.memberIds);
+  const targets = listed.members.filter(
+    (member) => wanted.has(member.id) && member.lineUserId && member.count <= input.maxCount
+  );
+  if (targets.length === 0) return { ok: false, status: 400, error: "案内できる会員がいません" };
+
+  const text = buildMemberInviteText({
+    storeName: input.storeName,
+    startAt: input.startAt,
+    endAt: input.endAt,
+    bookingUrl: `${getAppUrl()}/booking`,
+  });
+  const sent: string[] = [];
+  const failed: string[] = [];
+  for (const member of targets) {
+    const pushed = await pushLineTextForMember({
+      toUserId: member.lineUserId!,
+      text,
+      memberCode: member.memberCode,
+      lineChannelKey: normalizeLineChannelKey(member.lineChannelKey),
+      storeName: input.storeName,
+    });
+    if (pushed.ok) sent.push(`${member.name}（${member.memberCode}）`);
+    else failed.push(member.memberCode);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (sent.length === 0) return { ok: false, status: 502, error: "会員のLINEに送れませんでした" };
+
+  const lines = [
+    `${listed.monthLabel}に終了したセッションが${input.maxCount}回以下の会員へ、この枠の案内を送りました`,
+    `送信 ${sent.length}人: ${sent.join("、")}`,
+  ];
+  if (failed.length > 0) lines.push(`失敗: ${failed.join("、")}`);
+  return { ok: true, summary: lines.join("\n"), memberLabel: `${sent.length}人` };
 }
 
 async function sendMemberInvite(
@@ -481,6 +587,33 @@ async function trainerCoversRange(input: {
     const b = parseMinutes(String(row.end_local ?? ""));
     return Number.isFinite(a) && Number.isFinite(b) && a <= startMin && b >= endMin;
   });
+}
+
+async function uploadOpenSlotJpegs(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  files: { path: string; dataBase64: string; label: string }[]
+): Promise<{ ok: true; urls: string[] } | { ok: false; status: number; error: string }> {
+  const urls: string[] = [];
+  for (const file of files) {
+    const bytes = decodeJpeg(file.dataBase64);
+    if (!bytes) return { ok: false, status: 400, error: `${file.label}の写真を確認してください` };
+    const { error } = await supabase.storage.from(OPEN_SLOT_PHOTO_BUCKET).upload(file.path, bytes, {
+      contentType: "image/jpeg",
+      upsert: true,
+    });
+    if (error) {
+      const missing = /bucket|not found|schema/i.test(error.message);
+      return {
+        ok: false,
+        status: 500,
+        error: missing ? "写真の保存先がまだありません。データベースの更新が必要です" : "写真の保存に失敗しました",
+      };
+    }
+    const signed = await supabase.storage.from(OPEN_SLOT_PHOTO_BUCKET).createSignedUrl(file.path, 60 * 60);
+    if (signed.error || !signed.data?.signedUrl) return { ok: false, status: 500, error: "写真の送信準備に失敗しました" };
+    urls.push(signed.data.signedUrl);
+  }
+  return { ok: true, urls };
 }
 
 function decodeJpeg(dataBase64: string): Buffer | null {

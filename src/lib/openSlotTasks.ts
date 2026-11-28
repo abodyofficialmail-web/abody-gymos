@@ -7,8 +7,8 @@ export const OPEN_SLOT_TASKS = [
   { key: "sns", label: "SNS撮影", hint: "投稿用の写真や動画を撮って報告します" },
   { key: "machine", label: "マシンメンテナンス", hint: "マシンの点検や調整をして報告します" },
   { key: "invite", label: "会員に予約案内", hint: "会員を選んで、この枠の案内をLINEで送ります" },
-  { key: "extend", label: "会員のセッション延長", hint: "前後の会員予約を、この枠の分だけ延ばします" },
-  { key: "supplies", label: "備品購入・ストック整理", hint: "備品の購入やストック整理をして報告します" },
+  { key: "extend", label: "会員のセッション延長", hint: "前後の予約を延ばすか、予約が少ない会員へ案内を送ります" },
+  { key: "supplies", label: "備品購入・ストック整理", hint: "品目と個数を選び、領収書を付けて報告します" },
   { key: "other", label: "その他", hint: "内容を書いて報告します" },
 ] as const;
 

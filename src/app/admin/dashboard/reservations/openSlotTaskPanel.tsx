@@ -4,6 +4,7 @@ import { DateTime } from "luxon";
 import { useEffect, useMemo, useState } from "react";
 import { OPEN_SLOT_TASKS, extendedReservationRange, type OpenSlotTaskKey } from "@/lib/openSlotTasks";
 import { isUenoStoreName } from "@/lib/uenoOpenSlotCleaning";
+import { SuppliesTaskForm, type SuppliesSubmit } from "./suppliesTaskForm";
 import { UenoCleaningTaskForm, type UenoCleaningSubmit } from "./uenoCleaningTaskForm";
 
 const TZ = "Asia/Tokyo";
@@ -37,6 +38,14 @@ type ReservationRow = {
 type TrainerOption = { id: string; display_name: string };
 
 type MemberHit = { id: string; member_code: string; name: string | null; line_user_id?: string | null };
+
+type LowBookingMember = {
+  id: string;
+  member_code: string;
+  name: string;
+  count: number;
+  has_line: boolean;
+};
 
 function hhmm(iso: string) {
   return DateTime.fromISO(iso).setZone(TZ).toFormat("HH:mm");
@@ -83,6 +92,10 @@ export function OpenSlotTaskPanel(props: {
   const [memberHits, setMemberHits] = useState<MemberHit[] | null>(null);
   const [member, setMember] = useState<MemberHit | null>(null);
   const [reservationId, setReservationId] = useState("");
+  const [lowBooking, setLowBooking] = useState<LowBookingMember[] | null>(null);
+  const [lowBookingMax, setLowBookingMax] = useState("4");
+  const [lowBookingMonth, setLowBookingMonth] = useState("");
+  const [excludedLowBooking, setExcludedLowBooking] = useState<string[]>([]);
   const [trainerId, setTrainerId] = useState(props.defaultTrainerId);
   const [password, setPassword] = useState("");
   const [needPassword, setNeedPassword] = useState(false);
@@ -132,6 +145,36 @@ export function OpenSlotTaskPanel(props: {
       window.clearTimeout(timer);
     };
   }, [memberQuery, taskKey]);
+
+  useEffect(() => {
+    if (taskKey !== "extend") return;
+    let cancelled = false;
+    setLowBooking(null);
+    apiGet<{ members: LowBookingMember[]; month_label: string }>(
+      `/api/admin/open-slot-tasks/low-booking?store_id=${encodeURIComponent(props.storeId)}`
+    )
+      .then((data) => {
+        if (cancelled) return;
+        setLowBooking(data.members ?? []);
+        setLowBookingMonth(data.month_label ?? "");
+        setExcludedLowBooking([]);
+      })
+      .catch(() => {
+        if (!cancelled) setLowBooking([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.storeId, taskKey]);
+
+  const lowBookingLimit = Number(lowBookingMax);
+  const visibleLowBooking = useMemo(() => {
+    if (!lowBooking || !Number.isInteger(lowBookingLimit) || lowBookingLimit < 0) return [];
+    return lowBooking.filter((member) => member.count <= lowBookingLimit);
+  }, [lowBooking, lowBookingLimit]);
+  const lowBookingRecipients = visibleLowBooking.filter(
+    (member) => member.has_line && !excludedLowBooking.includes(member.id)
+  );
 
   const submit = async () => {
     if (!taskKey) {
@@ -194,6 +237,87 @@ export function OpenSlotTaskPanel(props: {
     } finally {
       setBusy(false);
     }
+  };
+
+  const submitLowBooking = async () => {
+    if (!Number.isInteger(lowBookingLimit) || lowBookingLimit < 0 || lowBookingLimit > 31) {
+      setErr("回数は0から31で入れてください");
+      return;
+    }
+    if (lowBookingRecipients.length === 0) {
+      setErr("送る会員がいません");
+      return;
+    }
+    if (!trainerId) {
+      setErr("担当トレーナーを選んでください");
+      return;
+    }
+    if (!window.confirm(`${lowBookingRecipients.length}人に、この空き枠の案内をLINEで送ります。`)) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const result = await apiPost<{ line?: { sent?: string[]; missed?: string[] } }>("/api/admin/open-slot-tasks", {
+        store_id: props.storeId,
+        start_at: props.slot.start_at,
+        end_at: props.slot.end_at,
+        task_key: "extend",
+        low_booking_member_ids: lowBookingRecipients.map((member) => member.id),
+        low_booking_max: lowBookingLimit,
+        operator_trainer_id: trainerId,
+        operator_password: needPassword ? password : undefined,
+      });
+      const missed = result.line?.missed ?? [];
+      const sent = result.line?.sent ?? [];
+      const lines = ["案内を送りました。"];
+      if (sent.length > 0) lines.push(`${sent.join("と")}に報告しました。`);
+      if (missed.length > 0) lines.push(`${missed.join("と")}には報告が届きませんでした。`);
+      setDone(lines.join(""));
+      props.onDone();
+    } catch (e) {
+      const error = e as Error & { code?: string };
+      if (String(error.message).includes("password_required") || error.code === "password_required") {
+        setNeedPassword(true);
+        setErr("このトレーナーはパスワードが必要です");
+      } else {
+        setErr(error.message || "送信に失敗しました");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitSupplies = async (input: SuppliesSubmit) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const result = await apiPost<{
+        line?: { sent?: string[]; missed?: string[] };
+        photos?: { failed?: number };
+      }>("/api/admin/open-slot-tasks", {
+        store_id: props.storeId,
+        start_at: props.slot.start_at,
+        end_at: props.slot.end_at,
+        task_key: "supplies",
+        supplies: {
+          items: input.items,
+          receipts: input.receipts,
+        },
+        operator_trainer_id: input.trainerId,
+        operator_password: input.password,
+      });
+      const missed = result.line?.missed ?? [];
+      const sent = result.line?.sent ?? [];
+      const lines = ["実行して報告しました。"];
+      if (sent.length > 0) lines.push(`${sent.join("と")}にLINEで送りました。`);
+      if (missed.length > 0) lines.push(`${missed.join("と")}にはLINEが届きませんでした。`);
+      if ((result.photos?.failed ?? 0) > 0) lines.push("写真のLINE送信に失敗しました。");
+      setDone(lines.join(""));
+      props.onDone();
+    } catch (e) {
+      setBusy(false);
+      throw e;
+    }
+    setBusy(false);
   };
 
   const submitUenoCleaning = async (input: UenoCleaningSubmit) => {
@@ -325,7 +449,8 @@ export function OpenSlotTaskPanel(props: {
             ) : null}
 
             {taskKey === "extend" ? (
-              <div>
+              <div className="space-y-4">
+                <div>
                 <div className="text-xs font-semibold text-slate-700">延長する予約</div>
                 {extendOptions.length === 0 ? (
                   <div className="mt-2 text-xs text-slate-500">この枠の直前・直後に会員の店舗予約がありません。</div>
@@ -357,6 +482,61 @@ export function OpenSlotTaskPanel(props: {
                     })}
                   </div>
                 )}
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-700">
+                    終了したセッションが少ない会員{lowBookingMonth ? `（${lowBookingMonth}）` : ""}
+                  </div>
+                  <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={31}
+                      value={lowBookingMax}
+                      onChange={(e) => setLowBookingMax(e.target.value)}
+                      className="w-20 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    回以下
+                  </label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    回数は、今月終わったセッションです。これから入る予約は数えません。チェックした人は配信しません。
+                  </p>
+                  {lowBooking === null ? (
+                    <div className="mt-2 text-xs text-slate-500">読み込み中…</div>
+                  ) : visibleLowBooking.length === 0 ? (
+                    <div className="mt-2 text-xs text-slate-500">該当する会員はいません。</div>
+                  ) : (
+                    <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+                      {visibleLowBooking.map((member) => {
+                        const excluded = excludedLowBooking.includes(member.id);
+                        return (
+                          <label key={member.id} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={excluded}
+                              disabled={!member.has_line}
+                              onChange={() =>
+                                setExcludedLowBooking((current) =>
+                                  current.includes(member.id) ? current.filter((id) => id !== member.id) : [...current, member.id]
+                                )
+                              }
+                              className="h-5 w-5"
+                            />
+                            <span className="w-16 shrink-0 text-xs font-semibold text-slate-600">
+                              {member.has_line ? "配信除外" : "送れない"}
+                            </span>
+                            <span className="min-w-0 flex-1 text-slate-900">
+                              {member.name}（{member.member_code}）
+                              <span className="ml-1 text-xs text-slate-500">終了{member.count}回</span>
+                              {!member.has_line ? <span className="ml-1 text-xs text-slate-500">LINE未連携</span> : null}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
 
@@ -367,6 +547,13 @@ export function OpenSlotTaskPanel(props: {
                 defaultTrainerId={trainerId}
                 busy={busy}
                 onSubmit={submitUenoCleaning}
+              />
+            ) : taskKey === "supplies" ? (
+              <SuppliesTaskForm
+                trainers={props.trainers}
+                defaultTrainerId={trainerId}
+                busy={busy}
+                onSubmit={submitSupplies}
               />
             ) : (
               <>
@@ -415,13 +602,23 @@ export function OpenSlotTaskPanel(props: {
 
                 {err ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{err}</div> : null}
 
+                {taskKey === "extend" ? (
+                  <button
+                    type="button"
+                    onClick={() => void submitLowBooking()}
+                    disabled={busy || lowBookingRecipients.length === 0 || !trainerId || (needPassword && !password)}
+                    className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-900 px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {busy ? "送信中…" : `除外していない${lowBookingRecipients.length}人に一斉送信`}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={submit}
                   disabled={busy || !taskKey || !trainerId || (needPassword && !password)}
                   className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                 >
-                  {busy ? "送信中…" : "実行して報告"}
+                  {busy ? "送信中…" : taskKey === "extend" ? "選んだ予約を延長して報告" : "実行して報告"}
                 </button>
               </>
             )}
