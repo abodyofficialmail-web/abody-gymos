@@ -1,0 +1,79 @@
+name: Send December public LINE at 18:00
+
+# 2026-11-27 18:00（日本時間）に、低利用者以外へ12月開放のLINEを送る。
+# 先に件数だけ確認し、18時より前は送らない。予約とチケットは変えない。
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/send-december-public-line.yml
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Count recipients without sending
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN_UENO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_UENO }}
+          LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU }}
+          LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO }}
+          LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA }}
+        run: |
+          set -euo pipefail
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-december-public-line.mjs
+
+      - name: Wait until 18:00 JST and send
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN_UENO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_UENO }}
+          LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SHINJUKU }}
+          LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_SAKURAGICHO }}
+          LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN_FUKUOKA }}
+        run: |
+          set -euo pipefail
+          set +e
+          python3 - << 'PY'
+          import time
+          from datetime import datetime, timedelta, timezone
+          jst = timezone(timedelta(hours=9))
+          target = datetime(2026, 11, 27, 18, 0, tzinfo=jst)
+          wait = (target - datetime.now(jst)).total_seconds()
+          print(f"wait_seconds {wait:.0f}")
+          if wait > 20400:
+              raise SystemExit(2)
+          if wait > 0:
+              time.sleep(wait + 2)
+          PY
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "too early, not sending"
+            exit 0
+          fi
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          export NEXT_PUBLIC_SUPABASE_URL="$(printf '%s' "$NEXT_PUBLIC_SUPABASE_URL" | tr -d '\r\n')"
+          export SUPABASE_SERVICE_ROLE_KEY="$(printf '%s' "$SUPABASE_SERVICE_ROLE_KEY" | tr -d '\r\n')"
+          node scripts/send-december-public-line.mjs --confirm

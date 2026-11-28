@@ -6,6 +6,7 @@ import {
   loadDailyKarteReport,
   releaseDailyKarteReport,
 } from "@/lib/dailyKarteReport";
+import { pushKarteReportToTrainerGroup } from "@/lib/dailyKarteGroupSend";
 import { pushOpsLineNotice } from "@/lib/paymentLinkNotify";
 import { createSupabaseServiceClient } from "@/lib/supabase/admin";
 
@@ -16,7 +17,7 @@ const TZ = "Asia/Tokyo";
 /**
  * 毎日 22:30 JST（vercel.json は 13:30 UTC）。
  * 終了済みセッションについて、店舗ごとのトレーナー別カルテ送信率と、未来店率・当日キャンセル率を
- * ゆうととテストアカウントへ送る。未来店は送信率の分母に入れない。
+ * ゆうと、テストアカウント、トレーナーのグループへ送る。未来店は送信率の分母に入れない。
  */
 function mustCronAuth(req: Request): boolean {
   const reportSecret = process.env.REPORT_CRON_SECRET?.trim();
@@ -64,20 +65,26 @@ export async function GET(req: Request) {
     }
 
     const pushed = await pushOpsLineNotice(supabase, text);
-    if (pushed.sent.length === 0) {
+    const group = await pushKarteReportToTrainerGroup(text);
+    const sent = [...pushed.sent];
+    const missed = [...pushed.missed];
+    if (group.ok) sent.push("トレーナーグループ");
+    else missed.push("トレーナーグループ");
+
+    if (sent.length === 0) {
       if (claim === "claimed") {
         await releaseDailyKarteReport(supabase, dateYmd).catch((e) => {
           console.error("[dailyKarteReport] release failed", e);
         });
       }
-      return jsonResponse({ error: "push_failed", sent: pushed.sent, missed: pushed.missed, ...summary }, 502);
+      return jsonResponse({ error: "push_failed", sent, missed, ...summary }, 502);
     }
 
-    if (pushed.missed.length > 0) {
-      console.error("[dailyKarteReport] partial send", pushed);
+    if (missed.length > 0) {
+      console.error("[dailyKarteReport] partial send", { sent, missed });
     }
     return jsonResponse(
-      { ok: pushed.missed.length === 0, deduped: claim === "claimed", sent: pushed.sent, missed: pushed.missed, ...summary },
+      { ok: missed.length === 0, deduped: claim === "claimed", sent, missed, ...summary },
       200
     );
   } catch (e) {

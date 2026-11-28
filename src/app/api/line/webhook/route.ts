@@ -29,7 +29,7 @@ type LineWebhookBody = {
     type: string;
     timestamp?: number;
     replyToken?: string;
-    source?: { type?: string; userId?: string };
+    source?: { type?: string; userId?: string; groupId?: string; roomId?: string };
     message?: { type?: string; text?: string };
   }>;
 };
@@ -323,6 +323,11 @@ export async function POST(request: Request) {
 
   const events = body.events ?? [];
   for (const event of events) {
+    const groupId = event.source?.groupId?.trim() || "";
+    const roomId = event.source?.roomId?.trim() || "";
+    if (event.source?.type === "group" || event.source?.type === "room" || groupId || roomId) {
+      continue;
+    }
     if (event.type === "follow" || event.type === "unfollow") {
       const userId = event.source?.userId;
       if (userId) {

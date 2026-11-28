@@ -139,6 +139,16 @@ async function fetchShiftsForCapacityCheck(params: {
     }
   }
 
+  if (dateYmd.startsWith("2026-12-")) {
+    const draftQ = await (supabase as any)
+      .from("trainer_shifts")
+      .select("trainer_id, start_local, end_local, is_break, status")
+      .eq("store_id", store_id)
+      .eq("shift_date", dateYmd)
+      .eq("status", "draft");
+    if (!draftQ?.error) rows = rows.concat(draftQ.data ?? []);
+  }
+
   return (rows ?? [])
     .map((r) => {
       const startRaw = r.start_local ?? r.start_time ?? "";
